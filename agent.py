@@ -12,7 +12,7 @@ class Agent:
     '''Convention: Call step, store_reward, and if applicable, terminate_episode'''
     def __init__(self, input_dimensions : [], action_space : int, 
             discrete_actions = True, action_constraints : [] = None, 
-            terminal_penalty = 0.0, 
+            has_value_function = True, terminal_penalty = 0.0, 
             *args, **kwargs):
         '''Assumes flat action-space vector'''
         self.input_dimensions = input_dimensions
@@ -28,10 +28,30 @@ class Agent:
         self.reward_history = []
         self.terminal_history = []
 
+        self.has_value_function = has_value_function
+        self.value_history = [] #NOTE: this could be None
+
+    @property
+    @abc.abstractmethod
+    def module(self):
+        pass
+    
+    @module.setter
+    @abc.abstractmethod
+    def module(self, m):
+        pass
+
     @abc.abstractmethod
     def step(self, obs, *args, **kwargs) -> np.array:
         self.state_history.append(obs)
         self.terminal_history.append(0)
+        if self.has_value_function:
+            action_scores, values = self.module(obs)
+            self.value_history.append(values)
+        else:
+            action_scores = self.module(obs)
+        self.action_history.append(action_scores)
+        return action_scores 
 
     def store_reward(self, r):
         self.reward_history.append(r)
@@ -39,6 +59,13 @@ class Agent:
     def terminate_episode(self):
         self.terminal_history.append(1)
         self.reward_history.append(self.terminal_penalty)
+
+    def reset_histories(self):
+        self.state_history = []
+        self.action_history = []
+        self.reward_history = []
+        self.terminal_history = []
+
 
     #def construct_experience(self, s_k, a_k, r_k, s_K, terminal, **kwargs):
     #    return [s_k, a_k, r_k, s_K, terminal, kwargs]
@@ -78,7 +105,6 @@ class Agent:
             obs /= 256
 
 
-
 class RandomAgent(Agent):
     def step(self, obs, *args, **kwargs) -> np.ndarray:
         if self.discrete_actions:
@@ -98,8 +124,6 @@ class TFAgent(Agent):
 
 
 class PyTorchAgent(Agent):
-    def __init__(self):
-        pass
     def transform_observation(self, obs, ) -> torch.tensor:
         '''For PyTorch, we can transfer the observation directly into
         a tensor/variable with this helper function. '''
@@ -186,42 +210,60 @@ def create_mlp(self, batch_inp, indim, outdim, hdim : [] = [], activations : [] 
 ##  Pytorch helper functions /classes
 
 class PyTorchMLP(torch.nn.Module):
-    def __init__(self, indim, outdim, hdim : [] = [], 
+    def __init__(self, indim, outdim, hdims : [] = [], 
             activations : [] = [], initializer = None, batchnorm = False):
+        super(PyTorchMLP, self).__init__()
         self.indim = indim
         self.outdim = outdim
-        self.hdim = hdim
+        self.hdims = hdims
         self.activations = activations
-        assert(len(activations) == len(hdim) + 1)
+        self.batchnorm = batchnorm
+        assert(len(activations) == len(hdims) + 1)
         
         layers = []
         prev_size = indim
-        for i in range(len(hdim)):
-            linear = torch.nn.Linear(prev_size, hdim[i], bias = True)
+        for i in range(len(hdims)):
+            linear = torch.nn.Linear(prev_size, hdims[i], bias = True)
             layers.append(linear)
             if activations[i] is not None:
                 if activations[i] == 'relu':
-                    layers.append(torch.nn.functional.relu)
+                    layers.append(torch.nn.LeakyReLU())
                 elif activations[i] == 'sig':
-                    layers.append(torch.nn.functional.sigmoid)
+                    layers.append(torch.nn.Sigmoid())
             if batchnorm:
-                layers.append(tf.nn.BatchNorm1d(hdim[i]))
+                layers.append(tf.nn.BatchNorm1d(hdims[i]))
         linear = torch.nn.Linear(prev_size, outdim, bias = True)
         if activations[i+1] is not None:
             if activations[i+1] == 'relu':
-                layers.append(torch.nn.functional.relu)
+                layers.append(torch.nn.LeakyReLU())
             elif activations[i+1] == 'sig':
-                layers.append(torch.nn.functional.sigmoid)
+                layers.append(torch.nn.Sigmoid())
         if batchnorm:
             layers.append(tf.nn.BatchNorm1d(outdim))
 
-        self.layers = tf.nn.ModuleList(layers)
-        raise Exception("BITCH USE TENSORFLOW FIRST!")
+        self.layers = torch.nn.ModuleList(layers)
+        #raise Exception("BITCH USE TENSORFLOW FIRST!")
+
 
     def forward(self, x):
         for l in self.layers:
             x = l(x)
         return x
+
+class PyTorchACMLP(PyTorchMLP):
+    '''Adds action / value heads to the end of an MLP constructed
+    via PyTorchMLP '''
+    def __init__(self, action_space, action_bias = True, value_bias = True,
+            *args, **kwargs):
+        super(PyTorchACMLP, self).__init__(*args, **kwargs)
+        self.action_module = torch.nn.Linear(self.outdim, action_space, bias = action_bias)
+        self.value_module = torch.nn.Linear(self.outdim, 1, bias = value_bias)
+    
+    def forward(self, x):
+        mlp_out = super(PyTorchACMLP, self).forward(x)
+        actions = self.action_module(mlp_out) 
+        value = self.value_module(mlp_out)
+        return actions, value
 
 ##
 
