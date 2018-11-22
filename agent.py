@@ -104,6 +104,11 @@ class Agent:
         if normalize_pizels == True:
             obs /= 256
 
+    @abc.abstractmethod
+    def __call__(self, timestep):
+        '''NOTE: This is SPECIFICALLY used to interface with dm_control.viewer'''
+        pass
+
 
 class RandomAgent(Agent):
     def step(self, obs, *args, **kwargs) -> np.ndarray:
@@ -115,6 +120,9 @@ class RandomAgent(Agent):
             maxs = self.action_constraints[1]
             return np.random.uniform(mins, maxs, (1, self.action_space))
 
+#raise Exception("Implement this, recreate their MPC paper")
+class MPCAgent(Agent): 
+    pass
 
 class TFAgent(Agent):
     def __init__(self):
@@ -128,6 +136,11 @@ class PyTorchAgent(Agent):
         '''For PyTorch, we can transfer the observation directly into
         a tensor/variable with this helper function. '''
         pass
+    
+    def __call__(self, timestep):
+        obs = timestep.observation
+        action = self.step(obs).cpu().detach()
+        return action
 
 ##  Tensorflow Helper functions/classes
 
@@ -210,7 +223,7 @@ def create_mlp(self, batch_inp, indim, outdim, hdim : [] = [], activations : [] 
 ##  Pytorch helper functions /classes
 
 class PyTorchMLP(torch.nn.Module):
-    def __init__(self, indim, outdim, hdims : [] = [], 
+    def __init__(self, device, indim, outdim, hdims : [] = [], 
             activations : [] = [], initializer = None, batchnorm = False):
         super(PyTorchMLP, self).__init__()
         self.indim = indim
@@ -218,6 +231,7 @@ class PyTorchMLP(torch.nn.Module):
         self.hdims = hdims
         self.activations = activations
         self.batchnorm = batchnorm
+        self.device = device
         assert(len(activations) == len(hdims) + 1)
         
         layers = []
@@ -232,7 +246,9 @@ class PyTorchMLP(torch.nn.Module):
                     layers.append(torch.nn.Sigmoid())
             if batchnorm:
                 layers.append(tf.nn.BatchNorm1d(hdims[i]))
+            prev_size = hdims[i]
         linear = torch.nn.Linear(prev_size, outdim, bias = True)
+        layers.append(linear)
         if activations[i+1] is not None:
             if activations[i+1] == 'relu':
                 layers.append(torch.nn.LeakyReLU())
@@ -246,8 +262,8 @@ class PyTorchMLP(torch.nn.Module):
 
 
     def forward(self, x):
-        for l in self.layers:
-            x = l(x)
+        for l in range(len(self.layers)):
+            x = self.layers[l](x)
         return x
 
 class PyTorchACMLP(PyTorchMLP):
@@ -256,13 +272,17 @@ class PyTorchACMLP(PyTorchMLP):
     def __init__(self, action_space, action_bias = True, value_bias = True,
             *args, **kwargs):
         super(PyTorchACMLP, self).__init__(*args, **kwargs)
-        self.action_module = torch.nn.Linear(self.outdim, action_space, bias = action_bias)
-        self.value_module = torch.nn.Linear(self.outdim, 1, bias = value_bias)
+        self.action_module = torch.nn.Linear(self.outdim, 
+                action_space, bias = action_bias)
+        self.value_module = torch.nn.Linear(self.outdim, 1, 
+                bias = value_bias)
     
     def forward(self, x):
         mlp_out = super(PyTorchACMLP, self).forward(x)
+        #print("MLP OUT: ", mlp_out)
         actions = self.action_module(mlp_out) 
         value = self.value_module(mlp_out)
+        #print("ACTION: %s VALUE: %s" % (actions, value))
         return actions, value
 
 ##

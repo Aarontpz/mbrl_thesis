@@ -7,6 +7,8 @@ import torch
 import tensorflow as tf
 import numpy as np
 
+import random
+
 class Trainer:
     __metaclass__ = abc.ABCMeta
     '''Baseclass for RL Trainers; these assume the agents are well-suited
@@ -23,7 +25,7 @@ class Trainer:
         self.opt = optimizer
         self.replay = replay
 
-        self.max_trajectory_len = max_traj_len
+        self.max_traj_len = max_traj_len
         self.gamma = gamma
         self.action_losses = []
         self.value_losses = [] #NOTE: may remain empty
@@ -44,7 +46,7 @@ class Trainer:
     def get_trajectory_end(self, start, end = None):
         if end is None:
             end = self.max_traj_len
-            if True in self.terminal_history[start:end]:
+            if True in self.agent.terminal_history[start:end]:
                 end = self.terminal_history.index(True)
                 #TODO: consider minimal traj length too?
         return end
@@ -65,6 +67,7 @@ class PyTorchTrainer(Trainer):
     def __init__(self, device, replay_iterations = 20, entropy_coeff = 1.0, *args, **kwargs):
         self.device = device
         self.replay_iterations = replay_iterations
+        self.entropy_coeff = entropy_coeff
         super(PyTorchTrainer, self).__init__(*args, **kwargs)
 
     def get_discounted_reward(self, start, end = None) -> torch.tensor:
@@ -77,7 +80,7 @@ class PyTorchTrainer(Trainer):
         #if i < len(state_value_history): #or i+1?
             #net_reward += gamma**(i) * state_value_history[i].cpu().squeeze(0) #get last state value approximation
             #print("Bootstrap Value: ", gamma**(i) * state_value_history[i].cpu().squeeze(0))
-        return net_reward
+        return net_reward.squeeze(0)
 
     def get_policy_entropy(self, start, end = 30):
         net_entropy = torch.tensor([0.0], requires_grad = False).to(self.device)
@@ -86,11 +89,12 @@ class PyTorchTrainer(Trainer):
             s = s.squeeze(0)
             log_prob = s.log()
             entropy = (log_prob * s).sum().to(self.device)
-            #print("Entropy: ", entropy)
+            print("Entropy: ", entropy)
             if not torch.isnan(entropy):
                 net_entropy -= entropy
             else:
-                print("ENTROPY ISNAN")
+                #print("ENTROPY ISNAN")
+                pass
         #print("Net Entropy: ", net_entropy)
         return net_entropy    
 
@@ -116,7 +120,7 @@ class PyTorchACTrainer(PyTorchTrainer):
         #TODO: Make this run with mini-batches?!
         loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         #cum_reward = torch.sum(torch.tensor(reward_history, requires_grad = requires_grad), 0)
-        criterion = nn.L1Loss()
+        criterion = torch.nn.L1Loss()
         #criterion = nn.MSELoss()
         #print("Cumulative reward: ", cum_reward)
         #disc_reward = get_discounted_reward(reward_history, 0, gamma=gamma)
@@ -134,7 +138,7 @@ class PyTorchACTrainer(PyTorchTrainer):
         #    input()
         optimizer.zero_grad()
         replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
-        for ind in random_starts: #-1 because terminal state doesn't matter?
+        for ind in range(self.replay_iterations): #-1 because terminal state doesn't matter?
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
             #i = ind
             #optimizer.zero_grad()
@@ -144,7 +148,7 @@ class PyTorchACTrainer(PyTorchTrainer):
             #    _ = module.forward(obs)
             #R = norm_returns[i]
             #R = get_discounted_reward(reward_history, i+1, gamma=gamma).unsqueeze(0).to(device)
-            R = self.get_discounted_reward(self, ind, end = None).unsqueeze(0).to(device)
+            R = self.get_discounted_reward(ind, end = None).unsqueeze(0).to(device)
             #print("i: %s len(action_score): %s value_scores: %s reward_history: %s" \
             #        % (i, len(action_score_history), len(state_score_history), len(reward_history)))
             action_score = action_scores[ind]
@@ -169,10 +173,13 @@ class PyTorchACTrainer(PyTorchTrainer):
                 #print("Discounted reward: ", disc_reward)
             advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
             action_loss = (-log_prob * advantage).squeeze(0)
+            #action_loss -= self.entropy_coeff * self.get_policy_entropy(ind, end=None) #TODO: fix entropy
+
             #make_dot(action_loss).view()
             #input()
+            #print("Value score: %s Discounted: %s" % (value_score, R))
             value_loss = criterion(value_score, R) 
-            entropy_loss = self.get_policy_entropy(ind, end=None)
+            #entropy_loss = self.get_policy_entropy(ind, end=None)
             
             #make_dot(value_loss).view()
             #input()
@@ -189,6 +196,8 @@ class PyTorchACTrainer(PyTorchTrainer):
             #    else:
             #        loss = action_loss #TODO: occasionally (NOT simultaneously) update value estimator
             #loss.backward(retain_graph = i < len(reward_history) - 2)
+            loss = action_loss + value_loss
+
             torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             loss.backward(retain_graph = True)
             optimizer.step()
@@ -208,7 +217,7 @@ class PyTorchACTrainer(PyTorchTrainer):
                 #print("CURRENT ACTION LOSS (to min): ", net_action_loss)
                 #loss = net_action_loss #TODO: occasionally (NOT simultaneously) update value estimator
         #if not update_both and not update_values: #avoid entropy loss if just updating values
-        #    loss -= ent_coeff * self.get_policy_entropy(ind, end=None)
+        #loss -= ent_coeff * self.get_policy_entropy(ind, end=None)
         #print("Loss: ", loss)        
         #loss.backward(retain_graph = i < len(reward_history) - 2)
         #torch.nn.utils.clip_grad_norm_(module.parameters(), 2)
