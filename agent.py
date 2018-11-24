@@ -65,6 +65,7 @@ class Agent:
         self.action_history = []
         self.reward_history = []
         self.terminal_history = []
+        self.value_history = []
 
 
     #def construct_experience(self, s_k, a_k, r_k, s_K, terminal, **kwargs):
@@ -132,11 +133,29 @@ class TFAgent(Agent):
 
 
 class PyTorchAgent(Agent):
-    def transform_observation(self, obs, ) -> torch.tensor:
-        '''For PyTorch, we can transfer the observation directly into
-        a tensor/variable with this helper function. '''
-        pass
+    def __init__(self, device, *args, **kwargs):
+        super(PyTorchAgent, self).__init__(*args, **kwargs)
+        self.device = device
+        self._module = None
+
+    def step(self, obs) -> np.ndarray:
+        '''Transforms observation, stores relevant data in replay buffers, then
+        outputs action. 
+        
+        Outputs as np.ndarray because that's what the environment
+        needs'''
+        obs = self.transform_observation(obs).to(self.device)
+        return super(PyTorchAgent, self).step(obs)
     
+    @property
+    def module(self):
+        return self._module
+
+    @module.setter
+    def module(self, m):
+        self._module = m
+
+
     def __call__(self, timestep):
         obs = timestep.observation
         action = self.step(obs).cpu().detach()
@@ -286,6 +305,17 @@ class PyTorchACMLP(PyTorchMLP):
         return actions, value
 
 ##
+
+
+class MPCAgent(Agent):
+    '''Implements MPC for the MuJoCo environment, as specified
+    in https://homes.cs.washington.edu/~todorov/papers/TassaIROS12.pdf
+    
+    This DOES NOT imply that this agent relies on a model, however. 
+    The paper itself states that, considering contact friction on
+    multiple joints, fully-modelled ("smoothly" modelled) systems 
+    are rather untrue to the physical outcome.  
+    ''' #TODO: Verify / quesiton the above statement
 
 
 

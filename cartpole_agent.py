@@ -16,28 +16,6 @@ class TFStateCartpoleAgent(TFAgent):
 
 
 class PyTorchStateCartpoleAgent(PyTorchAgent):
-    def __init__(self, device, *args, **kwargs):
-        super(PyTorchStateCartpoleAgent, self).__init__(*args, **kwargs)
-        self.device = device
-        self._module = None
-
-    def step(self, obs) -> np.ndarray:
-        '''Transforms observation, stores relevant data in replay buffers, then
-        outputs action. 
-        
-        Outputs as np.ndarray because that's what the environment
-        needs'''
-        obs = self.transform_observation(obs).to(device)
-        return super(PyTorchStateCartpoleAgent, self).step(obs)
-
-    @property
-    def module(self):
-        return self._module
-
-    @module.setter
-    def module(self, m):
-        self._module = m
-
     def transform_observation(self, obs) -> Variable:
         '''Converts ordered-dictionary of position and velocity into
         1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
@@ -50,9 +28,9 @@ class PyTorchStateCartpoleAgent(PyTorchAgent):
 
 
 LIB = 'pytorch'
-MAX_ITERATIONS = 10
-MAX_TIMESTEPS = 1000
-view = True
+MAX_ITERATIONS = 10000
+MAX_TIMESTEPS = 100000
+VIEW = True
 
 mlp_outdim = 5 #based on state size (approximation)
 mlp_hdims = [7, 10]
@@ -91,22 +69,23 @@ if __name__ == '__main__':
         
         optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
 
-        trainer = PyTorchACTrainer(device, replay_iterations, entropy_coeff,
+        trainer = PyTorchACTrainer(device, entropy_coeff,
                 agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA) 
         while i < MAX_ITERATIONS: #and error > threshold
             # Exploration / evaluation step
             timestep = env.reset()        
             while not timestep.last() and step < MAX_TIMESTEPS:
-                if step > 0:
-                    reward = timestep.reward
-                else: #SKIP THIS?
+                reward = timestep.reward
+                if reward is None:
                     reward = 0.0
                 print("TIMESTEP %s: %s" % (i, timestep))
                 observation = timestep.observation
                 action = agent.step(observation).cpu().detach()
+                agent.store_reward(reward)
+                print("ACTION: ", action)
                 #action = agent(timestep)
                 timestep = env.step(action)
-                print("Reward: %s" % (timestep.reward))
+                #print("Reward: %s" % (timestep.reward))
                 step += 1
             # Update step
             #input("This is where the magic happens") 
@@ -116,12 +95,18 @@ if __name__ == '__main__':
             #TODO: the versiono f AC being used currently is...likely meant for 
             #discrete action spaces. This is less of an issue now with a = 1
             #but WILL beocme an inssue in the future
+            #TODO: discounted_reward estimate should contain V(sT) in order to 
+            #bootstrap...?
             trainer.step()
+            agent.reset_histories()
             step = 0
             i += 1
     #TODO: COMPARE VS RANDOM AGENT!!!
 
     elif LIB == 'tf': #TODO: encapsulate this in a runner
         pass
-    viewer.launch(env, policy = agent)
+    
+    
+    if VIEW:
+        viewer.launch(env, policy = agent)
 
