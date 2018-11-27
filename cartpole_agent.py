@@ -29,11 +29,14 @@ class PyTorchStateCartpoleAgent(PyTorchAgent):
 
 
 LIB = 'pytorch'
-MAX_ITERATIONS = 100
+MAX_ITERATIONS = 1000
 MAX_TIMESTEPS = 100000
 VIEW = True
 
-MLP_EPS = 0.1
+EPS = 0.1
+EPS_MIN = 0.03
+EPS_DECAY = 1e-8
+
 mlp_outdim = 5 #based on state size (approximation)
 mlp_hdims = [7, 10]
 mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
@@ -65,23 +68,27 @@ if __name__ == '__main__':
     timestep = None
     if LIB == 'pytorch': #TODO : encapsulate this in a runner
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        agent = PyTorchStateCartpoleAgent(device, [1, obs_size], action_size, discrete_actions = False, #TODO: d_a = DISCRETE_AGENT?
+        agent = PyTorchStateCartpoleAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
                 action_constraints = action_constraints, has_value_function = True)
     
         #agent.module = PyTorchDiscreteACMLP(action_size, action_bias = True, value_bias = True,
         #        device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
         #        activations=  mlp_activations, initializer = mlp_initializer).to(device)
         if DISCRETE_AGENT:
-            agent.module = EpsGreedyMLP(MLP_EPS, PyTorchDiscreteACMLP,
+            agent.module = EpsGreedyMLP(PyTorchDiscreteACMLP, EPS, EPS_DECAY, EPS_MIN,
                     action_size, action_bias = True, value_bias = True,
                     device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations=  mlp_activations, initializer = mlp_initializer).to(device)
+        else:
+            raise Exception("Implement continuous-time agent!")
         
         optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
 
         trainer = PyTorchDiscreteACTrainer(device, entropy_coeff,
                 agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA) 
+        input("TEMPORAIRLY forcing agent to be discrete. Press ENTER to acknowledge")
         while i < MAX_ITERATIONS: #and error > threshold
+            print("ITERATION: ", i)
             # Exploration / evaluation step
             for episode in range(EPISODES_BEFORE_TRAINING):
                 timestep = env.reset()        
@@ -89,31 +96,15 @@ if __name__ == '__main__':
                     reward = timestep.reward
                     if reward is None:
                         reward = 0.0
-                    print("%s TIMESTEP %s: %s" % (i, step, timestep))
+                    #print("TIMESTEP %s: %s" % (step, timestep))
                     observation = timestep.observation
-                    action = agent.step(observation).cpu().detach()
-                    #discrete solution
-                    if DISCRETE_AGENT:
-                        action_ind = max(range(len(action)), key=action.__getitem__)
-                        action = [-1, 1][action_ind]
-                    #continuous solution
+                    action = agent(timestep)
                     agent.store_reward(reward)
-                    print("ACTION: ", action)
-                    #action = agent(timestep)
                     timestep = env.step(action)
                     #print("Reward: %s" % (timestep.reward))
                     step += 1
                 step = 0
             # Update step
-            #input("This is where the magic happens") 
-            #TODO: FIX NAN issue (reward = None fucking up backpropogation)
-            #TODO: FIX this so it calls step after some number of episodes
-            #instead of after each episode
-            #TODO: the versiono f AC being used currently is...likely meant for 
-            #discrete action spaces. This is less of an issue now with a = 1
-            #but WILL beocme an inssue in the future
-            #TODO: discounted_reward estimate should contain V(sT) in order to 
-            #bootstrap...?
             trainer.step()
             agent.reset_histories()
             #i += EPISODES_BEFORE_TRAINING 

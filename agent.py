@@ -159,9 +159,7 @@ class PyTorchAgent(Agent):
     def __call__(self, timestep):
         obs = timestep.observation
         action = self.step(obs).cpu().detach()
-        #if self.discrete_actions:
-        if True:
-            input("Temporarily making agent do DISCRETE actions")
+        if self.discrete:
             action_ind = max(range(len(action)), key=action.__getitem__) 
             action = [-1, 1][action_ind] 
         return action
@@ -336,29 +334,38 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
         return action_scores, value
 
 
-def EpsGreedyMLP(eps, mlp_base, *args, **kwargs):
+def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0,
+        *args, **kwargs):
     class PyTorchEpsGreedyModule(mlp_base):
-        def __init__(self, eps, mlp_base, *args, **kwargs):
+        def __init__(self, mlp_base, eps, eps_decay, eps_min, 
+                *args, **kwargs):
             self.eps = eps
+            self.decay = eps_decay
+            self.eps_min = eps_min
             self.base = mlp_base
             super(PyTorchEpsGreedyModule, self).__init__(*args, **kwargs)
+    
+        def update_eps(self):
+            self.eps = max(self.eps_min, self.eps - self.decay)
+            #print("EPS: ", self.eps)
 
         def forward(self, x):
             if self.base == PyTorchDiscreteACMLP:
                 action_score, values = super(PyTorchEpsGreedyModule,
                         self).forward(x)
                 if random.random() < self.eps:
+                    self.update_eps()
                     with torch.no_grad(): #no gradient for this
                         action = random.choice([0, self.action_space - 1])
                         action_score = torch.tensor( \
                                 np.eye(self.action_space)[action],
                                     device = self.device).float()
-                        print("A: %s Score: %s" % (action, action_score))
+                        #print("A: %s Score: %s" % (action, action_score))
                 return action_score, values
             elif self.base == PyTorchContinuousGaussACMLP:
                 raise Exception("Figure this out?")
 
-    return PyTorchEpsGreedyModule(eps, mlp_base, *args, **kwargs)
+    return PyTorchEpsGreedyModule(mlp_base, eps, eps_decay, eps_min, *args, **kwargs)
 ##
 
 

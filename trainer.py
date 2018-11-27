@@ -125,7 +125,7 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
         optimizer = self.opt
         action_scores = self.agent.action_history
         value_scores = self.agent.value_history
-        print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
+        #print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
         assert(len(value_scores) == len(action_scores)) #necessary
         ## FOR STORING LOSS HISTORIES
 
@@ -155,7 +155,7 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
         for start in replay_starts:
             end = self.get_trajectory_end(start, end = None)
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
-            print("START: %s END: %s" % (start, end))
+            #print("START: %s END: %s" % (start, end))
             for ind in range(start, end): #-1 because terminal state doesn't matter?
                 #i = ind
                 #optimizer.zero_grad()
@@ -171,11 +171,11 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
                 action_score = action_scores[ind]
                 value_score = value_scores[ind] #NOTE: i vs i+1?!
                 #print("Value Score: ", value_scores)
-                print("Return: ", R)
+                #print("Return: ", R)
                 #print("Action Scores: %s \n Value Scores: %s\n" % (action_scores, value_scores))
                 log_prob = action_score.log().max().to(device)
                 #print(torch.isnan(s) for s in log_prob)
-                print("Log Prob: ", log_prob)
+                #print("Log Prob: ", log_prob)
                 #print("FIXING SCORE")
                 ##max_score, max_index = torch.max(action_scores, 1)
                 ##m = torch.distributions.Categorical(action_scores)
@@ -213,10 +213,11 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
                 #    else:
                 #        loss = action_loss #TODO: occasionally (NOT simultaneously) update value estimator
                 #loss.backward(retain_graph = i < len(reward_history) - 2)
+                #raise Exception("Entropy + Value Loss Coefficients!")
                 loss += action_loss + value_loss
 
                 #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
-            print("LOSS: ", loss)
+            #print("LOSS: ", loss)
             loss.backward(retain_graph = True)
             optimizer.step()
                 #print("Step %s Loss: %s" % (i, loss))
