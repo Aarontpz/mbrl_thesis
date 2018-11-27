@@ -1,6 +1,6 @@
 # Author: Aaron Parisi
 # 11/20/18
-
+import random
 import abc
 import numpy as np
 
@@ -159,6 +159,11 @@ class PyTorchAgent(Agent):
     def __call__(self, timestep):
         obs = timestep.observation
         action = self.step(obs).cpu().detach()
+        #if self.discrete_actions:
+        if True:
+            input("Temporarily making agent do DISCRETE actions")
+            action_ind = max(range(len(action)), key=action.__getitem__) 
+            action = [-1, 1][action_ind] 
         return action
 
 ##  Tensorflow Helper functions/classes
@@ -285,25 +290,75 @@ class PyTorchMLP(torch.nn.Module):
             x = self.layers[l](x)
         return x
 
-class PyTorchACMLP(PyTorchMLP):
+class PyTorchDiscreteACMLP(PyTorchMLP):
     '''Adds action / value heads to the end of an MLP constructed
     via PyTorchMLP '''
     def __init__(self, action_space, action_bias = True, value_bias = True,
             *args, **kwargs):
-        super(PyTorchACMLP, self).__init__(*args, **kwargs)
+        self.action_space = action_space
+        super(PyTorchDiscreteACMLP, self).__init__(*args, **kwargs)
         self.action_module = torch.nn.Linear(self.outdim, 
                 action_space, bias = action_bias)
         self.value_module = torch.nn.Linear(self.outdim, 1, 
                 bias = value_bias)
     
     def forward(self, x):
-        mlp_out = super(PyTorchACMLP, self).forward(x)
+        mlp_out = super(PyTorchDiscreteACMLP, self).forward(x)
         #print("MLP OUT: ", mlp_out)
         actions = self.action_module(mlp_out) 
+        action_scores = torch.nn.functional.softmax(actions, dim=-1)
         value = self.value_module(mlp_out)
         #print("ACTION: %s VALUE: %s" % (actions, value))
-        return actions, value
+        return action_scores, value
 
+class PyTorchContinuousGaussACMLP(PyTorchMLP):
+    '''Adds action (mean, variance) / value heads 
+    to the end of an MLP constructed via PyTorchMLP '''
+    def __init__(self, action_space, action_bias = True, value_bias = True,
+            *args, **kwargs):
+        self.action_space = action_space
+        super(PyTorchContinuousACMLP, self).__init__(*args, **kwargs)
+        self.action_module = torch.nn.Linear(self.outdim, 
+                action_space, bias = action_bias)
+        self.value_module = torch.nn.Linear(self.outdim, 1, 
+                bias = value_bias)
+    
+    def forward(self, x):
+        raise Exception("Change to have mu/sigma output heads for\
+        multidimensional normal distribution representing output;\
+        normalize / denormalize output accordingly.")
+        mlp_out = super(PyTorchContinuousACMLP, self).forward(x)
+        #print("MLP OUT: ", mlp_out)
+        actions = self.action_module(mlp_out) 
+        action_scores = torch.nn.functional.softmax(actions, dim=-1)
+        value = self.value_module(mlp_out)
+        #print("ACTION: %s VALUE: %s" % (actions, value))
+        return action_scores, value
+
+
+def EpsGreedyMLP(eps, mlp_base, *args, **kwargs):
+    class PyTorchEpsGreedyModule(mlp_base):
+        def __init__(self, eps, mlp_base, *args, **kwargs):
+            self.eps = eps
+            self.base = mlp_base
+            super(PyTorchEpsGreedyModule, self).__init__(*args, **kwargs)
+
+        def forward(self, x):
+            if self.base == PyTorchDiscreteACMLP:
+                action_score, values = super(PyTorchEpsGreedyModule,
+                        self).forward(x)
+                if random.random() < self.eps:
+                    with torch.no_grad(): #no gradient for this
+                        action = random.choice([0, self.action_space - 1])
+                        action_score = torch.tensor( \
+                                np.eye(self.action_space)[action],
+                                    device = self.device).float()
+                        print("A: %s Score: %s" % (action, action_score))
+                return action_score, values
+            elif self.base == PyTorchContinuousGaussACMLP:
+                raise Exception("Figure this out?")
+
+    return PyTorchEpsGreedyModule(eps, mlp_base, *args, **kwargs)
 ##
 
 
@@ -315,7 +370,7 @@ class MPCAgent(Agent):
     The paper itself states that, considering contact friction on
     multiple joints, fully-modelled ("smoothly" modelled) systems 
     are rather untrue to the physical outcome.  
-    ''' #TODO: Verify / quesiton the above statement
-
+    ''' #TODO: Verify / question the above statement
+    pass
 
 
