@@ -19,11 +19,12 @@ class Trainer:
     (to reduce variance / biases from starting conditions)'''
     def __init__(self, agent : Agent, env, optimizer, 
             replay = 10, max_traj_len = 30, 
-            gamma = 0.98, *args, **kwargs):
+            gamma = 0.98, num_episodes = 2, *args, **kwargs):
         self.agent = agent
         self.env = env
         self.opt = optimizer
         self.replay = replay
+        self.num_episodes = num_episodes
 
         self.max_traj_len = max_traj_len
         self.gamma = gamma
@@ -43,13 +44,19 @@ class Trainer:
     def get_policy_entropy(self, start, end = None) -> np.ndarray:
         pass
 
+    def get_episode_ends(self):
+        terminal_history = self.agent.terminal_history
+        ends = [i for i, x in enumerate(terminal_history) if x]
+        return ends
+
     def get_trajectory_end(self, start, end = None):
-        max_ind = len(self.agent.reward_history)
+        terminal_history = self.agent.terminal_history
+        max_ind = len(terminal_history)
         if end is None:
             end = min(max_ind, start + self.max_traj_len)
-            if True in self.agent.terminal_history[start:end]:
-                end = self.terminal_history.index(True)
-                #TODO: consider minimal traj length too?
+        if True in terminal_history[start:end]:
+            end = terminal_history[start:].index(True) + start - 1
+            #TODO: consider minimal traj length too?
         return end
 
     def report(self):
@@ -65,8 +72,9 @@ class TFTrainer(Trainer):
 
 
 class PyTorchTrainer(Trainer):
-    def __init__(self, device, entropy_coeff = 1.0, *args, **kwargs):
+    def __init__(self, device, value_coeff = 0.1, entropy_coeff = 0.0, *args, **kwargs):
         self.device = device
+        self.value_coeff = value_coeff
         self.entropy_coeff = entropy_coeff
         super(PyTorchTrainer, self).__init__(*args, **kwargs)
 
@@ -95,15 +103,16 @@ class PyTorchTrainer(Trainer):
         return R + V_st_k - V_st
 
     def get_policy_entropy(self, start, end = 30):
+        raise Exception("Make this accomodate continuous space (use distribution.entropy)")
         if end is None: 
-            end = self.get_trajectory_end(end)
+            end = self.get_trajectory_end(start, end)
         net_entropy = torch.tensor([0.0], requires_grad = False).to(self.device)
         for s in self.agent.action_history[start : end]:
             s = s.squeeze(0)
             log_prob = s.log()
             entropy = (log_prob * s).sum().to(self.device)
-            print("Entropy: ", entropy)
             if not torch.isnan(entropy):
+                #print("Entropy: ", entropy)
                 net_entropy -= entropy
             else:
                 #print("ENTROPY ISNAN")
@@ -151,11 +160,17 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
         #    make_dot(score).view()
         #    input()
         optimizer.zero_grad()
-        replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
+        if self.max_traj_len > len(action_scores)/self.num_episodes: #if avg episode len < max traj len, run through each episode
+            ends = self.get_episode_ends()
+            replay_starts = [0]
+            for e in ends[:len(ends) - 1]:
+                replay_starts.append(e + 1)
+        else:
+            replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
         for start in replay_starts:
             end = self.get_trajectory_end(start, end = None)
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
-            #print("START: %s END: %s" % (start, end))
+            print("START: %s END: %s" % (start, end))
             for ind in range(start, end): #-1 because terminal state doesn't matter?
                 #i = ind
                 #optimizer.zero_grad()
@@ -189,14 +204,21 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
                 #if disc_reward > 0.5:
                     #print("Discounted reward: ", disc_reward)
                 advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
-                action_loss = (-log_prob * advantage).squeeze(0)
+                if self.agent.discrete:
+                    action_loss = (-log_prob * advantage).squeeze(0)
+                else:
+                    action_loss = (-action_score * advantage).squeeze(0)
                 #action_loss -= self.entropy_coeff * self.get_policy_entropy(ind, end=None) #TODO: fix entropy
 
                 #make_dot(action_loss).view()
                 #input()
                 #print("Value score: %s Discounted: %s" % (value_score, R))
-                value_loss = criterion(value_score, R) 
-                #entropy_loss = self.get_policy_entropy(ind, end=None)
+                value_loss = self.value_coeff * criterion(value_score, R) 
+                if self.entropy_coeff > 0.0:
+                    entropy_loss = self.entropy_coeff * self.get_policy_entropy(ind, end=None)
+                    loss += action_loss + value_loss - entropy_loss #WEIGHTED
+                else:
+                    loss += action_loss + value_loss #WEIGHTED
                 
                 #make_dot(value_loss).view()
                 #input()
@@ -214,11 +236,11 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
                 #        loss = action_loss #TODO: occasionally (NOT simultaneously) update value estimator
                 #loss.backward(retain_graph = i < len(reward_history) - 2)
                 #raise Exception("Entropy + Value Loss Coefficients!")
-                loss += action_loss + value_loss
+
 
                 #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
-            #print("LOSS: ", loss)
             loss.backward(retain_graph = True)
+            self.agent.net_loss_history.append(loss.cpu().detach())
             optimizer.step()
                 #print("Step %s Loss: %s" % (i, loss))
         #print("FINAL i: ", i)

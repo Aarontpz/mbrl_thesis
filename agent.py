@@ -26,6 +26,8 @@ class Agent:
         self.state_history = []
         self.action_history = []
         self.reward_history = []
+        self.net_reward_history = []
+        self.net_loss_history = [] #wtf is this loss
         self.terminal_history = []
 
         self.has_value_function = has_value_function
@@ -46,12 +48,31 @@ class Agent:
         self.state_history.append(obs)
         self.terminal_history.append(0)
         if self.has_value_function:
-            action_scores, values = self.module(obs)
+            if self.discrete: #TODO: there could be a more pythonic way of doing this
+                action_scores, values = self.module(obs)
+            else:
+                action_mu, action_sigma, values = self.module(obs)
             self.value_history.append(values)
         else:
-            action_scores = self.module(obs)
-        self.action_history.append(action_scores)
-        return action_scores 
+            if self.discrete: #TODO: there could be a more pythonic way of doing this
+                action_scores = self.module(obs)
+            else:
+                action_mu, action_sigma = self.module(obs)
+        if self.discrete: 
+            self.action_history.append(action_scores)
+            return action_scores 
+        if not self.discrete:
+            #print("Action mu: %s Sigma^2: %s" % (action_mu, action_sigma))
+            action_covariance = torch.eye(self.action_space, 
+                    device = self.device) * action_sigma.to(self.device) #create SPHERICAL covariance
+            action_mu = action_mu.to(self.device) #TODO: this should naturally happen via the MLP
+            normal = torch.distributions.MultivariateNormal(action_mu, action_covariance)
+            action = normal.sample()
+            action_score = normal.log_prob(action)
+            self.action_history.append(action_score) 
+            #print("ACTION: ", action)
+            return action 
+
 
     def store_reward(self, r):
         self.reward_history.append(r)
@@ -59,6 +80,8 @@ class Agent:
     def terminate_episode(self):
         self.terminal_history.append(1)
         self.reward_history.append(self.terminal_penalty)
+        avg_reward = sum(self.reward_history) / len(self.reward_history)
+        self.net_reward_history.append(avg_reward)
 
     def reset_histories(self):
         self.state_history = []
@@ -159,9 +182,11 @@ class PyTorchAgent(Agent):
     def __call__(self, timestep):
         obs = timestep.observation
         action = self.step(obs).cpu().detach()
-        if self.discrete:
+        if self.discrete: #TODO: This is currently only compatible with action_space = 1
             action_ind = max(range(len(action)), key=action.__getitem__) 
             action = [-1, 1][action_ind] 
+        else: #continuous action space, currently mu + sigma
+            pass            
         return action
 
 ##  Tensorflow Helper functions/classes
@@ -271,10 +296,11 @@ class PyTorchMLP(torch.nn.Module):
             prev_size = hdims[i]
         linear = torch.nn.Linear(prev_size, outdim, bias = True)
         layers.append(linear)
-        if activations[i+1] is not None:
-            if activations[i+1] == 'relu':
+        final_ind = len(hdims)
+        if activations[final_ind] is not None:
+            if activations[final_ind] == 'relu':
                 layers.append(torch.nn.LeakyReLU())
-            elif activations[i+1] == 'sig':
+            elif activations[final_ind] == 'sig':
                 layers.append(torch.nn.Sigmoid())
         if batchnorm:
             layers.append(tf.nn.BatchNorm1d(outdim))
@@ -315,34 +341,36 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
     def __init__(self, action_space, action_bias = True, value_bias = True,
             *args, **kwargs):
         self.action_space = action_space
-        super(PyTorchContinuousACMLP, self).__init__(*args, **kwargs)
-        self.action_module = torch.nn.Linear(self.outdim, 
+        super(PyTorchContinuousGaussACMLP, self).__init__(*args, **kwargs)
+        self.action_mu_module = torch.nn.Linear(self.outdim, 
                 action_space, bias = action_bias)
+        self.action_sigma_module = torch.nn.Linear(self.outdim,
+                action_space, bias = action_bias)
+        self.action_sigma_softplus = torch.nn.Softplus()
         self.value_module = torch.nn.Linear(self.outdim, 1, 
                 bias = value_bias)
     
     def forward(self, x):
-        raise Exception("Change to have mu/sigma output heads for\
-        multidimensional normal distribution representing output;\
-        normalize / denormalize output accordingly.")
-        mlp_out = super(PyTorchContinuousACMLP, self).forward(x)
+        mlp_out = super(PyTorchContinuousGaussACMLP, self).forward(x)
         #print("MLP OUT: ", mlp_out)
-        actions = self.action_module(mlp_out) 
-        action_scores = torch.nn.functional.softmax(actions, dim=-1)
+        action_mu = self.action_mu_module(mlp_out) 
+        action_sigma = self.action_sigma_module(mlp_out)
+        action_sigma = self.action_sigma_softplus(action_sigma) #from 1602.01783 appendix 9
         value = self.value_module(mlp_out)
         #print("ACTION: %s VALUE: %s" % (actions, value))
-        return action_scores, value
+        return action_mu, action_sigma, value
 
 
-def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0,
+def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0, action_constraints = None, 
         *args, **kwargs):
     class PyTorchEpsGreedyModule(mlp_base):
-        def __init__(self, mlp_base, eps, eps_decay, eps_min, 
+        def __init__(self, mlp_base, eps, eps_decay, eps_min, action_constraints = None, 
                 *args, **kwargs):
             self.eps = eps
             self.decay = eps_decay
             self.eps_min = eps_min
             self.base = mlp_base
+            self.action_constraints = action_constraints
             super(PyTorchEpsGreedyModule, self).__init__(*args, **kwargs)
     
         def update_eps(self):
@@ -350,7 +378,7 @@ def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0,
             #print("EPS: ", self.eps)
 
         def forward(self, x):
-            if self.base == PyTorchDiscreteACMLP:
+            if self.base == PyTorchDiscreteACMLP: #TODO: can't assume value function exists...??
                 action_score, values = super(PyTorchEpsGreedyModule,
                         self).forward(x)
                 if random.random() < self.eps:
@@ -363,9 +391,20 @@ def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0,
                         #print("A: %s Score: %s" % (action, action_score))
                 return action_score, values
             elif self.base == PyTorchContinuousGaussACMLP:
+                action_mu, action_sigma, values = super(PyTorchEpsGreedyModule,
+                        self).forward(x)
+                if random.random() < self.eps: #randomize sigma values
+                    self.update_eps()
+                    mins = self.action_constraints[0]
+                    maxs = self.action_constraints[1]
+                    action_mu =  np.random.uniform(mins, maxs, (1, self.action_space))
+                    action_sigma = np.random.random_integers(1, high = 2, size = (1, self.action_space))
+                    action_mu = torch.tensor(action_mu).float()
+                    action_sigma = torch.tensor(action_sigma).float()
+                return action_mu, action_sigma, values 
                 raise Exception("Figure this out?")
 
-    return PyTorchEpsGreedyModule(mlp_base, eps, eps_decay, eps_min, *args, **kwargs)
+    return PyTorchEpsGreedyModule(mlp_base, eps, eps_decay, eps_min, action_constraints, *args, **kwargs)
 ##
 
 

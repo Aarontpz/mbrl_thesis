@@ -13,18 +13,20 @@ from dm_control import viewer
 
 import threading
 
+VIEWING = False
 class TFStateCartpoleAgent(TFAgent):
     def __init__():
         pass
 
 
-class PyTorchStateCartpoleAgent(PyTorchAgent):
+class PyTorchStateWalkerAgent(PyTorchAgent):
     def transform_observation(self, obs) -> Variable:
         '''Converts ordered-dictionary of position and velocity into
         1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
-        pos = obs['position']
+        orientation = obs['orientations']
         vel = obs['velocity']
-        state = np.concatenate((pos, vel))
+        height = np.asarray([obs['height'],])
+        state = np.concatenate((orientation, vel, height))
         return Variable(torch.tensor(state).float(), requires_grad = True)
 
 
@@ -42,14 +44,14 @@ def console(env, agent, lock):
         input()
         with lock:
             cmd = input('>')
-            if cmd.lower() == 'v': #view with thread locked?!
+            if cmd.lower() == 'v': #view with thread locked?
                 print("VIEWING!")
-                clone = PyTorchStateCartpoleAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
-                        action_constraints = action_constraints, has_value_function = True)
+                ## We create a clone of the agent (to preserve the training agent's history) 
+                clone = PyTorchStateWalkerAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
+                        action_constraints = action_constraints, has_value_function = True) 
                 clone.module = copy.deepcopy(agent.module)
                 launch_viewer(env, clone)    
                 print("RESUMING!")
-
 
 LIB = 'pytorch'
 MAX_ITERATIONS = 10000
@@ -65,7 +67,6 @@ mlp_hdims = [200]
 mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
 mlp_initializer = None
 DISCRETE_AGENT = False
-DISCRETE_AGENT = True
 FULL_EPISODE = True
 
 MAXIMUM_TRAJECTORY_LENGTH = MAX_ITERATIONS
@@ -88,12 +89,12 @@ else:
 
 GAMMA = 0.98
 if __name__ == '__main__':
-    env = suite.load(domain_name = 'cartpole', task_name = 'swingup')  
-    tmp_env = suite.load(domain_name = 'cartpole', task_name = 'swingup')  
+    env = suite.load(domain_name = 'walker', task_name = 'walk')  
+    tmp_env = suite.load(domain_name = 'walker', task_name = 'walk')  
     action_space = env.action_spec()
     obs_space = env.observation_spec()
 
-    obs_size = obs_space['position'].shape[0] + obs_space['velocity'].shape[0]
+    obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0] + 1 #+1 for height
     action_size = action_space.shape[0] 
     #action_size = 2
     action_constraints = [action_space.minimum, action_space.maximum]
@@ -106,7 +107,7 @@ if __name__ == '__main__':
     
     if LIB == 'pytorch': #TODO : encapsulate this in a runner
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        agent = PyTorchStateCartpoleAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
+        agent = PyTorchStateWalkerAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
                 action_constraints = action_constraints, has_value_function = True)
     
         if DISCRETE_AGENT:
@@ -135,7 +136,11 @@ if __name__ == '__main__':
         while i < MAX_ITERATIONS: #and error > threshold
             print("ITERATION: ", i)
             # Exploration / evaluation step
+            #while VIEWING:
+            #    print("PAUSED!")
             for episode in range(EPISODES_BEFORE_TRAINING):
+                #while VIEWING:
+                #    print("PAUSED!")
                 timestep = env.reset()        
                 while not timestep.last() and step < MAX_TIMESTEPS:
                     reward = timestep.reward
