@@ -317,10 +317,14 @@ class PyTorchMLP(torch.nn.Module):
 class PyTorchDiscreteACMLP(PyTorchMLP):
     '''Adds action / value heads to the end of an MLP constructed
     via PyTorchMLP '''
-    def __init__(self, action_space, action_bias = True, value_bias = True,
+    def __init__(self, action_space, seperate_value_network = False,
+            action_bias = True, value_bias = True,
             *args, **kwargs):
         self.action_space = action_space
+        self.seperate_value_net = seperate_value_network
         super(PyTorchDiscreteACMLP, self).__init__(*args, **kwargs)
+        if seperate_value_network:
+            self.value_mlp = PyTorchMLP(*args, **kwargs)
         self.action_module = torch.nn.Linear(self.outdim, 
                 action_space, bias = action_bias)
         self.value_module = torch.nn.Linear(self.outdim, 1, 
@@ -331,6 +335,8 @@ class PyTorchDiscreteACMLP(PyTorchMLP):
         #print("MLP OUT: ", mlp_out)
         actions = self.action_module(mlp_out) 
         action_scores = torch.nn.functional.softmax(actions, dim=-1)
+        if self.seperate_value_net:
+            mlp_out = self.value_mlp.forward(x)
         value = self.value_module(mlp_out)
         #print("ACTION: %s VALUE: %s" % (actions, value))
         return action_scores, value
@@ -338,10 +344,14 @@ class PyTorchDiscreteACMLP(PyTorchMLP):
 class PyTorchContinuousGaussACMLP(PyTorchMLP):
     '''Adds action (mean, variance) / value heads 
     to the end of an MLP constructed via PyTorchMLP '''
-    def __init__(self, action_space, action_bias = True, value_bias = True,
+    def __init__(self, action_space, seperate_value_network = True,
+            action_bias = True, value_bias = True,
             *args, **kwargs):
         self.action_space = action_space
+        self.seperate_value_net = seperate_value_network
         super(PyTorchContinuousGaussACMLP, self).__init__(*args, **kwargs)
+        if seperate_value_network:
+            self.value_mlp = PyTorchMLP(*args, **kwargs)
         self.action_mu_module = torch.nn.Linear(self.outdim, 
                 action_space, bias = action_bias)
         self.action_sigma_module = torch.nn.Linear(self.outdim,
@@ -356,6 +366,8 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
         action_mu = self.action_mu_module(mlp_out) 
         action_sigma = self.action_sigma_module(mlp_out)
         action_sigma = self.action_sigma_softplus(action_sigma) #from 1602.01783 appendix 9
+        if self.seperate_value_net:
+            mlp_out = self.value_mlp.forward(x)
         value = self.value_module(mlp_out)
         #print("ACTION: %s VALUE: %s" % (actions, value))
         return action_mu, action_sigma, value
@@ -395,11 +407,12 @@ def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0, action_constrai
                         self).forward(x)
                 if random.random() < self.eps: #randomize sigma values
                     self.update_eps()
-                    mins = self.action_constraints[0]
-                    maxs = self.action_constraints[1]
-                    action_mu =  np.random.uniform(mins, maxs, (1, self.action_space))
-                    action_sigma = np.random.random_integers(1, high = 2, size = (1, self.action_space))
-                    action_mu = torch.tensor(action_mu).float()
+                    #mins = self.action_constraints[0]
+                    #maxs = self.action_constraints[1]
+                    #action_mu =  np.random.uniform(mins, maxs, (1, self.action_space))
+                    #action_sigma = np.random.random_integers(1, high = 2, size = (1, self.action_space))
+                    action_sigma = np.random.uniform(low = 0.0, high = 3.0, size = (1, self.action_space))
+                    #action_mu = torch.tensor(action_mu).float()
                     action_sigma = torch.tensor(action_sigma).float()
                 return action_mu, action_sigma, values 
                 raise Exception("Figure this out?")

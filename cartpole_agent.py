@@ -61,14 +61,14 @@ EPS_MIN = 0.03
 EPS_DECAY = 1e-8
 
 mlp_outdim = 50 #based on state size (approximation)
-mlp_hdims = [200]
-mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
+mlp_hdims = [200, ]
+mlp_activations = ['relu', 'relu'] #+1 for outdim activation, remember extra action/value modules
 mlp_initializer = None
-DISCRETE_AGENT = False
+#DISCRETE_AGENT = False
 DISCRETE_AGENT = True
 FULL_EPISODE = True
 
-MAXIMUM_TRAJECTORY_LENGTH = MAX_ITERATIONS
+MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
 SMALL_TRAJECTORY_LENGTH = 100
 
 lr = 5.0e-5
@@ -114,7 +114,8 @@ if __name__ == '__main__':
         else:
             mlp_base = PyTorchContinuousGaussACMLP
         agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
-                action_size, action_bias = True, value_bias = True,
+                action_size, seperate_value_network = True, 
+                action_bias = True, value_bias = True,
                 device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                 activations = mlp_activations, initializer = mlp_initializer).to(device)
             

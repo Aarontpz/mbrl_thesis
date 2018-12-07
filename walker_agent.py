@@ -39,6 +39,12 @@ def launch_viewer(env, agent):
         pass
 
 
+def launch_best_agent(env, agent):
+    try:
+        pass
+    except: 
+        pass
+
 def console(env, agent, lock):
     while True: 
         input()
@@ -53,26 +59,30 @@ def console(env, agent, lock):
                 launch_viewer(env, clone)    
                 print("RESUMING!")
 
+    
+
+
+
 LIB = 'pytorch'
 MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-EPS = 0.1
-EPS_MIN = 0.03
+EPS = 0.05
+EPS_MIN = 0.01
 EPS_DECAY = 1e-8
 
 mlp_outdim = 50 #based on state size (approximation)
 mlp_hdims = [200]
-mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
+mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
 mlp_initializer = None
 DISCRETE_AGENT = False
 FULL_EPISODE = True
 
-MAXIMUM_TRAJECTORY_LENGTH = MAX_ITERATIONS
+MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
 SMALL_TRAJECTORY_LENGTH = 100
 
-lr = 5.0e-5
+lr = 1.0e-4
 ADAM_BETAS = (0.9, 0.999)
 entropy_coeff = 0.0
 value_coeff = 0.1
@@ -87,7 +97,7 @@ else:
     replay_iterations = 30 #approximate based on episode length 
 
 
-GAMMA = 0.98
+GAMMA = 0.96
 if __name__ == '__main__':
     env = suite.load(domain_name = 'walker', task_name = 'walk')  
     tmp_env = suite.load(domain_name = 'walker', task_name = 'walk')  
@@ -115,7 +125,8 @@ if __name__ == '__main__':
         else:
             mlp_base = PyTorchContinuousGaussACMLP
         agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
-                action_size, action_bias = True, value_bias = True,
+                action_size, seperate_value_network = True, 
+                action_bias = True, value_bias = True,
                 device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                 activations = mlp_activations, initializer = mlp_initializer).to(device)
             
@@ -136,11 +147,7 @@ if __name__ == '__main__':
         while i < MAX_ITERATIONS: #and error > threshold
             print("ITERATION: ", i)
             # Exploration / evaluation step
-            #while VIEWING:
-            #    print("PAUSED!")
             for episode in range(EPISODES_BEFORE_TRAINING):
-                #while VIEWING:
-                #    print("PAUSED!")
                 timestep = env.reset()        
                 while not timestep.last() and step < MAX_TIMESTEPS:
                     reward = timestep.reward

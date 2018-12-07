@@ -238,7 +238,7 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
                 #raise Exception("Entropy + Value Loss Coefficients!")
 
 
-                #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
             optimizer.step()
@@ -371,7 +371,7 @@ class PyTorchContinuousACTrainer(PyTorchTrainer):
                 #loss.backward(retain_graph = i < len(reward_history) - 2)
                 loss += action_loss + value_loss
 
-                #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             print("LOSS: ", loss)
             loss.backward(retain_graph = True)
             optimizer.step()
