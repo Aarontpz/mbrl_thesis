@@ -68,13 +68,13 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-EPS = 0.05
-EPS_MIN = 0.01
+EPS = 0.1
+EPS_MIN = 0.02
 EPS_DECAY = 1e-8
 
-mlp_outdim = 50 #based on state size (approximation)
-mlp_hdims = [200]
-mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
+mlp_outdim = 200 #based on state size (approximation)
+mlp_hdims = []
+mlp_activations = ['relu'] #+1 for outdim activation, remember extra action/value modules
 mlp_initializer = None
 DISCRETE_AGENT = False
 FULL_EPISODE = True
@@ -89,11 +89,11 @@ value_coeff = 0.1
 
 if FULL_EPISODE:
     max_traj_len = MAXIMUM_TRAJECTORY_LENGTH
-    EPISODES_BEFORE_TRAINING = 2
+    EPISODES_BEFORE_TRAINING = 10 #so we benefit from reusing sampled trajectories with PPO / TRPO
     replay_iterations = EPISODES_BEFORE_TRAINING #approximate based on episode length 
 else:
     max_traj_len = SMALL_TRAJECTORY_LENGTH
-    EPISODES_BEFORE_TRAINING = 5
+    EPISODES_BEFORE_TRAINING = 20
     replay_iterations = 30 #approximate based on episode length 
 
 
@@ -126,13 +126,16 @@ if __name__ == '__main__':
             mlp_base = PyTorchContinuousGaussACMLP
         agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
                 action_size, seperate_value_network = True, 
-                action_bias = True, value_bias = True,
+                action_bias = True, value_bias = True, sigma_head = False, 
                 device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                 activations = mlp_activations, initializer = mlp_initializer).to(device)
             
         optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
 
-        trainer = PyTorchDiscreteACTrainer(device, value_coeff, entropy_coeff,
+        #trainer = PyTorchACTrainer(device, value_coeff, entropy_coeff,
+        #        agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+        #        num_episodes = EPISODES_BEFORE_TRAINING) 
+        trainer = PyTorchPPOTrainer(device, value_coeff, entropy_coeff,
                 agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                 num_episodes = EPISODES_BEFORE_TRAINING) 
 

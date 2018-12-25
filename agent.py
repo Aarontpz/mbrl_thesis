@@ -47,20 +47,34 @@ class Agent:
     def step(self, obs, *args, **kwargs) -> np.array:
         self.state_history.append(obs)
         self.terminal_history.append(0)
+        action, value, normal = self.evaluate(obs, *args, **kwargs) #action may be ONE SHOT or continuous, values may be None
+
+        if self.has_value_function:
+            self.value_history.append(value)
+        if self.discrete: 
+            self.action_history.append(action)
+        if not self.discrete: #TODO: make this more efficient BY OUTPUTTING NORMAL DIST INSTEAD
+            action_score = normal.log_prob(action) #use constructed normal distribution to generate log prob
+            self.action_history.append(action_score) 
+            #print("ACTION: ", action)
+            return action 
+
+    def evaluate(self, obs, *args, **kwargs) -> (np.array,):
+        action_scores = None
+        value = None
+        normal = None
         if self.has_value_function:
             if self.discrete: #TODO: there could be a more pythonic way of doing this
-                action_scores, values = self.module(obs)
+                action_scores, value = self.module(obs)
             else:
-                action_mu, action_sigma, values = self.module(obs)
-            self.value_history.append(values)
+                action_mu, action_sigma, value = self.module(obs)
         else:
             if self.discrete: #TODO: there could be a more pythonic way of doing this
                 action_scores = self.module(obs)
             else:
                 action_mu, action_sigma = self.module(obs)
         if self.discrete: 
-            self.action_history.append(action_scores)
-            return action_scores 
+            return action_scores, value, normal
         if not self.discrete:
             #print("Action mu: %s Sigma^2: %s" % (action_mu, action_sigma))
             action_covariance = torch.eye(self.action_space, 
@@ -68,11 +82,9 @@ class Agent:
             action_mu = action_mu.to(self.device) #TODO: this should naturally happen via the MLP
             normal = torch.distributions.MultivariateNormal(action_mu, action_covariance)
             action = normal.sample()
-            action_score = normal.log_prob(action)
-            self.action_history.append(action_score) 
+            #action_score = normal.log_prob(action)
             #print("ACTION: ", action)
-            return action 
-
+            return action, value, normal
 
     def store_reward(self, r):
         self.reward_history.append(r)
@@ -345,10 +357,11 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
     '''Adds action (mean, variance) / value heads 
     to the end of an MLP constructed via PyTorchMLP '''
     def __init__(self, action_space, seperate_value_network = True,
-            action_bias = True, value_bias = True,
+            action_bias = True, value_bias = True, sigma_head = False,
             *args, **kwargs):
         self.action_space = action_space
         self.seperate_value_net = seperate_value_network
+        self.sigma_head = sigma_head
         super(PyTorchContinuousGaussACMLP, self).__init__(*args, **kwargs)
         if seperate_value_network:
             self.value_mlp = PyTorchMLP(*args, **kwargs)
@@ -364,8 +377,11 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
         mlp_out = super(PyTorchContinuousGaussACMLP, self).forward(x)
         #print("MLP OUT: ", mlp_out)
         action_mu = self.action_mu_module(mlp_out) 
-        action_sigma = self.action_sigma_module(mlp_out)
-        action_sigma = self.action_sigma_softplus(action_sigma) #from 1602.01783 appendix 9
+        if self.sigma_head:
+            action_sigma = self.action_sigma_module(mlp_out)
+            action_sigma = self.action_sigma_softplus(action_sigma) #from 1602.01783 appendix 9
+        else: #assume sigma is currently zeros
+            action_sigma = torch.ones([1, self.action_space], dtype=torch.float32) * 0.0001
         if self.seperate_value_net:
             mlp_out = self.value_mlp.forward(x)
         value = self.value_module(mlp_out)
@@ -407,13 +423,14 @@ def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0, action_constrai
                         self).forward(x)
                 if random.random() < self.eps: #randomize sigma values
                     self.update_eps()
-                    #mins = self.action_constraints[0]
-                    #maxs = self.action_constraints[1]
-                    #action_mu =  np.random.uniform(mins, maxs, (1, self.action_space))
+                    mins = self.action_constraints[0]
+                    maxs = self.action_constraints[1]
+                    action_mu =  np.random.uniform(mins, maxs, (1, self.action_space))
                     #action_sigma = np.random.random_integers(1, high = 2, size = (1, self.action_space))
-                    action_sigma = np.random.uniform(low = 0.0, high = 3.0, size = (1, self.action_space))
-                    #action_mu = torch.tensor(action_mu).float()
+                    action_sigma = np.random.uniform(low = 0.000001, high = 3.0, size = (1, self.action_space))
+                    action_mu = torch.as_tensor(action_mu).float()
                     action_sigma = torch.tensor(action_sigma).float()
+                    #print("RANDOMIZING! Eps: ", self.eps)
                 return action_mu, action_sigma, values 
                 raise Exception("Figure this out?")
 

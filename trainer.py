@@ -120,7 +120,7 @@ class PyTorchTrainer(Trainer):
         #print("Net Entropy: ", net_entropy)
         return net_entropy    
 
-class PyTorchDiscreteACTrainer(PyTorchTrainer):
+class PyTorchACTrainer(PyTorchTrainer):
     def step(self):
         #TODO: Modify this for seperate policy/value networks
         #raise Exception("This doesn't seem to work for continuous-action spaces?!")
@@ -188,7 +188,6 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
                 #print("Value Score: ", value_scores)
                 #print("Return: ", R)
                 #print("Action Scores: %s \n Value Scores: %s\n" % (action_scores, value_scores))
-                log_prob = action_score.log().max().to(device)
                 #print(torch.isnan(s) for s in log_prob)
                 #print("Log Prob: ", log_prob)
                 #print("FIXING SCORE")
@@ -205,6 +204,7 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
                     #print("Discounted reward: ", disc_reward)
                 advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
                 if self.agent.discrete:
+                    log_prob = action_score.log().max().to(device)
                     action_loss = (-log_prob * advantage).squeeze(0)
                 else:
                     action_loss = (-action_score * advantage).squeeze(0)
@@ -268,9 +268,11 @@ class PyTorchDiscreteACTrainer(PyTorchTrainer):
         #    module.reset_states() 
         #return net_action_loss, net_value_loss
 
-class PyTorchContinuousACTrainer(PyTorchTrainer):
+
+class PyTorchPPOTrainer(PyTorchTrainer):
     def step(self):
         #TODO: Modify this for seperate policy/value networks
+        #raise Exception("This doesn't seem to work for continuous-action spaces?!")
         requires_grad = True
         reward = None
         action_scores = None 
@@ -281,7 +283,7 @@ class PyTorchContinuousACTrainer(PyTorchTrainer):
         optimizer = self.opt
         action_scores = self.agent.action_history
         value_scores = self.agent.value_history
-        print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
+        #print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
         assert(len(value_scores) == len(action_scores)) #necessary
         ## FOR STORING LOSS HISTORIES
 
@@ -307,7 +309,13 @@ class PyTorchContinuousACTrainer(PyTorchTrainer):
         #    make_dot(score).view()
         #    input()
         optimizer.zero_grad()
-        replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
+        if self.max_traj_len > len(action_scores)/self.num_episodes: #if avg episode len < max traj len, run through each episode
+            ends = self.get_episode_ends()
+            replay_starts = [0]
+            for e in ends[:len(ends) - 1]:
+                replay_starts.append(e + 1)
+        else:
+            replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
         for start in replay_starts:
             end = self.get_trajectory_end(start, end = None)
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
@@ -327,11 +335,10 @@ class PyTorchContinuousACTrainer(PyTorchTrainer):
                 action_score = action_scores[ind]
                 value_score = value_scores[ind] #NOTE: i vs i+1?!
                 #print("Value Score: ", value_scores)
-                print("Return: ", R)
+                #print("Return: ", R)
                 #print("Action Scores: %s \n Value Scores: %s\n" % (action_scores, value_scores))
-                log_prob = action_score.log().max().to(device)
                 #print(torch.isnan(s) for s in log_prob)
-                print("Log Prob: ", log_prob)
+                #print("Log Prob: ", log_prob)
                 #print("FIXING SCORE")
                 ##max_score, max_index = torch.max(action_scores, 1)
                 ##m = torch.distributions.Categorical(action_scores)
@@ -345,14 +352,31 @@ class PyTorchContinuousACTrainer(PyTorchTrainer):
                 #if disc_reward > 0.5:
                     #print("Discounted reward: ", disc_reward)
                 advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
-                action_loss = (-log_prob * advantage).squeeze(0)
+                if self.agent.discrete:
+                    log_prob = action_score.log().max().to(device)
+                    action_loss = (-log_prob * advantage).squeeze(0)
+                else:
+                    state = self.agent.state_history[ind]
+                    action, value, normal = self.agent.evaluate(state) 
+                    new_score = normal.log_prob(action)
+                    rt = torch.exp(new_score - action_score) #action_score is recorded prob of action AT SAMPLE TIME
+                    eps = 0.2
+                    loss_clip = torch.sum(torch.min(rt * advantage, torch.clamp(rt, 1-eps, 1+eps) * advantage))
+                    #print("PPO BIATCH. Rt: ", rt)
+                    #print("Clamped Loss: ", loss_clip)
+                    #action_loss = (-action_score * advantage).squeeze(0)
+                    action_loss = loss_clip.squeeze(0)
                 #action_loss -= self.entropy_coeff * self.get_policy_entropy(ind, end=None) #TODO: fix entropy
 
                 #make_dot(action_loss).view()
                 #input()
                 #print("Value score: %s Discounted: %s" % (value_score, R))
-                value_loss = criterion(value_score, R) 
-                #entropy_loss = self.get_policy_entropy(ind, end=None)
+                value_loss = self.value_coeff * criterion(value_score, R) 
+                if self.entropy_coeff > 0.0:
+                    entropy_loss = self.entropy_coeff * self.get_policy_entropy(ind, end=None)
+                    loss += action_loss + value_loss - entropy_loss #WEIGHTED
+                else:
+                    loss += action_loss + value_loss #WEIGHTED
                 
                 #make_dot(value_loss).view()
                 #input()
@@ -369,11 +393,12 @@ class PyTorchContinuousACTrainer(PyTorchTrainer):
                 #    else:
                 #        loss = action_loss #TODO: occasionally (NOT simultaneously) update value estimator
                 #loss.backward(retain_graph = i < len(reward_history) - 2)
-                loss += action_loss + value_loss
+                #raise Exception("Entropy + Value Loss Coefficients!")
+
 
             torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
-            print("LOSS: ", loss)
             loss.backward(retain_graph = True)
+            self.agent.net_loss_history.append(loss.cpu().detach())
             optimizer.step()
                 #print("Step %s Loss: %s" % (i, loss))
         #print("FINAL i: ", i)
@@ -400,5 +425,3 @@ class PyTorchContinuousACTrainer(PyTorchTrainer):
         #if module.lstm_size > 0: #TODO: don't do full FF, to save computations? compartmentalize .forward()
         #    module.reset_states() 
         #return net_action_loss, net_value_loss
-
-
