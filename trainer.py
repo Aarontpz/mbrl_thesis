@@ -55,7 +55,7 @@ class Trainer:
         if end is None:
             end = min(max_ind, start + self.max_traj_len)
         if True in terminal_history[start:end]:
-            end = terminal_history[start:].index(True) + start - 1
+            end = terminal_history[start:].index(True) + start
             #TODO: consider minimal traj length too?
         return end
 
@@ -107,7 +107,7 @@ class PyTorchTrainer(Trainer):
         if end is None: 
             end = self.get_trajectory_end(start, end)
         net_entropy = torch.tensor([0.0], requires_grad = False).to(self.device)
-        for s in self.agent.action_history[start : end]:
+        for s in self.agent.action_score_history[start : end]:
             s = s.squeeze(0)
             log_prob = s.log()
             entropy = (log_prob * s).sum().to(self.device)
@@ -119,6 +119,108 @@ class PyTorchTrainer(Trainer):
                 pass
         #print("Net Entropy: ", net_entropy)
         return net_entropy    
+
+class PyTorchPreTrainer(PyTorchTrainer):
+    def __init__(self, trainer, *args, **kwargs):
+        super(PyTorchPreTrainer).__init__(*args, **kwargs)
+        self.trainer = trainer       
+
+    @abc.abstractmethod
+    def training_criteria(self) -> bool:
+        return False
+
+class PyTorchNeuralDynamicsTrainer(PyTorchTrainer):
+    def __init__(self, dynamics_mlp, mpc_agent, random_agent, horizon = 50, 
+            rand_sample_rate = 1.0, rand_sample_decay = 0.1, min_rand_sample_rate = 0.5,
+            max_steps = 10000, max_iterations = 1000, *args, **kwargs):
+        super(PyTorchNeuralDynamicsTrainer, self).__init__(*args, **kwargs)
+        self.dynamics_mlp = dynamics_mlp
+        self.mpc_agent = mpc_agent
+        self.random_agent = random_agent
+        self.horizon = horizon
+        self.rand_sample_rate = rand_sample_rate
+        self.rand_sample_decay = rand_sample_decay
+        self.min_rand_sample_rate = min_rand_sample_rate
+
+        self.max_steps = max_steps
+        self.max_iterations = max_iterations
+
+    def dynamic_step_loss(self, states, actions) -> torch.tensor:
+        criterion = torch.nn.L1Loss()
+
+    def dynamic_horizon_loss(self, states, actions) -> torch.tensor:
+        '''Evaluates the error of the neural dynamics from some starting
+        state to a state in the horizon. USED FOR VALIDATION, NOT TRAINING'''
+        criterion = torch.nn.L1Loss()
+    
+    def step(self):
+        #raise Exception("Train value function DURING THIS STEP TOO for proper behavioral cloning\
+        #?? Investigate!")
+        horizon_loss = float('inf')
+        avg_step_loss = float('inf')
+        
+        agent = None 
+        env = self.env
+        step = 0
+        #while (horizon_loss > horizon_validation_thresh and 
+        #        avg_step_loss > avg_step_loss_validation_thresh):
+        while True: #1708.02596 pg 4: "until a predefined maximum iteration is reached
+            if random.random() < rand_sample_rate: #RANDOM TRAJ
+                self.rand_sample_rate = max(self.rand_sample_rate - self.rand_sample_decay,
+                        self.min_rand_sample_rate)
+                agent = self.random_agent
+            else: #MPC TRAJ
+                agent = self.mpc_agent
+            
+            timestep = env.reset()
+            i = 0
+            while not timestep.last() and i < self.max_iterations:
+                reward = timestep.reward
+                if reward is None:
+                    reward = 0.0
+                #print("TIMESTEP %s: %s" % (step, timestep))
+                observation = timestep.observation
+                action = agent(timestep)
+                agent.store_reward(reward)
+                timestep = env.step(action)
+                #print("Reward: %s" % (timestep.reward))
+                i += 1
+            agent.terminate_episode() #oops forgot this lmao
+            
+            ## Training Step
+            loss = self.dynamic_step_loss(agent.state_history, agent.action_history)
+
+            ## Reset agent histories
+            agent.reset_histories()
+
+            step += 1
+            if step > self.max_steps:
+                break
+
+
+class PyTorchMB_MFPreTrainer(PyTorchPreTrainer):
+    def __init__(self, dynamics_mlp, mpc_agent, horizon = 50, *args, **kwargs):
+        super(PyTorchMB_MFPreTrainer, self).__init__(*args, **kwargs)
+        self.horizon = horizon
+        self.dynamics_mlp = dynamics_mlp
+        self.mpc_agent = mpc_agent
+    
+    def behavioral_cloning_loss(self) -> torch.tensor:
+        #TODO: Currently this doesn't clone any VALUE FUNCTION?!
+        #TODO: implement DAGGER as well?!
+        criterion = torch.nn.MSELoss()
+        mpc_actions = self.mpc_agent.action_history
+        agent_actions = [(action, normal) for action, _, normal in [self.agent.evaluate(obs) for obs in 
+            self.mpc_agent.state_history]] 
+        agent_scores = [normal.log_prob(action) for normal, action in agent_actions]
+        return 0.5 * torch.sum(criterion(mpc_actions, agent_scores))
+   
+    def step(self): #TODO: Implement DAGGER as well??
+        pass
+
+
+
+
 
 class PyTorchACTrainer(PyTorchTrainer):
     def step(self):
@@ -132,7 +234,7 @@ class PyTorchACTrainer(PyTorchTrainer):
         module = self.agent.module
         device = self.device
         optimizer = self.opt
-        action_scores = self.agent.action_history
+        action_scores = self.agent.action_score_history
         value_scores = self.agent.value_history
         #print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
         assert(len(value_scores) == len(action_scores)) #necessary
@@ -281,7 +383,7 @@ class PyTorchPPOTrainer(PyTorchTrainer):
         module = self.agent.module
         device = self.device
         optimizer = self.opt
-        action_scores = self.agent.action_history
+        action_scores = self.agent.action_score_history
         value_scores = self.agent.value_history
         #print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
         assert(len(value_scores) == len(action_scores)) #necessary
@@ -316,10 +418,12 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                 replay_starts.append(e + 1)
         else:
             replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
+        print("ENDS: %s \n LEN: %s" % (self.get_episode_ends(), len(action_scores)))
+        #THIS IMPLIES that the way we are ending the episodes is...improper...
         for start in replay_starts:
             end = self.get_trajectory_end(start, end = None)
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
-            print("START: %s END: %s" % (start, end))
+            #print("START: %s END: %s" % (start, end))
             for ind in range(start, end): #-1 because terminal state doesn't matter?
                 #i = ind
                 #optimizer.zero_grad()
@@ -353,6 +457,7 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                     #print("Discounted reward: ", disc_reward)
                 advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
                 if self.agent.discrete:
+                    raise Exception("Hasn't been implemented for PPO")
                     log_prob = action_score.log().max().to(device)
                     action_loss = (-log_prob * advantage).squeeze(0)
                 else:
@@ -361,11 +466,12 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                     new_score = normal.log_prob(action)
                     rt = torch.exp(new_score - action_score) #action_score is recorded prob of action AT SAMPLE TIME
                     eps = 0.2
-                    loss_clip = torch.sum(torch.min(rt * advantage, torch.clamp(rt, 1-eps, 1+eps) * advantage))
+                    #loss_clip = torch.sum(torch.min(rt * advantage, torch.clamp(rt, 1-eps, 1+eps) * advantage))
+                    loss_clip = -1 * torch.min(rt * advantage, torch.clamp(rt, min=1-eps, max=1+eps) * advantage)
                     #print("PPO BIATCH. Rt: ", rt)
-                    #print("Clamped Loss: ", loss_clip)
                     #action_loss = (-action_score * advantage).squeeze(0)
                     action_loss = loss_clip.squeeze(0)
+                    #print("Clamped Loss: ", action_loss)
                 #action_loss -= self.entropy_coeff * self.get_policy_entropy(ind, end=None) #TODO: fix entropy
 
                 #make_dot(action_loss).view()
@@ -395,7 +501,7 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                 #loss.backward(retain_graph = i < len(reward_history) - 2)
                 #raise Exception("Entropy + Value Loss Coefficients!")
 
-
+            print("LOSS: ", loss)
             torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())

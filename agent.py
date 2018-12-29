@@ -25,6 +25,7 @@ class Agent:
         self.terminal_penalty = terminal_penalty
         self.state_history = []
         self.action_history = []
+        self.action_score_history = []
         self.reward_history = []
         self.net_reward_history = []
         self.net_loss_history = [] #wtf is this loss
@@ -48,18 +49,19 @@ class Agent:
         self.state_history.append(obs)
         self.terminal_history.append(0)
         action, value, normal = self.evaluate(obs, *args, **kwargs) #action may be ONE SHOT or continuous, values may be None
+        self.action_history.append(action)
 
         if self.has_value_function:
             self.value_history.append(value)
         if self.discrete: 
-            self.action_history.append(action)
+            self.action_score_history.append(action)
         if not self.discrete: #TODO: make this more efficient BY OUTPUTTING NORMAL DIST INSTEAD
             action_score = normal.log_prob(action) #use constructed normal distribution to generate log prob
-            self.action_history.append(action_score) 
+            self.action_score_history.append(action_score) 
             #print("ACTION: ", action)
             return action 
 
-    def evaluate(self, obs, *args, **kwargs) -> (np.array,):
+    def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
         action_scores = None
         value = None
         normal = None
@@ -90,14 +92,15 @@ class Agent:
         self.reward_history.append(r)
 
     def terminate_episode(self):
-        self.terminal_history.append(1)
-        self.reward_history.append(self.terminal_penalty)
+        self.terminal_history[-1] = 1
+        self.reward_history[-1] = self.terminal_penalty
         avg_reward = sum(self.reward_history) / len(self.reward_history)
         self.net_reward_history.append(avg_reward)
 
     def reset_histories(self):
         self.state_history = []
         self.action_history = []
+        self.action_score_history = []
         self.reward_history = []
         self.terminal_history = []
         self.value_history = []
@@ -388,6 +391,12 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
         #print("ACTION: %s VALUE: %s" % (actions, value))
         return action_mu, action_sigma, value
 
+#class PyTorchDynamicsMLP(PyTorchMLP):
+#    def __init__(self, state_dim, *args, **kwargs):
+#        super(PyTorchDynamicsMLP, self).__init__(*args, **kwargs)
+#        self.state_dim = state_dim
+
+
 
 def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0, action_constraints = None, 
         *args, **kwargs):
@@ -448,5 +457,6 @@ class MPCAgent(Agent):
     are rather untrue to the physical outcome.  
     ''' #TODO: Verify / question the above statement
     pass
+
 
 
