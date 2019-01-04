@@ -226,6 +226,7 @@ class PyTorchACTrainer(PyTorchTrainer):
     def step(self):
         #TODO: Modify this for seperate policy/value networks
         #raise Exception("This doesn't seem to work for continuous-action spaces?!")
+        super(PyTorchACTrainer, self).step()
         requires_grad = True
         reward = None
         action_scores = None 
@@ -282,7 +283,8 @@ class PyTorchACTrainer(PyTorchTrainer):
                 #    _ = module.forward(obs)
                 #R = norm_returns[i]
                 #R = get_discounted_reward(reward_history, i+1, gamma=gamma).unsqueeze(0).to(device)
-                R = self.get_discounted_reward(ind, end = end).unsqueeze(0).to(device)
+                #R = self.get_discounted_reward(ind, end = end).unsqueeze(0).to(device)
+                R = self.get_discounted_reward(ind, end = end).unsqueeze(0).unsqueeze(0).to(device)
                 #print("i: %s len(action_score): %s value_scores: %s reward_history: %s" \
                 #        % (i, len(action_score_history), len(state_score_history), len(reward_history)))
                 action_score = action_scores[ind]
@@ -340,7 +342,7 @@ class PyTorchACTrainer(PyTorchTrainer):
                 #raise Exception("Entropy + Value Loss Coefficients!")
 
 
-            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
             optimizer.step()
@@ -375,6 +377,7 @@ class PyTorchPPOTrainer(PyTorchTrainer):
     def step(self):
         #TODO: Modify this for seperate policy/value networks
         #raise Exception("This doesn't seem to work for continuous-action spaces?!")
+        super(PyTorchPPOTrainer, self).step()
         requires_grad = True
         reward = None
         action_scores = None 
@@ -424,7 +427,9 @@ class PyTorchPPOTrainer(PyTorchTrainer):
             end = self.get_trajectory_end(start, end = None)
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
             #print("START: %s END: %s" % (start, end))
+            self.agent.steps = 0
             for ind in range(start, end): #-1 because terminal state doesn't matter?
+                self.agent.steps += 1
                 #i = ind
                 #optimizer.zero_grad()
                 #update hidden state for LSTM
@@ -433,7 +438,7 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                 #    _ = module.forward(obs)
                 #R = norm_returns[i]
                 #R = get_discounted_reward(reward_history, i+1, gamma=gamma).unsqueeze(0).to(device)
-                R = self.get_discounted_reward(ind, end = end).unsqueeze(0).to(device)
+                R = self.get_discounted_reward(ind, end = end).unsqueeze(0).unsqueeze(0).to(device)
                 #print("i: %s len(action_score): %s value_scores: %s reward_history: %s" \
                 #        % (i, len(action_score_history), len(state_score_history), len(reward_history)))
                 action_score = action_scores[ind]
@@ -502,7 +507,7 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                 #raise Exception("Entropy + Value Loss Coefficients!")
 
             print("LOSS: ", loss)
-            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
             optimizer.step()

@@ -68,7 +68,7 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-EPS = 0.06
+EPS = 0.08
 EPS_MIN = 0.01
 EPS_DECAY = 1e-8
 
@@ -100,8 +100,8 @@ else:
 GAMMA = 0.96
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
-    raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
-    raise Exception("It is time...for...minibatches (vectorized) training. I think. INVESTIGATE?!")
+    #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
+    #raise Exception("It is time...for...minibatches (vectorized) training. I think. INVESTIGATE?!")
     env = suite.load(domain_name = 'walker', task_name = 'walk')  
     tmp_env = suite.load(domain_name = 'walker', task_name = 'walk')  
     action_space = env.action_spec()

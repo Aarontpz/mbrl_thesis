@@ -15,6 +15,10 @@ class Agent:
             has_value_function = True, terminal_penalty = 0.0, 
             *args, **kwargs):
         '''Assumes flat action-space vector'''
+        self.obs_mean = None
+        self.obs_variance = None
+        self.steps = 0
+
         self.input_dimensions = input_dimensions
         self.action_space = action_space
         self.discrete = discrete_actions
@@ -46,6 +50,7 @@ class Agent:
 
     @abc.abstractmethod
     def step(self, obs, *args, **kwargs) -> np.array:
+        self.steps += 1
         self.state_history.append(obs)
         self.terminal_history.append(0)
         action, value, normal = self.evaluate(obs, *args, **kwargs) #action may be ONE SHOT or continuous, values may be None
@@ -65,6 +70,7 @@ class Agent:
         action_scores = None
         value = None
         normal = None
+
         if self.has_value_function:
             if self.discrete: #TODO: there could be a more pythonic way of doing this
                 action_scores, value = self.module(obs)
@@ -83,7 +89,10 @@ class Agent:
                     device = self.device) * action_sigma.to(self.device) #create SPHERICAL covariance
             action_mu = action_mu.to(self.device) #TODO: this should naturally happen via the MLP
             normal = torch.distributions.MultivariateNormal(action_mu, action_covariance)
-            action = normal.sample()
+            try:
+                action = normal.sample()
+            except RunTimeError: #resample
+                action = normal.sample() 
             #action_score = normal.log_prob(action)
             #print("ACTION: ", action)
             return action, value, normal
@@ -92,6 +101,7 @@ class Agent:
         self.reward_history.append(r)
 
     def terminate_episode(self):
+        self.steps = 0
         self.terminal_history[-1] = 1
         self.reward_history[-1] = self.terminal_penalty
         avg_reward = sum(self.reward_history) / len(self.reward_history)
@@ -142,6 +152,13 @@ class Agent:
             obs.resize(target_size)
         if normalize_pizels == True:
             obs /= 256
+    @abc.abstractmethod
+    def preprocess(self, obs) -> np.ndarray:
+        #TODO: add different means of pre-processing
+        #assert(self.obs_mean is not None)
+        #assert(self.obs_var is not None)
+        if self.obs_mean is not None and self.obs_var is not None:
+            pass
 
     @abc.abstractmethod
     def __call__(self, timestep):
@@ -175,6 +192,8 @@ class PyTorchAgent(Agent):
         super(PyTorchAgent, self).__init__(*args, **kwargs)
         self.device = device
         self._module = None
+        self.obs_mean = torch.zeros(self.input_dimensions).to(device)
+        self.obs_var = torch.zeros(self.input_dimensions).to(device)
 
     def step(self, obs) -> np.ndarray:
         '''Transforms observation, stores relevant data in replay buffers, then
@@ -184,7 +203,17 @@ class PyTorchAgent(Agent):
         needs'''
         obs = self.transform_observation(obs).to(self.device)
         return super(PyTorchAgent, self).step(obs)
-    
+   
+    def evaluate(self, obs, *args, **kwargs) -> torch.tensor:
+        #online param calculation discussion: https://discuss.pytorch.org/t/normalization-of-input-data-to-qnetwork/14800/2
+        obs = self.preprocess(obs)
+        return super(PyTorchAgent, self).evaluate(obs, *args, **kwargs)
+
+    def terminate_episode(self):
+        self.obs_mean = torch.zeros(self.input_dimensions).to(self.device)
+        self.obs_var = torch.zeros(self.input_dimensions).to(self.device)
+        super(PyTorchAgent, self).terminate_episode()
+
     @property
     def module(self):
         return self._module
@@ -193,6 +222,22 @@ class PyTorchAgent(Agent):
     def module(self, m):
         self._module = m
 
+    def compute_normalization(self, obs):
+        last_mean = self.obs_mean.clone()
+        #print("Obs Mean: %s Step: %s Obs: %s" % (self.obs_mean, self.steps, obs))
+        self.obs_mean += (obs - self.obs_mean)/self.steps
+        mean_diff = (obs - last_mean)*(obs - self.obs_mean) 
+        self.obs_var = torch.clamp(mean_diff/self.steps, min=1e-2)    
+
+    def normalize(self, obs) -> torch.tensor:
+        return (obs - self.obs_mean) / self.obs_var
+
+    def preprocess(self, obs) -> torch.tensor:
+        #TODO: add different means of pre-processing
+        self.compute_normalization(obs)
+        if self.obs_mean is not None and self.obs_var is not None:
+            return self.normalize(obs)
+        return obs
 
     def __call__(self, timestep):
         obs = timestep.observation
