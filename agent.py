@@ -58,13 +58,14 @@ class Agent:
 
         if self.has_value_function:
             self.value_history.append(value)
-        if self.discrete: 
-            self.action_score_history.append(action)
-        if not self.discrete: #TODO: make this more efficient BY OUTPUTTING NORMAL DIST INSTEAD
-            action_score = normal.log_prob(action) #use constructed normal distribution to generate log prob
-            self.action_score_history.append(action_score) 
-            #print("ACTION: ", action)
-            return action 
+        if not hasattr(self, 'mpc'):
+            if self.discrete: 
+                self.action_score_history.append(action)
+            if not self.discrete: #TODO: make this more efficient BY OUTPUTTING NORMAL DIST INSTEAD
+                action_score = normal.log_prob(action) #use constructed normal distribution to generate log prob
+                self.action_score_history.append(action_score) 
+                #print("ACTION: ", action)
+        return action 
 
     def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
         action_scores = None
@@ -87,11 +88,13 @@ class Agent:
             #print("Action mu: %s Sigma^2: %s" % (action_mu, action_sigma))
             action_covariance = torch.eye(self.action_space, 
                     device = self.device) * action_sigma.to(self.device) #create SPHERICAL covariance
+            action_covariance += torch.eye(self.action_space, device=self.device) * 1e-4
             action_mu = action_mu.to(self.device) #TODO: this should naturally happen via the MLP
             normal = torch.distributions.MultivariateNormal(action_mu, action_covariance)
             try:
                 action = normal.sample()
-            except RunTimeError: #resample
+            except: #resample
+                print("Covariance : %s Mu: %s Normal: %s" % (action_covariance, action_mu, normal))
                 action = normal.sample() 
             #action_score = normal.log_prob(action)
             #print("ACTION: ", action)
@@ -114,6 +117,15 @@ class Agent:
         self.reward_history = []
         self.terminal_history = []
         self.value_history = []
+
+    def sample_random_action(self, obs) -> np.ndarray:
+        if self.discrete:
+            one_hots = np.eye(self.action_space)
+            return one_hots[np.random.choice(self.action_space, 1)]
+        else:
+            mins = self.action_constraints[0]
+            maxs = self.action_constraints[1]
+            return np.random.uniform(mins, maxs, (1, self.action_space))
 
 
     #def construct_experience(self, s_k, a_k, r_k, s_K, terminal, **kwargs):
@@ -150,8 +162,9 @@ class Agent:
             obs = np.array(obs)
         if target_size is not None:
             obs.resize(target_size)
-        if normalize_pizels == True:
+        if normalize_pixels == True:
             obs /= 256
+
     @abc.abstractmethod
     def preprocess(self, obs) -> np.ndarray:
         #TODO: add different means of pre-processing
@@ -168,17 +181,94 @@ class Agent:
 
 class RandomAgent(Agent):
     def step(self, obs, *args, **kwargs) -> np.ndarray:
-        if self.discrete_actions:
-            one_hots = np.eye(self.action_space)
-            return one_hots[np.random.choice(self.action_space, 1)]
-        else:
-            mins = self.action_constraints[0]
-            maxs = self.action_constraints[1]
-            return np.random.uniform(mins, maxs, (1, self.action_space))
+        return self.sample_random_action(obs)
 
 #raise Exception("Implement this, recreate their MPC paper")
 class MPCAgent(Agent): 
+    def __init__(self, horizon = 50, k_shoots = 1, *args, **kwargs): 
+        super().__init__(*args, **kwargs)
+        self.horizon = horizon
+        self.k_shoots = k_shoots
+        self.mpc = True
+
+    def shoot(self, st) -> ([], [], []):
+        states = []
+        actions = []
+        rewards = []
+        st = st #wow
+        for t in range(self.horizon): 
+            at = self.sample_random_action(st)
+            rt = self.reward(st, at)
+            states.append(st)
+            actions.append(at)
+            if rt is None:
+                rt = 0.0
+            rewards.append(rt)
+            st = self.predict_state(st, at)
+        return states, actions, rewards
+
+    @abc.abstractmethod
+    def predict_state(self, st, at, *args, **kwargs) -> np.ndarray:
+        '''Predict the next state based on (st, at) and additional arguments.'''
+        pass
+
+    @abc.abstractmethod
+    def reward(self, st, at, *args, **kwargs):
+        '''Compute reward function based on (st, at) and additional arguments
+        Left entirely abstract because I'm confused.'''
+        pass
+
+class NeuralMPCAgent(MPCAgent):
     pass
+
+class DMEnvMPCAgent(MPCAgent):
+    '''The EnvironmentMPCAgent performs MPC using the observation and 
+    reward signals from an environment it interacts with to guide its
+    control.'''
+    def __init__(self, env, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.env = env
+        self.state = None
+
+    
+    def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
+        traj = ()
+        max_r = -float('inf')
+        for k in range(self.k_shoots):
+            states, actions, rewards = self.shoot(obs)
+            if sum(rewards) > max_r:
+                max_r = sum(rewards)
+                traj = (states, actions, rewards)
+        states, actions, rewards = traj
+        #print("ACTIONS: ", actions[0])
+        return actions[0], None, None #TODO: ACTION SCORES TOO?!
+
+    def predict_state(self, st, at, *args, **kwargs) -> np.ndarray:    
+        self.set_state(st)
+        timestep = self.env.step(at)
+        return timestep.observation
+
+    def reward(self, st, at, *args, **kwargs):
+        self.set_state(st)
+        timestep = self.env.step(at)
+        return timestep.reward
+
+    def set_state(self, st):
+        assert(self.state is not None)
+        self.env.physics.set_state(self.state)
+        #st = self.transform_observation(st)
+        #self.env.physics.set_state(st)
+    
+    def __call__(self, timestep):
+        self.state = self.env.physics.get_state()
+        obs = timestep.observation
+        action = self.step(obs)
+        if self.discrete: #TODO: This is currently only compatible with action_space = 1
+            action_ind = max(range(len(action)), key=action.__getitem__) 
+            action = [-1, 1][action_ind] 
+        else: #continuous action space, currently mu + sigma
+            pass            
+        return action
 
 class TFAgent(Agent):
     def __init__(self):

@@ -342,7 +342,7 @@ class PyTorchACTrainer(PyTorchTrainer):
                 #raise Exception("Entropy + Value Loss Coefficients!")
 
 
-            #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
             optimizer.step()
@@ -507,7 +507,7 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                 #raise Exception("Entropy + Value Loss Coefficients!")
 
             print("LOSS: ", loss)
-            #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
             optimizer.step()
