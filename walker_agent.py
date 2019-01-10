@@ -11,6 +11,9 @@ from trainer import *
 from dm_control import suite
 from dm_control import viewer
 
+
+import matplotlib.pyplot as plt
+
 import threading
 
 VIEWING = False
@@ -95,7 +98,7 @@ VIEW_END = True
 
 EPS = 0.08
 EPS_MIN = 0.01
-EPS_DECAY = 1e-8
+EPS_DECAY = 1e-6
 
 mlp_outdim = 100 #based on state size (approximation)
 mlp_hdims = [200]
@@ -107,6 +110,7 @@ mlp_activations = ['relu', None] #+1 for outdim activation, remember extra actio
 mlp_initializer = None
 DISCRETE_AGENT = False
 FULL_EPISODE = True
+GAMMA = 0.96
 
 MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
 SMALL_TRAJECTORY_LENGTH = 100
@@ -116,8 +120,10 @@ ADAM_BETAS = (0.9, 0.999)
 entropy_coeff = 0.0
 value_coeff = 0.1
 
-TRAINER_TYPE = 'AC'
-#TRAINER_TYPE = 'PPO'
+#TRAINER_TYPE = 'AC'
+TRAINER_TYPE = 'PPO'
+
+DISPLAY_HISTORY = True
 
 if FULL_EPISODE:
     max_traj_len = MAXIMUM_TRAJECTORY_LENGTH
@@ -129,7 +135,6 @@ else:
     replay_iterations = 30 #approximate based on episode length 
 
 
-GAMMA = 0.96
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
@@ -238,6 +243,37 @@ if __name__ == '__main__':
             print("Agent Net Reward: ", agent.net_reward_history[i])
             print("Agent Net Loss: ", agent.net_loss_history[i])
             #i += EPISODES_BEFORE_TRAINING 
+            if DISPLAY_HISTORY is True:
+                plt.figure(1)
+                plt.subplot(2, 1, 1)
+                plt.title("Algorithm:%s \n\
+                        Activations: %s  Hdims: %s Outdims: %s\n\
+                        lr=%s betas=%s eps=%s min_eps=%s eps_decay=%s\n\
+                        gamma = %s"\
+                        %(TRAINER_TYPE, mlp_activations,
+                        mlp_hdims, mlp_outdim, 
+                        lr, ADAM_BETAS, EPS, EPS_MIN, EPS_DECAY, GAMMA))
+                #graph.set_xdata(range(len(total_reward_history)))
+                #graph.set_ydata([r for r in total_reward_history])
+                #plt.scatter(range(len(total_reward_history)), [r.numpy()[0] for r in total_reward_history])
+                plt.xlim(0, len(agent.net_reward_history))
+                plt.ylim(0, max(agent.net_reward_history)+1)
+                plt.ylabel("Net \n Reward")
+                plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.0)
+                plt.subplot(2, 1, 2)
+                plt.ylabel("Net \n Loss")
+                plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.0)
+                #plt.figure(2)
+                #plt.clf()
+                #plt.subplot(2, 1, 1)
+                #plt.ylabel("Action Loss")
+                #plt.scatter(range(len(action_loss_history)), [l.numpy()[0] for l in action_loss_history], s=0.1)
+                #plt.subplot(2, 1, 2)
+                #plt.ylabel("Value Loss")
+                #plt.xlabel("Time")
+                #plt.scatter(range(len(value_loss_history)), [l.numpy()[0] for l in value_loss_history], s=0.1)
+                #plt.draw()
+                plt.pause(0.01)
             i += 1
     #TODO: COMPARE VS RANDOM AGENT!!!
 
