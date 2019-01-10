@@ -94,7 +94,6 @@ class Agent:
             try:
                 action = normal.sample()
             except: #resample
-                print("Covariance : %s Mu: %s Normal: %s" % (action_covariance, action_mu, normal))
                 action = normal.sample() 
             #action_score = normal.log_prob(action)
             #print("ACTION: ", action)
@@ -190,6 +189,18 @@ class MPCAgent(Agent):
         self.horizon = horizon
         self.k_shoots = k_shoots
         self.mpc = True
+    
+    def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
+        traj = ()
+        max_r = -float('inf')
+        for k in range(self.k_shoots):
+            states, actions, rewards = self.shoot(obs)
+            if sum(rewards) > max_r:
+                max_r = sum(rewards)
+                traj = (states, actions, rewards)
+        states, actions, rewards = traj
+        #print("ACTIONS: ", actions[0])
+        return actions[0], None, None #TODO: ACTION SCORES TOO?!
 
     def shoot(self, st) -> ([], [], []):
         states = []
@@ -218,8 +229,6 @@ class MPCAgent(Agent):
         Left entirely abstract because I'm confused.'''
         pass
 
-class NeuralMPCAgent(MPCAgent):
-    pass
 
 class DMEnvMPCAgent(MPCAgent):
     '''The EnvironmentMPCAgent performs MPC using the observation and 
@@ -229,19 +238,6 @@ class DMEnvMPCAgent(MPCAgent):
         super().__init__(*args, **kwargs)
         self.env = env
         self.state = None
-
-    
-    def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
-        traj = ()
-        max_r = -float('inf')
-        for k in range(self.k_shoots):
-            states, actions, rewards = self.shoot(obs)
-            if sum(rewards) > max_r:
-                max_r = sum(rewards)
-                traj = (states, actions, rewards)
-        states, actions, rewards = traj
-        #print("ACTIONS: ", actions[0])
-        return actions[0], None, None #TODO: ACTION SCORES TOO?!
 
     def predict_state(self, st, at, *args, **kwargs) -> np.ndarray:    
         self.set_state(st)
@@ -275,6 +271,8 @@ class TFAgent(Agent):
     ##NOTE:We simply feed the numpy transform_observation into feed_dict
     ##for TFAgent
         pass
+
+
 
 
 class PyTorchAgent(Agent):
@@ -338,6 +336,43 @@ class PyTorchAgent(Agent):
         else: #continuous action space, currently mu + sigma
             pass            
         return action
+
+
+
+class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.forward_history = []
+    
+    def predict_state(self, st, at, *args, **kwargs) -> np.ndarray:
+        '''Predict the next state based on (st, at) and additional arguments.
+        Makes use of PyTorch MLP, taking in st, at and computing f(st, at) where
+        st+1 = st + f(st, at)
+        '''
+        inp = torch.cat((st, at), 0) 
+        forward = self.module(inp)
+        self.forward_history.append(forward)
+        st_1 = st + forward
+        return st_1
+
+    def reset_histories(self):
+        super().reset_histories()
+        self.forward_history = []
+
+    def sample_random_action(self, obs) -> np.ndarray:
+        a = super().sample_random_action(obs)
+        return torch.tensor(a, device = self.device).float().squeeze(0)
+
+    def __call__(self, timestep):
+        obs = timestep.observation
+        action = self.step(obs)
+        if self.discrete: #TODO: This is currently only compatible with action_space = 1
+            action_ind = max(range(len(action)), key=action.__getitem__) 
+            action = [-1, 1][action_ind] 
+        else: #continuous action space, currently mu + sigma
+            pass            
+        return action
+
 
 ##  Tensorflow Helper functions/classes
 
