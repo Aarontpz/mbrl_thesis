@@ -58,7 +58,7 @@ class Agent:
 
         if self.has_value_function:
             self.value_history.append(value)
-        if not hasattr(self, 'mpc'):
+        if not (hasattr(self, 'mpc') or hasattr(self, 'random')):
             if self.discrete: 
                 self.action_score_history.append(action)
             if not self.discrete: #TODO: make this more efficient BY OUTPUTTING NORMAL DIST INSTEAD
@@ -117,7 +117,7 @@ class Agent:
         self.terminal_history = []
         self.value_history = []
 
-    def sample_random_action(self, obs) -> np.ndarray:
+    def sample_action(self, obs) -> np.ndarray:
         if self.discrete:
             one_hots = np.eye(self.action_space)
             return one_hots[np.random.choice(self.action_space, 1)]
@@ -163,6 +163,7 @@ class Agent:
             obs.resize(target_size)
         if normalize_pixels == True:
             obs /= 256
+        return obs
 
     @abc.abstractmethod
     def preprocess(self, obs) -> np.ndarray:
@@ -179,8 +180,26 @@ class Agent:
 
 
 class RandomAgent(Agent):
-    def step(self, obs, *args, **kwargs) -> np.ndarray:
-        return self.sample_random_action(obs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.random = True
+    
+    def step(self, obs):
+        obs = self.transform_observation(obs)
+        return super(RandomAgent, self).step(obs)
+
+    def evaluate(self, obs, *args, **kwargs):    
+        return self.sample_action(obs), None, None
+
+    def __call__(self, timestep):
+        obs = timestep.observation
+        action = self.step(obs)
+        if self.discrete: #TODO: This is currently only compatible with action_space = 1
+            action_ind = max(range(len(action)), key=action.__getitem__) 
+            action = [-1, 1][action_ind] 
+        else: #continuous action space, currently mu + sigma
+            pass            
+        return action
 
 #raise Exception("Implement this, recreate their MPC paper")
 class MPCAgent(Agent): 
@@ -191,6 +210,7 @@ class MPCAgent(Agent):
         self.mpc = True
     
     def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
+        #print("MPC EVALUATE")
         traj = ()
         max_r = -float('inf')
         for k in range(self.k_shoots):
@@ -208,7 +228,7 @@ class MPCAgent(Agent):
         rewards = []
         st = st #wow
         for t in range(self.horizon): 
-            at = self.sample_random_action(st)
+            at = self.sample_action(st)
             rt = self.reward(st, at)
             states.append(st)
             actions.append(at)
@@ -254,7 +274,7 @@ class DMEnvMPCAgent(MPCAgent):
         self.env.physics.set_state(self.state)
         #st = self.transform_observation(st)
         #self.env.physics.set_state(st)
-    
+
     def __call__(self, timestep):
         self.state = self.env.physics.get_state()
         obs = timestep.observation
@@ -266,11 +286,6 @@ class DMEnvMPCAgent(MPCAgent):
             pass            
         return action
 
-class TFAgent(Agent):
-    def __init__(self):
-    ##NOTE:We simply feed the numpy transform_observation into feed_dict
-    ##for TFAgent
-        pass
 
 
 
@@ -289,11 +304,13 @@ class PyTorchAgent(Agent):
         
         Outputs as np.ndarray because that's what the environment
         needs'''
+        #print("PyTorch Step")
         obs = self.transform_observation(obs).to(self.device)
         return super(PyTorchAgent, self).step(obs)
    
     def evaluate(self, obs, *args, **kwargs) -> torch.tensor:
         #online param calculation discussion: https://discuss.pytorch.org/t/normalization-of-input-data-to-qnetwork/14800/2
+        #print("PyTorch Evaluate")
         obs = self.preprocess(obs)
         return super(PyTorchAgent, self).evaluate(obs, *args, **kwargs)
 
@@ -343,15 +360,41 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.forward_history = []
+        self.shoots = []
+    
+    def shoot(self, st) -> ([], [], []):
+        states = []
+        actions = []
+        rewards = []
+        #st = st #wow
+        for t in range(self.horizon): 
+            at = self.sample_action(st)
+            rt = self.reward(st, at)
+            states.append(st)
+            actions.append(at)
+            if rt is None:
+                rt = 0.0
+            rewards.append(rt)
+            st = self.predict_state(st, at)
+        self.shoots.append(self.forward_history) 
+        self.forward_hitory = []
+        #print("Shoots: ", self.shoots)
+        return states, actions, rewards
     
     def predict_state(self, st, at, *args, **kwargs) -> np.ndarray:
         '''Predict the next state based on (st, at) and additional arguments.
         Makes use of PyTorch MLP, taking in st, at and computing f(st, at) where
         st+1 = st + f(st, at)
         '''
+        #st = st.view(st.size(-1), -1)
+        #st = st.view(-1, st.numel())
+        #st = torch.t(st)
+        #st = st.squeeze(0)
+        #print("St: %s at: %s" % (st, at))
         inp = torch.cat((st, at), 0) 
+        #inp = torch.cat( at), 0) 
         forward = self.module(inp)
-        self.forward_history.append(forward)
+        self.forward_history.append(forward.detach()) 
         st_1 = st + forward
         return st_1
 
@@ -359,8 +402,8 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
         super().reset_histories()
         self.forward_history = []
 
-    def sample_random_action(self, obs) -> np.ndarray:
-        a = super().sample_random_action(obs)
+    def sample_action(self, obs) -> np.ndarray:
+        a = super().sample_action(obs)
         return torch.tensor(a, device = self.device).float().squeeze(0)
 
     def __call__(self, timestep):
@@ -374,83 +417,6 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
         return action
 
 
-##  Tensorflow Helper functions/classes
-
-#NOTE using https://github.com/affinelayer/pix2pix-tensorflow/blob/master/pix2pix.py as reference
-
-def lrelu(inp, name=None): 
-    #return tf.nn.relu(inp, name=name)  
-    return tf.maximum(inp, 0.2 * inp) #LEAKY RELU for encoder portion 
-
-def relu(inp, name=None):
-    return tf.nn.relu(inp, name=name)
-
-def sigmoid(inp, name=None):
-    return tf.nn.sigmoid(inp, name=name)
-
-def droupout(inp, keep_prob, name=None):
-    return tf.nn.dropout(inp, keep_prob, name=name)
-
-def batch_norm(batch_input, is_training):
-    return tf.layers.batch_normalization(batch_input, axis=3, epsilon=1e-5, 
-            momentum=0.1, training=is_training, 
-            gamma_initializer=tf.random_normal_initializer(1.0, 0.02), name=name) #DIRECTLY from git repo
-
-def generate_weights_glorot(shape, name=None):
-    if name is None:
-        name = 'W'
-    return tf.get_variable(name, shape, initializer=tf.contrib.layers.xavier_initializer()) 
-
-def generate_bias_constant(shape, c:float, name=None):
-    if name is None:
-        name = 'B'
-    return tf.get_variable(name, l, initializer=tf.constant_initializer(c)) 
-
-def linear(batch_input, W, B):
-    return tf.add(tf.matmul(batch_input, W), B)
-
-
-
-def create_mlp(self, batch_inp, indim, outdim, hdim : [] = [], activations : [] = [], initializer = None, batchnorm = False, bias_const = 0.1):
-    assert(len(activations) == len(hdim) + 1)
-    layers = []
-    prev_size = indim
-    inp = batch_inp
-    for i in range(len(hdim)):
-        with tf.variable_scope("linear_%s"%(i)):    
-            w_shape = [None, inp.get_shape()[1], hdim[i]]
-            b_shape = [None, hdim[i]]
-            W = generate_weights_glorot(w_shape, "W%s"%(i))
-            B = generate_bias_constant(b_shape, bias_const, "B%s"%(i))
-            l = linear(inp, W, B)
-            layers.append(l)
-            if activations[i] is not None:
-                if activations[i] == 'relu':
-                    layers.append(relu(layers[-1], "relu_%s"%(i)))
-                elif activations[i] == 'sig':
-                    layers.append(sigmoid(layers[-1], "sig_%s"%(i)))
-            if batchnorm:
-                layers.append(batch_norm(layers[-1], "norm_%s"%(i)))
-            inp = layers[-1]
-    with tf.variable_scope("linear_%s"%(i+1)):
-        i = i + 1
-        w_shape = [None, inp.get_shape()[1], outdim]
-        b_shape = [None, outdim]
-        W = generate_weights_glorot(w_shape, "W%s"%(i))
-        B = generate_bias_constant(b_shape, bias_const, "B%s"%(i))
-        l = linear(inp, W, B)
-        layers.append(l)
-        if activations[i] is not None:
-            if activations[i] == 'relu':
-                layers.append(relu(layers[-1], "relu_%s"%(i)))
-            elif activations[i] == 'sig':
-                layers.append(sigmoid(layers[-1], "sig_%s"%(i)))
-    return layers[-1]
-
-
-
-
-##
 
 ##  Pytorch helper functions /classes
 
@@ -491,7 +457,6 @@ class PyTorchMLP(torch.nn.Module):
             layers.append(tf.nn.BatchNorm1d(outdim))
 
         self.layers = torch.nn.ModuleList(layers)
-        #raise Exception("BITCH USE TENSORFLOW FIRST!")
 
 
     def forward(self, x):
@@ -614,19 +579,89 @@ def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0, action_constrai
                 raise Exception("Figure this out?")
 
     return PyTorchEpsGreedyModule(mlp_base, eps, eps_decay, eps_min, action_constraints, *args, **kwargs)
+
+
+
+##  Tensorflow Helper functions/classes
+
+#NOTE using https://github.com/affinelayer/pix2pix-tensorflow/blob/master/pix2pix.py as reference
+
+class TFAgent(Agent):
+    def __init__(self):
+    ##NOTE:We simply feed the numpy transform_observation into feed_dict
+    ##for TFAgent
+        pass
+
+def lrelu(inp, name=None): 
+    #return tf.nn.relu(inp, name=name)  
+    return tf.maximum(inp, 0.2 * inp) #LEAKY RELU for encoder portion 
+
+def relu(inp, name=None):
+    return tf.nn.relu(inp, name=name)
+
+def sigmoid(inp, name=None):
+    return tf.nn.sigmoid(inp, name=name)
+
+def droupout(inp, keep_prob, name=None):
+    return tf.nn.dropout(inp, keep_prob, name=name)
+
+def batch_norm(batch_input, is_training):
+    return tf.layers.batch_normalization(batch_input, axis=3, epsilon=1e-5, 
+            momentum=0.1, training=is_training, 
+            gamma_initializer=tf.random_normal_initializer(1.0, 0.02), name=name) #DIRECTLY from git repo
+
+def generate_weights_glorot(shape, name=None):
+    if name is None:
+        name = 'W'
+    return tf.get_variable(name, shape, initializer=tf.contrib.layers.xavier_initializer()) 
+
+def generate_bias_constant(shape, c:float, name=None):
+    if name is None:
+        name = 'B'
+    return tf.get_variable(name, l, initializer=tf.constant_initializer(c)) 
+
+def linear(batch_input, W, B):
+    return tf.add(tf.matmul(batch_input, W), B)
+
+
+
+def create_mlp(self, batch_inp, indim, outdim, hdim : [] = [], activations : [] = [], initializer = None, batchnorm = False, bias_const = 0.1):
+    assert(len(activations) == len(hdim) + 1)
+    layers = []
+    prev_size = indim
+    inp = batch_inp
+    for i in range(len(hdim)):
+        with tf.variable_scope("linear_%s"%(i)):    
+            w_shape = [None, inp.get_shape()[1], hdim[i]]
+            b_shape = [None, hdim[i]]
+            W = generate_weights_glorot(w_shape, "W%s"%(i))
+            B = generate_bias_constant(b_shape, bias_const, "B%s"%(i))
+            l = linear(inp, W, B)
+            layers.append(l)
+            if activations[i] is not None:
+                if activations[i] == 'relu':
+                    layers.append(relu(layers[-1], "relu_%s"%(i)))
+                elif activations[i] == 'sig':
+                    layers.append(sigmoid(layers[-1], "sig_%s"%(i)))
+            if batchnorm:
+                layers.append(batch_norm(layers[-1], "norm_%s"%(i)))
+            inp = layers[-1]
+    with tf.variable_scope("linear_%s"%(i+1)):
+        i = i + 1
+        w_shape = [None, inp.get_shape()[1], outdim]
+        b_shape = [None, outdim]
+        W = generate_weights_glorot(w_shape, "W%s"%(i))
+        B = generate_bias_constant(b_shape, bias_const, "B%s"%(i))
+        l = linear(inp, W, B)
+        layers.append(l)
+        if activations[i] is not None:
+            if activations[i] == 'relu':
+                layers.append(relu(layers[-1], "relu_%s"%(i)))
+            elif activations[i] == 'sig':
+                layers.append(sigmoid(layers[-1], "sig_%s"%(i)))
+    return layers[-1]
+
+
+
+
 ##
-
-
-class MPCAgent(Agent):
-    '''Implements MPC for the MuJoCo environment, as specified
-    in https://homes.cs.washington.edu/~todorov/papers/TassaIROS12.pdf
-    
-    This DOES NOT imply that this agent relies on a model, however. 
-    The paper itself states that, considering contact friction on
-    multiple joints, fully-modelled ("smoothly" modelled) systems 
-    are rather untrue to the physical outcome.  
-    ''' #TODO: Verify / question the above statement
-    pass
-
-
-

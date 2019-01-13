@@ -7,6 +7,8 @@ import torch
 import tensorflow as tf
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 import random
 
 class Trainer:
@@ -67,8 +69,9 @@ class Trainer:
 
 
     
-class TFTrainer(Trainer):
-    pass
+
+
+
 
 
 class PyTorchTrainer(Trainer):
@@ -129,15 +132,35 @@ class PyTorchPreTrainer(PyTorchTrainer):
     def training_criteria(self) -> bool:
         return False
 
-class PyTorchNeuralDynamicsTrainer(PyTorchTrainer):
-    def __init__(self, dynamics_mlp, mpc_agent, random_agent, horizon = 50, 
-            rand_sample_rate = 1.0, rand_sample_decay = 0.1, min_rand_sample_rate = 0.5,
+
+#class PyTorchForwardDynamicsTrainer:
+#    def __init__(self, device, mpc_agent, random_agent, optimizer, 
+#            batch_size = 512, 
+#            *args, **kwargs):
+#        self.device = device
+#        self.agent = agent
+#        self.optimizer = optimizer
+#        self.batch_size = batch_size
+#
+#    def step(self):
+#        pass
+
+
+class PyTorchNeuralDynamicsMPCTrainer(PyTorchTrainer):
+    #based on pg 4 (4D) of 1708.02596
+
+    def __init__(self, mpc_agent, random_agent, 
+            batch_size = 512,  
+            #horizon = 50, 
+            rand_sample_rate = 1.0, rand_sample_decay = 0.05, min_rand_sample_rate = 0.5,
             max_steps = 10000, max_iterations = 1000, *args, **kwargs):
-        super(PyTorchNeuralDynamicsTrainer, self).__init__(*args, **kwargs)
-        self.dynamics_mlp = dynamics_mlp
+        super(PyTorchNeuralDynamicsMPCTrainer, self).__init__(*args, **kwargs)
         self.mpc_agent = mpc_agent
         self.random_agent = random_agent
-        self.horizon = horizon
+        self.batch_size = batch_size
+
+        self.horizon = mpc_agent.horizon #right?!
+
         self.rand_sample_rate = rand_sample_rate
         self.rand_sample_decay = rand_sample_decay
         self.min_rand_sample_rate = min_rand_sample_rate
@@ -145,36 +168,61 @@ class PyTorchNeuralDynamicsTrainer(PyTorchTrainer):
         self.max_steps = max_steps
         self.max_iterations = max_iterations
 
-    def dynamic_step_loss(self, states, actions) -> torch.tensor:
-        criterion = torch.nn.L1Loss()
+    def dynamic_step_loss(self, agent, state_history, action_history) -> torch.tensor:
+        '''Takes, as argument, agent generating trajectory, and (st, at) pairs.'''
+        device = self.mpc_agent.device
+        loss = torch.tensor([0.0], requires_grad = True).to(device)
+        criterion = torch.nn.MSELoss()
+        if hasattr(agent, 'shoots'): #agent is MPC
+            #print("Agent was MPC")
+            forward = [shoot[0] for shoot in agent.shoots]
+            predictions = [sum(dynamics) for dynamics in zip(state_history, forward)]
+        else: #RANDOM AGENT?
+            #print([(st, at) for (st, at) in zip(state_history, action_history)])
+            #TODO TODO: PyTorchRandomAgent -> tensors + device
+            action_history = [torch.tensor(a, device = device).float().squeeze(0) for a in action_history] #convert random np array -> tensor
+            state_history = [s.to(device) for s in state_history]
+            predictions = [self.mpc_agent.predict_state(*pair) for pair in zip(state_history, action_history)]
+            #print("Predictions: ", predictions)
+        for i in range(len(state_history)):
+            loss += criterion(state_history[i], predictions[i])    
+        return loss
+        
 
-    def dynamic_horizon_loss(self, states, actions) -> torch.tensor:
+    def dynamic_horizon_loss(self, agent, states, actions) -> torch.tensor:
         '''Evaluates the error of the neural dynamics from some starting
         state to a state in the horizon. USED FOR VALIDATION, NOT TRAINING'''
-        criterion = torch.nn.L1Loss()
+        criterion = torch.nn.MSELoss()
     
     def step(self):
         #raise Exception("Train value function DURING THIS STEP TOO for proper behavioral cloning\
         #?? Investigate!")
+        optimizer = self.opt
         horizon_loss = float('inf')
         avg_step_loss = float('inf')
+
+        loss_history = []
         
         agent = None 
         env = self.env
         step = 0
+
+        DISPLAY_HISTORY = True
         #while (horizon_loss > horizon_validation_thresh and 
         #        avg_step_loss > avg_step_loss_validation_thresh):
         while True: #1708.02596 pg 4: "until a predefined maximum iteration is reached
-            if random.random() < rand_sample_rate: #RANDOM TRAJ
+            print('TRAINING Step: ', step)
+            if random.random() < self.rand_sample_rate: #RANDOM TRAJ
                 self.rand_sample_rate = max(self.rand_sample_rate - self.rand_sample_decay,
                         self.min_rand_sample_rate)
                 agent = self.random_agent
             else: #MPC TRAJ
                 agent = self.mpc_agent
-            
+            print("Agent: ", agent) 
             timestep = env.reset()
             i = 0
             while not timestep.last() and i < self.max_iterations:
+                print("Iteration: ", i)
                 reward = timestep.reward
                 if reward is None:
                     reward = 0.0
@@ -188,16 +236,34 @@ class PyTorchNeuralDynamicsTrainer(PyTorchTrainer):
             agent.terminate_episode() #oops forgot this lmao
             
             ## Training Step
-            loss = self.dynamic_step_loss(agent.state_history, agent.action_history)
-
+            print("TRAINING STEP")
+            loss = self.dynamic_step_loss(agent, agent.state_history, agent.action_history)
+            loss.backward(retain_graph = True)
+            loss_history.append(loss.detach())
+            self.agent.net_loss_history.append(loss.cpu().detach())
+            optimizer.step()
+            
             ## Reset agent histories
             agent.reset_histories()
+            if DISPLAY_HISTORY is True and len(self.mpc_agent.net_reward_history):
+                plt.figure(1)
+                plt.subplot(2, 1, 1)
+                plt.title("MPC Reward and Loss History")
+                plt.xlim(0, len(self.mpc_agent.net_reward_history))
+                plt.ylim(0, max(self.mpc_agent.net_reward_history)+1)
+                plt.ylabel("Net \n Reward")
+                plt.scatter(range(len(self.mpc_agent.net_reward_history)), [r for r in self.mpc_agent.net_reward_history], s=1.0)
+                plt.subplot(2, 1, 2)
+                plt.ylabel("Net \n Loss")
+                plt.scatter(range(len(loss_history)), [r.cpu().numpy()[0] for r in loss_history], s=1.0)
+                plt.pause(0.01)
 
             step += 1
             if step > self.max_steps:
                 break
-
-
+        print("Final Avg Step Loss: ")
+        print("Final Avg Horizon-Loss: ")
+        
 class PyTorchMB_MFPreTrainer(PyTorchPreTrainer):
     def __init__(self, dynamics_mlp, mpc_agent, horizon = 50, *args, **kwargs):
         super(PyTorchMB_MFPreTrainer, self).__init__(*args, **kwargs)
@@ -536,3 +602,11 @@ class PyTorchPPOTrainer(PyTorchTrainer):
         #if module.lstm_size > 0: #TODO: don't do full FF, to save computations? compartmentalize .forward()
         #    module.reset_states() 
         #return net_action_loss, net_value_loss
+
+
+
+
+class TFTrainer(Trainer):
+    pass
+
+
