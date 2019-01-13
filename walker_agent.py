@@ -151,8 +151,8 @@ if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
     #raise Exception("It is time...for...minibatches (vectorized) training. I think. INVESTIGATE?!")
-    env = suite.load(domain_name = 'walker', task_name = 'walk')  
-    tmp_env = suite.load(domain_name = 'walker', task_name = 'walk')  
+    env = suite.load(domain_name = 'walker', task_name = 'stand')  
+    tmp_env = suite.load(domain_name = 'walker', task_name = 'stand')  
     action_space = env.action_spec()
     obs_space = env.observation_spec()
 
@@ -184,7 +184,7 @@ if __name__ == '__main__':
         #        action_constraints = action_constraints, has_value_function = False)
         
     
-        agent = PyTorchMPCWalkerAgent(30, 30,  #horizon, k_shoots
+        agent = PyTorchMPCWalkerAgent(8, 20, 15,  #num_processes, #horizon, k_shoots
                 device, 
                 [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
                 action_constraints = action_constraints, has_value_function = False)
@@ -195,7 +195,7 @@ if __name__ == '__main__':
         ADAM_BETAS = (0.9, 0.999)
         optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
         trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, 
-                512, 1.0, 0.05, 0.5, 10, 100, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
+                512, 1.0, 0.05, 0.5, 20, 100, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
                 device, value_coeff, entropy_coeff,
                 agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                 num_episodes = EPISODES_BEFORE_TRAINING) 

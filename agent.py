@@ -1,11 +1,14 @@
 # Author: Aaron Parisi
 # 11/20/18
+import os
 import random
 import abc
 import numpy as np
 
 import tensorflow as tf
 import torch
+
+import torch.multiprocessing as mp
 
 class Agent:
     __metaclass__ = abc.ABCMeta
@@ -357,31 +360,104 @@ class PyTorchAgent(Agent):
 
 
 class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, num_processes = 4, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.forward_history = []
         self.shoots = []
+        self.num_processes = num_processes
     
+    @property
+    def module(self):
+        return self._module
+
+    @module.setter
+    def module(self, m):
+        #if self.num_processes > 1:
+        #    self._module = m.cpu()
+        #else:
+        self._module = m
+
+    def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
+        if self.num_processes == 1: #single-process
+            return super().evaluate(obs, *args, **kwargs)
+        else:
+            self.module = self.module.cpu()
+            self.module.share_memory() 
+            traj = ()
+            max_r = -float('inf')
+    
+            queue = mp.Queue()
+            event = mp.Event()
+            processes = []
+            for k in range(self.k_shoots):
+            #for k in range(self.num_processes):
+                obs = obs.cpu()
+                p = mp.Process(target=self.shoot_async, args=(obs,queue,event))
+                p.start()
+                processes.append(p)
+                #states, actions, rewards = self.shoot(obs)
+            for k in range(self.k_shoots):
+                results = queue.get()
+                rewards = results['rewards']
+                actions = results['actions']
+                forward = results['forward'] #TODO: incorporate into self.shoots for training!
+                #print("TRAJ: ", traj)
+                #states, actions, rewards = traj
+                if sum(rewards) > max_r:
+                    max_r = sum(rewards)
+                    traj = (forward, actions, rewards)
+            states, actions, forward = traj
+            event.set()
+            for p in processes:
+                p.join()
+            #print("ACTIONS: ", actions[0])
+            #TODO: set self.module to cuda again?? or is this a permanent thing?
+            return actions[0], None, None #TODO: ACTION SCORES TOO?!
+
     def shoot(self, st) -> ([], [], []):
         states = []
         actions = []
         rewards = []
-        #st = st #wow
         for t in range(self.horizon): 
-            at = self.sample_action(st)
+            at = self.sample_action(st, gpu = True)
             rt = self.reward(st, at)
             states.append(st)
             actions.append(at)
             if rt is None:
+                #print("NONE REWARD")
                 rt = 0.0
             rewards.append(rt)
             st = self.predict_state(st, at)
         self.shoots.append(self.forward_history) 
-        self.forward_hitory = []
+        self.forward_history = []
         #print("Shoots: ", self.shoots)
         return states, actions, rewards
-    
-    def predict_state(self, st, at, *args, **kwargs) -> np.ndarray:
+
+    def shoot_async(self, st, queue, event) -> None:
+        states = []
+        actions = []
+        rewards = []
+        
+        forward_history = []
+        for t in range(self.horizon): 
+            at = self.sample_action(st, gpu = False)
+            rt = self.reward(st, at)
+            states.append(st)
+            actions.append(at)
+            if rt is None:
+                #print("NONE REWARD")
+                rt = 0.0
+            rewards.append(rt)
+            st, forward = self.predict_state(st, at, save = False)
+            forward_history.append(forward)
+        results = {'rewards':rewards, 'actions':actions,
+            'forward':forward_history}
+        #print("Results: ", results)
+        queue.put(results)
+        #print("Process %s waiting on event!" % (os.getpid()))
+        event.wait()
+        
+    def predict_state(self, st, at, save = True, *args, **kwargs) -> np.ndarray:
         '''Predict the next state based on (st, at) and additional arguments.
         Makes use of PyTorch MLP, taking in st, at and computing f(st, at) where
         st+1 = st + f(st, at)
@@ -394,17 +470,29 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
         inp = torch.cat((st, at), 0) 
         #inp = torch.cat( at), 0) 
         forward = self.module(inp)
-        self.forward_history.append(forward.detach()) 
         st_1 = st + forward
-        return st_1
+        if save:
+            self.forward_history.append(forward.detach()) 
+            return st_1
+        else:
+            return st_1, forward
+    
+    def reward(self, st, at, *args, **kwargs):
+        #return timestep.reward
+        raise Exception("Implement this / use the simulation to get around this? \
+        Otherwise, MPC agent simply selects the 1st action of the 1st trajectory\
+        without any real reason")
 
     def reset_histories(self):
         super().reset_histories()
         self.forward_history = []
 
-    def sample_action(self, obs) -> np.ndarray:
+    def sample_action(self, obs, gpu = True) -> np.ndarray:
         a = super().sample_action(obs)
-        return torch.tensor(a, device = self.device).float().squeeze(0)
+        if gpu:
+            return torch.tensor(a, device = self.device).float().squeeze(0)
+        else:
+            return torch.tensor(a).float().squeeze(0)
 
     def __call__(self, timestep):
         obs = timestep.observation
