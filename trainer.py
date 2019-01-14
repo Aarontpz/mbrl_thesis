@@ -222,7 +222,7 @@ class PyTorchNeuralDynamicsMPCTrainer(PyTorchTrainer):
             timestep = env.reset()
             i = 0
             while not timestep.last() and i < self.max_iterations:
-                print("Iteration: ", i)
+                #print("Iteration: ", i)
                 reward = timestep.reward
                 if reward is None:
                     reward = 0.0
@@ -230,6 +230,7 @@ class PyTorchNeuralDynamicsMPCTrainer(PyTorchTrainer):
                 observation = timestep.observation
                 action = agent(timestep)
                 agent.store_reward(reward)
+                #print("Action: ", type(action))
                 timestep = env.step(action)
                 #print("Reward: %s" % (timestep.reward))
                 i += 1

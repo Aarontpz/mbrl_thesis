@@ -51,10 +51,10 @@ class PyTorchMPCWalkerAgent(PyTorchMPCAgent):
         vel = obs['velocity']
         height = np.asarray([obs['height'],])
         state = np.concatenate((orientation, vel, height))
-        return Variable(torch.tensor(state).float(), requires_grad = True)
+        return Variable(torch.tensor(state).float(), requires_grad = False)
 
     def reward(self, st, at, *args, **kwargs):
-        pass
+        return env.physics.horizontal_velocity() #TODO: this is only valid for walk / run tasks
 
 class RandomWalkerAgent(RandomAgent):
     def transform_observation(self, obs) -> Variable:
@@ -131,7 +131,7 @@ entropy_coeff = 0.0
 value_coeff = 0.1
 
 TRAINER_TYPE = 'AC'
-#TRAINER_TYPE = 'PPO'
+TRAINER_TYPE = 'PPO'
 
 DISPLAY_HISTORY = True
 
@@ -184,10 +184,11 @@ if __name__ == '__main__':
         #        action_constraints = action_constraints, has_value_function = False)
         
     
-        agent = PyTorchMPCWalkerAgent(8, 20, 15,  #num_processes, #horizon, k_shoots
+        agent = PyTorchMPCWalkerAgent(1, 40, 20,  #num_processes, #horizon, k_shoots
                 device, 
                 [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
                 action_constraints = action_constraints, has_value_function = False)
+        print("This reward is only valid for walk / run tasks!")
         agent.module = PyTorchMLP(device, obs_size + action_size, obs_size, 
                 hdims = [500, 500], activations = ['relu', 'relu', None], 
                 initializer = mlp_initializer).to(device)    
@@ -195,7 +196,7 @@ if __name__ == '__main__':
         ADAM_BETAS = (0.9, 0.999)
         optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
         trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, 
-                512, 1.0, 0.05, 0.5, 20, 100, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
+                512, 1.0, 0.05, 0.5, 10, 100, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
                 device, value_coeff, entropy_coeff,
                 agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                 num_episodes = EPISODES_BEFORE_TRAINING) 

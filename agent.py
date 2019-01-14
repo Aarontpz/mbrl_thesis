@@ -366,32 +366,68 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
         self.shoots = []
         self.num_processes = num_processes
     
-    @property
-    def module(self):
-        return self._module
+    #@property
+    #def module(self):
+    #    return self._module
 
-    @module.setter
-    def module(self, m):
-        #if self.num_processes > 1:
-        #    self._module = m.cpu()
-        #else:
-        self._module = m
+    #@module.setter
+    #def module(self, m):
+    #    #if self.num_processes > 1:
+    #    #    self._module = m.cpu()
+    #    #else:
+    #    self._module = m
 
     def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
         if self.num_processes == 1: #single-process
             return super().evaluate(obs, *args, **kwargs)
         else:
-            self.module = self.module.cpu()
-            self.module.share_memory() 
+            #try:
+            #    mp.set_start_method('spawn')
+            #except RuntimeError:
+            #    pass
+            #self.module = self.module.cpu()
+            #self.module.share_memory() 
+
+
             traj = ()
             max_r = -float('inf')
-    
+   
             queue = mp.Queue()
             event = mp.Event()
             processes = []
+            
+            #obs = obs.cpu()
+            #
+            #pool = mp.Pool(self.num_processes)
+            #results = pool.map(self.shoot, ((obs,False)))
+            #print("Results: ", results)
+            #for k in range(self.k_shoots):
+            #    #obs = obs.cpu()
+            ##    states, actions, rewards = pool.map(self.shoot, (obs,))
+            #    if sum(rewards) > max_r:
+            #        max_r = sum(rewards)
+            #        traj = (states, actions, rewards)
+            #states, actions, rewards = traj
+            #pool.close()
+            #pool.join()
+            ##print("ACTIONS: ", actions[0])
+            #return actions[0], None, None #TODO: ACTION SCORES TOO?!
+
+            #for k in range(self.k_shoots):
+            #    results = queue.get()
+            #    rewards = results['rewards']
+            #    actions = results['actions']
+            #    forward = results['forward'] #TODO: incorporate into self.shoots for training!
+            #    #print("TRAJ: ", traj)
+            #    #states, actions, rewards = traj
+            #    if sum(rewards) > max_r:
+            #        max_r = sum(rewards)
+            #        traj = (forward, actions, rewards)
+            
+            obs = obs.cpu()
+            obs.share_memory_()
             for k in range(self.k_shoots):
             #for k in range(self.num_processes):
-                obs = obs.cpu()
                 p = mp.Process(target=self.shoot_async, args=(obs,queue,event))
                 p.start()
                 processes.append(p)
@@ -414,12 +450,12 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
             #TODO: set self.module to cuda again?? or is this a permanent thing?
             return actions[0], None, None #TODO: ACTION SCORES TOO?!
 
-    def shoot(self, st) -> ([], [], []):
+    def shoot(self, st, gpu = True) -> ([], [], []):
         states = []
         actions = []
         rewards = []
         for t in range(self.horizon): 
-            at = self.sample_action(st, gpu = True)
+            at = self.sample_action(st, gpu = gpu)
             rt = self.reward(st, at)
             states.append(st)
             actions.append(at)
@@ -477,12 +513,6 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
         else:
             return st_1, forward
     
-    def reward(self, st, at, *args, **kwargs):
-        #return timestep.reward
-        raise Exception("Implement this / use the simulation to get around this? \
-        Otherwise, MPC agent simply selects the 1st action of the 1st trajectory\
-        without any real reason")
-
     def reset_histories(self):
         super().reset_histories()
         self.forward_history = []
@@ -492,11 +522,11 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
         if gpu:
             return torch.tensor(a, device = self.device).float().squeeze(0)
         else:
-            return torch.tensor(a).float().squeeze(0)
+            return torch.tensor(a).cpu().float().squeeze(0)
 
     def __call__(self, timestep):
         obs = timestep.observation
-        action = self.step(obs)
+        action = self.step(obs).cpu().detach()
         if self.discrete: #TODO: This is currently only compatible with action_space = 1
             action_ind = max(range(len(action)), key=action.__getitem__) 
             action = [-1, 1][action_ind] 
