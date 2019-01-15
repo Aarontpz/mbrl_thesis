@@ -125,10 +125,10 @@ GAMMA = 0.99
 MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
 SMALL_TRAJECTORY_LENGTH = 100
 
-lr = 1.0e-3
+lr = 1.0e-4
 ADAM_BETAS = (0.9, 0.999)
-entropy_coeff = 0.0
-value_coeff = 0.1
+entropy_coeff = 1e-4
+value_coeff = 5e-2
 
 TRAINER_TYPE = 'AC'
 TRAINER_TYPE = 'PPO'
@@ -184,24 +184,24 @@ if __name__ == '__main__':
         #        action_constraints = action_constraints, has_value_function = False)
         
     
-        agent = PyTorchMPCWalkerAgent(1, 40, 20,  #num_processes, #horizon, k_shoots
-                device, 
-                [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
-                action_constraints = action_constraints, has_value_function = False)
-        print("This reward is only valid for walk / run tasks!")
-        agent.module = PyTorchMLP(device, obs_size + action_size, obs_size, 
-                hdims = [500, 500], activations = ['relu', 'relu', None], 
-                initializer = mlp_initializer).to(device)    
-        lr = 1.0e-3
-        ADAM_BETAS = (0.9, 0.999)
-        optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
-        trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, 
-                512, 1.0, 0.05, 0.5, 10, 100, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
-                device, value_coeff, entropy_coeff,
-                agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
-                num_episodes = EPISODES_BEFORE_TRAINING) 
-        trainer.step() #RUN PRETRAINING STEP
-        PRETRAINED = True
+        #agent = PyTorchMPCWalkerAgent(1, 40, 20,  #num_processes, #horizon, k_shoots
+        #        device, 
+        #        [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
+        #        action_constraints = action_constraints, has_value_function = False)
+        #print("This reward is only valid for walk / run tasks!")
+        #agent.module = PyTorchMLP(device, obs_size + action_size, obs_size, 
+        #        hdims = [500, 500], activations = ['relu', 'relu', None], 
+        #        initializer = mlp_initializer).to(device)    
+        #lr = 1.0e-3
+        #ADAM_BETAS = (0.9, 0.999)
+        #optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+        #trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, 
+        #        512, 1.0, 0.05, 0.5, 10, 100, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
+        #        device, value_coeff, entropy_coeff,
+        #        agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+        #        num_episodes = EPISODES_BEFORE_TRAINING) 
+        #trainer.step() #RUN PRETRAINING STEP
+        #PRETRAINED = True
 
         #pertinent from pg 9 of 1708.02596: "...ADAM optimizer lr = 0.001, batch size 512.
         #prior to training both the inputs and outputs in the dataset were preprocessed to have
@@ -210,27 +210,27 @@ if __name__ == '__main__':
         #TODO TODO:^this could include a value function too?! SEPERATE VALUE FUNCTION
         # to benefit from MPC AND model-free agent sampling, since value functions are ubiquitous
 
-        #agent = PyTorchStateWalkerAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
-        #        action_constraints = action_constraints, has_value_function = True)
-        #if DISCRETE_AGENT:
-        #    mlp_base = PyTorchDiscreteACMLP
-        #else:
-        #    mlp_base = PyTorchContinuousGaussACMLP
-        #agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
-        #        action_size, seperate_value_network = True, 
-        #        action_bias = True, value_bias = True, sigma_head = True, 
-        #        device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
-        #        activations = mlp_activations, initializer = mlp_initializer).to(device)
-        #
-        #optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
-        #if TRAINER_TYPE == 'AC':
-        #    trainer = PyTorchACTrainer(device, value_coeff, entropy_coeff,
-        #            agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
-        #            num_episodes = EPISODES_BEFORE_TRAINING) 
-        #elif TRAINER_TYPE == 'PPO':
-        #    trainer = PyTorchPPOTrainer(device, value_coeff, entropy_coeff,
-        #            agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
-        #            num_episodes = EPISODES_BEFORE_TRAINING) 
+        agent = PyTorchStateWalkerAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
+                action_constraints = action_constraints, has_value_function = True)
+        if DISCRETE_AGENT:
+            mlp_base = PyTorchDiscreteACMLP
+        else:
+            mlp_base = PyTorchContinuousGaussACMLP
+        agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
+                action_size, seperate_value_network = True, 
+                action_bias = True, value_bias = True, sigma_head = True, 
+                device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                activations = mlp_activations, initializer = mlp_initializer).to(device)
+        
+        optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+        if TRAINER_TYPE == 'AC':
+            trainer = PyTorchACTrainer(device, value_coeff, entropy_coeff,
+                    agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+                    num_episodes = EPISODES_BEFORE_TRAINING) 
+        elif TRAINER_TYPE == 'PPO':
+            trainer = PyTorchPPOTrainer(device, value_coeff, entropy_coeff,
+                    agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+                    num_episodes = EPISODES_BEFORE_TRAINING) 
 
         ## set up listener for user input
         lock = threading.Lock()

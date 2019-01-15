@@ -81,7 +81,7 @@ class PyTorchTrainer(Trainer):
         self.entropy_coeff = entropy_coeff
         super(PyTorchTrainer, self).__init__(*args, **kwargs)
 
-    def get_discounted_reward(self, start, end = None) -> torch.tensor:
+    def get_discounted_reward(self, start, end = None, scale = True) -> torch.tensor:
         # TODO: Do this with solely PyTorch operations?? 
         # BUILD THAT COMP GRAPH (ALSO: TODO requires_grad?)
         if end is None: 
@@ -106,7 +106,8 @@ class PyTorchTrainer(Trainer):
         return R + V_st_k - V_st
 
     def get_policy_entropy(self, start, end = 30):
-        raise Exception("Make this accomodate continuous space (use distribution.entropy)")
+        #raise Exception("Make this accomodate continuous space (use distribution.entropy)")
+        #print("Entropy Start: %s End: %s" % (start, end))
         if end is None: 
             end = self.get_trajectory_end(start, end)
         net_entropy = torch.tensor([0.0], requires_grad = False).to(self.device)
@@ -120,7 +121,7 @@ class PyTorchTrainer(Trainer):
             else:
                 #print("ENTROPY ISNAN")
                 pass
-        #print("Net Entropy: ", net_entropy)
+        print("Net Entropy: ", net_entropy)
         return net_entropy    
 
 class PyTorchPreTrainer(PyTorchTrainer):
