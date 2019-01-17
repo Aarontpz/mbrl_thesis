@@ -84,6 +84,9 @@ def launch_best_agent(env, agent):
         pass
 
 def console(env, agent, lock):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    agent.device = device
+    agent.module.to(device)
     while True: 
         input()
         with lock:
@@ -93,6 +96,7 @@ def console(env, agent, lock):
                 ## We create a clone of the agent (to preserve the training agent's history) 
                 clone = PyTorchStateWalkerAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True) 
+                #clone = agent.clone()
                 clone.module = copy.deepcopy(agent.module)
                 launch_viewer(env, clone)    
                 print("RESUMING!")
@@ -106,13 +110,13 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-EPS = 0.08
-EPS_MIN = 0.01
+EPS = 0.05
+EPS_MIN = 1e-6
 EPS_DECAY = 1e-6
 
 mlp_outdim = 100 #based on state size (approximation)
 mlp_hdims = [200]
-mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
+mlp_activations = ['relu', 'relu'] #+1 for outdim activation, remember extra action/value modules
 #mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
 #mlp_outdim = 200 #based on state size (approximation)
 #mlp_hdims = []
@@ -120,18 +124,19 @@ mlp_activations = ['relu', None] #+1 for outdim activation, remember extra actio
 mlp_initializer = None
 DISCRETE_AGENT = False
 FULL_EPISODE = True
-GAMMA = 0.99
+GAMMA = 0.98
 
 MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
 SMALL_TRAJECTORY_LENGTH = 100
 
 lr = 1.0e-4
 ADAM_BETAS = (0.9, 0.999)
-entropy_coeff = 1e-4
-value_coeff = 5e-2
+entropy_coeff = 1e-1
+#entropy_coeff = 0 
+value_coeff = 5e-1
 
 TRAINER_TYPE = 'AC'
-TRAINER_TYPE = 'PPO'
+#TRAINER_TYPE = 'PPO'
 
 DISPLAY_HISTORY = True
 
@@ -139,7 +144,7 @@ PRETRAINED = False
 
 if FULL_EPISODE:
     max_traj_len = MAXIMUM_TRAJECTORY_LENGTH
-    EPISODES_BEFORE_TRAINING = 3 #so we benefit from reusing sampled trajectories with PPO / TRPO
+    EPISODES_BEFORE_TRAINING = 1 #so we benefit from reusing sampled trajectories with PPO / TRPO
     replay_iterations = EPISODES_BEFORE_TRAINING #approximate based on episode length 
 else:
     max_traj_len = SMALL_TRAJECTORY_LENGTH
@@ -151,8 +156,8 @@ if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
     #raise Exception("It is time...for...minibatches (vectorized) training. I think. INVESTIGATE?!")
-    env = suite.load(domain_name = 'walker', task_name = 'stand')  
-    tmp_env = suite.load(domain_name = 'walker', task_name = 'stand')  
+    env = suite.load(domain_name = 'walker', task_name = 'walk')  
+    tmp_env = suite.load(domain_name = 'walker', task_name = 'walk')  
     action_space = env.action_spec()
     obs_space = env.observation_spec()
 
@@ -293,11 +298,11 @@ if __name__ == '__main__':
                     #plt.clf()
                     #plt.subplot(2, 1, 1)
                     #plt.ylabel("Action Loss")
-                    #plt.scatter(range(len(action_loss_history)), [l.numpy()[0] for l in action_loss_history], s=0.1)
+                    #plt.scatter(range(len(agent.action_loss_history)), [l.numpy()[0] for l in agent.action_loss_history], s=0.1)
                     #plt.subplot(2, 1, 2)
                     #plt.ylabel("Value Loss")
                     #plt.xlabel("Time")
-                    #plt.scatter(range(len(value_loss_history)), [l.numpy()[0] for l in value_loss_history], s=0.1)
+                    #plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
                     #plt.draw()
                     plt.pause(0.01)
                 i += 1

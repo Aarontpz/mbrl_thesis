@@ -8,6 +8,7 @@ import tensorflow as tf
 import numpy as np
 
 import matplotlib.pyplot as plt
+from torchviz import make_dot
 
 import random
 
@@ -40,10 +41,6 @@ class Trainer:
 
     @abc.abstractmethod
     def get_discounted_reward(self, start, end = None) -> np.ndarray:
-        pass
-
-    @abc.abstractmethod
-    def get_policy_entropy(self, start, end = None) -> np.ndarray:
         pass
 
     def get_episode_ends(self):
@@ -81,21 +78,20 @@ class PyTorchTrainer(Trainer):
         self.entropy_coeff = entropy_coeff
         super(PyTorchTrainer, self).__init__(*args, **kwargs)
 
-    def get_discounted_reward(self, start, end = None, scale = True) -> torch.tensor:
-        # TODO: Do this with solely PyTorch operations?? 
-        # BUILD THAT COMP GRAPH (ALSO: TODO requires_grad?)
-        if end is None: 
-            end = self.get_trajectory_end(end)
-        net_reward = torch.tensor([0.0], requires_grad = False)
-        rewards = self.agent.reward_history[start:]
-            #print("Net reward: ", net_reward)
-        #if i < len(state_value_history): #or i+1?
-        for i in range(start, end):
-            net_reward += self.gamma ** (i - start) * self.agent.reward_history[i]
-            #net_reward += gamma**(i) * state_value_history[i].cpu().squeeze(0) #get last state value approximation
-            #print("Bootstrap Value: ", gamma**(i) * state_value_history[i].cpu().squeeze(0))
-        return net_reward.squeeze(0)
-
+    def get_discounted_rewards(self, rewards, scale = True) -> torch.tensor:
+        '''Generate list of discounted rewards. This is an improvement on the previous,
+        INCREDIBLY inefficient method of generating discounted rewards previously used.
+        Source: https://medium.com/@ts1829/policy-gradient-reinforcement-learning-in-pytorch-df1383ea0baf'''
+        R = 0
+        disc_rewards = []
+        for r in rewards[::-1]:
+            R = r + self.gamma * R
+            disc_rewards.insert(0, R)
+        rewards = torch.FloatTensor(rewards)
+        if scale:
+            rewards = (rewards - rewards.mean()) / (rewards.std() + np.finfo(np.float32).eps)
+        return rewards
+    
     def get_advantage(self, start, end = None) -> torch.tensor: 
         assert(len(self.agent.value_history) >= start) #make sure value estimates exist
         if end is None: 
@@ -105,24 +101,187 @@ class PyTorchTrainer(Trainer):
         V_st_k = self.gamma**(end - start) * self.agent.value_history[end]
         return R + V_st_k - V_st
 
-    def get_policy_entropy(self, start, end = 30):
-        #raise Exception("Make this accomodate continuous space (use distribution.entropy)")
-        #print("Entropy Start: %s End: %s" % (start, end))
-        if end is None: 
-            end = self.get_trajectory_end(start, end)
-        net_entropy = torch.tensor([0.0], requires_grad = False).to(self.device)
-        for s in self.agent.action_score_history[start : end]:
-            s = s.squeeze(0)
-            log_prob = s.log()
-            entropy = (log_prob * s).sum().to(self.device)
-            if not torch.isnan(entropy):
-                #print("Entropy: ", entropy)
-                net_entropy -= entropy
-            else:
-                #print("ENTROPY ISNAN")
-                pass
-        print("Net Entropy: ", net_entropy)
-        return net_entropy    
+
+
+class PyTorchACTrainer(PyTorchTrainer):
+    def step(self):
+        #TODO: Modify this for seperate policy/value networks
+        #raise Exception("This doesn't seem to work for continuous-action spaces?!")
+        super(PyTorchACTrainer, self).step()
+        requires_grad = True
+        reward = None
+        action_scores = None 
+        value_scores = None 
+        ## Porting this function into the ACTrainer class
+        module = self.agent.module
+        device = self.device
+        optimizer = self.opt
+        action_scores = self.agent.action_score_history
+        value_scores = self.agent.value_history
+        #print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
+        assert(len(value_scores) == len(action_scores)) #necessary
+        ## FOR STORING LOSS HISTORIES
+        
+        ##
+        #TODO: Make this run with mini-batches?!
+        loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        value_criterion = torch.nn.MSELoss()
+        #print("Cumulative reward: ", cum_reward)
+        #disc_reward = get_discounted_reward(reward_history, 0, gamma=gamma)
+        #net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        #net_value_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        if hasattr(module, 'rec_size') and module.rec_size > 0: 
+            #TODO: don't do full FF, to save computations? 
+            #compartmentalize .forward()
+            module.reset_states(module.batch_size, False) 
+        #returns = get_return_tensor(reward_history, gamma=gamma)
+        #norm_returns = normalize_return_tensor(returns)
+        i = 0
+        #for score in action_score_history:
+        #    make_dot(score).view()
+        #    input()
+        optimizer.zero_grad()
+        if self.max_traj_len > len(action_scores)/self.num_episodes: #if avg episode len < max traj len, run through each episode
+            ends = self.get_episode_ends()
+            replay_starts = [0]
+            for e in ends[:len(ends) - 1]:
+                replay_starts.append(e + 1)
+        else:
+            replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
+        for start in replay_starts:
+            end = self.get_trajectory_end(start, end = None)
+            loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+            rewards = self.get_discounted_rewards(self.agent.reward_history[start:end], scale = True).to(device)
+            print("START: %s END: %s" % (start, end))
+            for ind in range(start, end): #-1 because terminal state doesn't matter?
+                #if module.lstm_size > 0:
+                #    obs = get_observation_tensor(state_history[i])
+                #    _ = module.forward(obs)
+                R = rewards[ind - start]
+                #print("i: %s len(action_score): %s value_scores: %s reward_history: %s" \
+                #        % (i, len(action_score_history), len(state_score_history), len(reward_history)))
+                action_score = action_scores[ind]
+                value_score = value_scores[ind] #NOTE: i vs i+1?!
+                advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
+                if self.agent.discrete:
+                    log_prob = action_score.log().max().to(device)
+                    action_loss = (-log_prob * advantage).squeeze(0)
+                else:
+                    action_loss = (-action_score * advantage).squeeze(0)
+                #make_dot(action_loss).view()
+                #input()
+                value_loss = self.value_coeff * value_criterion(value_score, R) 
+                if self.entropy_coeff > 0.0:
+                    entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
+                    #print("Action %s Entropy: %s" % (action_loss, entropy_loss))
+                    action_loss -= entropy_loss #WEIGHTED
+                if self.agent.module.seperate_value_net:
+                    pass
+                loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
+                #make_dot(value_loss).view()
+                #input()
+            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            loss.backward(retain_graph = True)
+            self.agent.net_loss_history.append(loss.cpu().detach())
+            self.agent.action_loss_history.append(action_loss.cpu().detach())
+            self.agent.value_loss_history.append(value_loss.cpu().detach())
+            optimizer.step()
+
+
+class PyTorchPPOTrainer(PyTorchTrainer):
+    def step(self):
+        #TODO: Modify this for seperate policy/value networks
+        #raise Exception("This doesn't seem to work for continuous-action spaces?!")
+        super(PyTorchPPOTrainer, self).step()
+        requires_grad = True
+        reward = None
+        action_scores = None 
+        value_scores = None 
+        ## Porting this function into the ACTrainer class
+        module = self.agent.module
+        device = self.device
+        optimizer = self.opt
+        action_scores = self.agent.action_score_history
+        value_scores = self.agent.value_history
+        #print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
+        assert(len(value_scores) == len(action_scores)) #necessary
+        ## FOR STORING LOSS HISTORIES
+
+
+        ##
+        #TODO: Make this run with mini-batches?!
+        loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        #cum_reward = torch.sum(torch.tensor(reward_history, requires_grad = requires_grad), 0)
+        #criterion = torch.nn.L1Loss()
+        value_criterion = torch.nn.MSELoss()
+        #print("Cumulative reward: ", cum_reward)
+        #disc_reward = get_discounted_reward(reward_history, 0, gamma=gamma)
+        #net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        #net_value_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        if hasattr(module, 'rec_size') and module.rec_size > 0: 
+            #TODO: don't do full FF, to save computations? 
+            #compartmentalize .forward()
+            module.reset_states(module.batch_size, False) 
+        #returns = get_return_tensor(reward_history, gamma=gamma)
+        #norm_returns = normalize_return_tensor(returns)
+        i = 0
+        #for score in action_score_history:
+        #    make_dot(score).view()
+        #    input()
+        optimizer.zero_grad()
+        if self.max_traj_len > len(action_scores)/self.num_episodes: #if avg episode len < max traj len, run through each episode
+            ends = self.get_episode_ends()
+            replay_starts = [0]
+            for e in ends[:len(ends) - 1]:
+                replay_starts.append(e + 1)
+        else:
+            replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
+        print("ENDS: %s \n LEN: %s" % (self.get_episode_ends(), len(action_scores)))
+        #THIS IMPLIES that the way we are ending the episodes is...improper...
+        for start in replay_starts:
+            end = self.get_trajectory_end(start, end = None)
+            loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+            rewards = self.get_discounted_rewards(self.agent.reward_history[start:end], scale = True).to(device)
+            print("START: %s END: %s" % (start, end))
+            self.agent.steps = 0
+            for ind in range(start, end): #-1 because terminal state doesn't matter?
+                self.agent.steps += 1
+                R = rewards[ind - start]
+                action_score = action_scores[ind]
+                value_score = value_scores[ind] #NOTE: i vs i+1?!
+                advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
+                if self.agent.discrete:
+                    raise Exception("Hasn't been implemented for PPO")
+                    log_prob = action_score.log().max().to(device)
+                    action_loss = (-log_prob * advantage).squeeze(0)
+                else:
+                    state = self.agent.state_history[ind]
+                    action, value, normal = self.agent.evaluate(state) 
+                    new_score = normal.log_prob(action)
+                    rt = torch.exp(new_score - action_score) #action_score is recorded prob of action AT SAMPLE TIME
+                    eps = 0.2
+                    #loss_clip = torch.sum(torch.min(rt * advantage, torch.clamp(rt, 1-eps, 1+eps) * advantage))
+                    loss_clip = -1 * torch.min(rt * advantage, torch.clamp(rt, min=1-eps, max=1+eps) * advantage)
+                    action_loss = loss_clip.squeeze(0)
+                #make_dot(action_loss).view()
+                #input()
+                value_loss = self.value_coeff * value_criterion(value_score, R) 
+                if self.entropy_coeff > 0.0:
+                    entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
+                    #print("Action %s Entropy: %s" % (action_loss, entropy_loss))
+                    action_loss -= entropy_loss #WEIGHTED
+                if self.agent.module.seperate_value_net:
+                    pass
+                loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
+                #make_dot(value_loss).view()
+                #input()
+            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            loss.backward(retain_graph = True)
+            self.agent.net_loss_history.append(loss.cpu().detach())
+            self.agent.action_loss_history.append(action_loss.cpu().detach())
+            self.agent.value_loss_history.append(value_loss.cpu().detach())
+            optimizer.step()
+
 
 class PyTorchPreTrainer(PyTorchTrainer):
     def __init__(self, trainer, *args, **kwargs):
@@ -132,19 +291,6 @@ class PyTorchPreTrainer(PyTorchTrainer):
     @abc.abstractmethod
     def training_criteria(self) -> bool:
         return False
-
-
-#class PyTorchForwardDynamicsTrainer:
-#    def __init__(self, device, mpc_agent, random_agent, optimizer, 
-#            batch_size = 512, 
-#            *args, **kwargs):
-#        self.device = device
-#        self.agent = agent
-#        self.optimizer = optimizer
-#        self.batch_size = batch_size
-#
-#    def step(self):
-#        pass
 
 
 class PyTorchNeuralDynamicsMPCTrainer(PyTorchTrainer):
@@ -287,328 +433,5 @@ class PyTorchMB_MFPreTrainer(PyTorchPreTrainer):
         pass
 
 
-
-
-
-class PyTorchACTrainer(PyTorchTrainer):
-    def step(self):
-        #TODO: Modify this for seperate policy/value networks
-        #raise Exception("This doesn't seem to work for continuous-action spaces?!")
-        super(PyTorchACTrainer, self).step()
-        requires_grad = True
-        reward = None
-        action_scores = None 
-        value_scores = None 
-        ## Porting this function into the ACTrainer class
-        module = self.agent.module
-        device = self.device
-        optimizer = self.opt
-        action_scores = self.agent.action_score_history
-        value_scores = self.agent.value_history
-        #print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
-        assert(len(value_scores) == len(action_scores)) #necessary
-        ## FOR STORING LOSS HISTORIES
-
-
-        ##
-        #TODO: Make this run with mini-batches?!
-        loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        #cum_reward = torch.sum(torch.tensor(reward_history, requires_grad = requires_grad), 0)
-        #criterion = torch.nn.L1Loss()
-        criterion = torch.nn.MSELoss()
-        #print("Cumulative reward: ", cum_reward)
-        #disc_reward = get_discounted_reward(reward_history, 0, gamma=gamma)
-        #net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        #net_value_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        if hasattr(module, 'rec_size') and module.rec_size > 0: 
-            #TODO: don't do full FF, to save computations? 
-            #compartmentalize .forward()
-            module.reset_states(module.batch_size, False) 
-        #returns = get_return_tensor(reward_history, gamma=gamma)
-        #norm_returns = normalize_return_tensor(returns)
-        i = 0
-        #for score in action_score_history:
-        #    make_dot(score).view()
-        #    input()
-        optimizer.zero_grad()
-        if self.max_traj_len > len(action_scores)/self.num_episodes: #if avg episode len < max traj len, run through each episode
-            ends = self.get_episode_ends()
-            replay_starts = [0]
-            for e in ends[:len(ends) - 1]:
-                replay_starts.append(e + 1)
-        else:
-            replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
-        for start in replay_starts:
-            end = self.get_trajectory_end(start, end = None)
-            loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
-            print("START: %s END: %s" % (start, end))
-            for ind in range(start, end): #-1 because terminal state doesn't matter?
-                #i = ind
-                #optimizer.zero_grad()
-                #update hidden state for LSTM
-                #if module.lstm_size > 0:
-                #    obs = get_observation_tensor(state_history[i])
-                #    _ = module.forward(obs)
-                #R = norm_returns[i]
-                #R = get_discounted_reward(reward_history, i+1, gamma=gamma).unsqueeze(0).to(device)
-                #R = self.get_discounted_reward(ind, end = end).unsqueeze(0).to(device)
-                R = self.get_discounted_reward(ind, end = end).unsqueeze(0).unsqueeze(0).to(device)
-                #print("i: %s len(action_score): %s value_scores: %s reward_history: %s" \
-                #        % (i, len(action_score_history), len(state_score_history), len(reward_history)))
-                action_score = action_scores[ind]
-                value_score = value_scores[ind] #NOTE: i vs i+1?!
-                #print("Value Score: ", value_scores)
-                #print("Return: ", R)
-                #print("Action Scores: %s \n Value Scores: %s\n" % (action_scores, value_scores))
-                #print(torch.isnan(s) for s in log_prob)
-                #print("Log Prob: ", log_prob)
-                #print("FIXING SCORE")
-                ##max_score, max_index = torch.max(action_scores, 1)
-                ##m = torch.distributions.Categorical(action_scores)
-                ##log_prob = m.log_prob(m.sample()).to(device)
-                ##print("Log Prob: ", log_prob)
-                #log_prob = m.log_prob(max_score)
-                #print("M: %s (sample) vs %s (indexed)"%(-m.log_prob(m.sample()), -m.log_prob(max_index))) #NOTE: This is important to understand wtf is happ
-                #reward = torch.clamp(torch.tensor(reward_history[i+1]), -1, 1)
-                #print("Discounted Reward: ", disc_reward)
-                #reward = reward_history[i+1]
-                #if disc_reward > 0.5:
-                    #print("Discounted reward: ", disc_reward)
-                advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
-                if self.agent.discrete:
-                    log_prob = action_score.log().max().to(device)
-                    action_loss = (-log_prob * advantage).squeeze(0)
-                else:
-                    action_loss = (-action_score * advantage).squeeze(0)
-                #action_loss -= self.entropy_coeff * self.get_policy_entropy(ind, end=None) #TODO: fix entropy
-
-                #make_dot(action_loss).view()
-                #input()
-                #print("Value score: %s Discounted: %s" % (value_score, R))
-                value_loss = self.value_coeff * criterion(value_score, R) 
-                if self.entropy_coeff > 0.0:
-                    entropy_loss = self.entropy_coeff * self.get_policy_entropy(ind, end=None)
-                    loss += action_loss + value_loss - entropy_loss #WEIGHTED
-                else:
-                    loss += action_loss + value_loss #WEIGHTED
-                
-                #make_dot(value_loss).view()
-                #input()
-                #print("Action Loss: %s Value Loss: %s" % (action_loss, value_loss))
-                #net_action_loss += action_loss
-                #net_value_loss += value_loss
-                #print("Action Loss: %s \n Value Loss: %s" % (action_loss, value_loss))
-                #if update_both:
-                #    loss = value_loss + action_loss
-                #else: 
-                #    if update_values:
-                #        print("CURRENT VALUE LOSS (to min): ", value_loss)
-                #        loss = value_loss
-                #    else:
-                #        loss = action_loss #TODO: occasionally (NOT simultaneously) update value estimator
-                #loss.backward(retain_graph = i < len(reward_history) - 2)
-                #raise Exception("Entropy + Value Loss Coefficients!")
-
-
-            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
-            loss.backward(retain_graph = True)
-            self.agent.net_loss_history.append(loss.cpu().detach())
-            optimizer.step()
-                #print("Step %s Loss: %s" % (i, loss))
-        #print("FINAL i: ", i)
-        #if average_value_loss == True and i > 0:
-        #    net_value_loss /= i #correct for the inevitability of this loss being MASSIVE
-        #if update_both:
-        #    loss = net_action_loss + net_value_loss 
-            #print("CURRENT VALUE LOSS (to min): ", net_value_loss)
-            #print("CURRENT ACTION LOSS (to min): ", net_action_loss)
-        #else: 
-        #    if update_values:
-                #print("CURRENT VALUE LOSS (to min): ", net_value_loss)
-        #        loss = net_value_loss
-        #    else:
-                #print("CURRENT ACTION LOSS (to min): ", net_action_loss)
-                #loss = net_action_loss #TODO: occasionally (NOT simultaneously) update value estimator
-        #if not update_both and not update_values: #avoid entropy loss if just updating values
-        #loss -= ent_coeff * self.get_policy_entropy(ind, end=None)
-        #print("Loss: ", loss)        
-        #loss.backward(retain_graph = i < len(reward_history) - 2)
-        #torch.nn.utils.clip_grad_norm_(module.parameters(), 2)
-        #loss.backward(retain_graph = True)
-        #optimizer.step()
-        #if module.lstm_size > 0: #TODO: don't do full FF, to save computations? compartmentalize .forward()
-        #    module.reset_states() 
-        #return net_action_loss, net_value_loss
-
-
-class PyTorchPPOTrainer(PyTorchTrainer):
-    def step(self):
-        #TODO: Modify this for seperate policy/value networks
-        #raise Exception("This doesn't seem to work for continuous-action spaces?!")
-        super(PyTorchPPOTrainer, self).step()
-        requires_grad = True
-        reward = None
-        action_scores = None 
-        value_scores = None 
-        ## Porting this function into the ACTrainer class
-        module = self.agent.module
-        device = self.device
-        optimizer = self.opt
-        action_scores = self.agent.action_score_history
-        value_scores = self.agent.value_history
-        #print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
-        assert(len(value_scores) == len(action_scores)) #necessary
-        ## FOR STORING LOSS HISTORIES
-
-
-        ##
-        #TODO: Make this run with mini-batches?!
-        loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        #cum_reward = torch.sum(torch.tensor(reward_history, requires_grad = requires_grad), 0)
-        #criterion = torch.nn.L1Loss()
-        criterion = torch.nn.MSELoss()
-        #print("Cumulative reward: ", cum_reward)
-        #disc_reward = get_discounted_reward(reward_history, 0, gamma=gamma)
-        #net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        #net_value_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        if hasattr(module, 'rec_size') and module.rec_size > 0: 
-            #TODO: don't do full FF, to save computations? 
-            #compartmentalize .forward()
-            module.reset_states(module.batch_size, False) 
-        #returns = get_return_tensor(reward_history, gamma=gamma)
-        #norm_returns = normalize_return_tensor(returns)
-        i = 0
-        #for score in action_score_history:
-        #    make_dot(score).view()
-        #    input()
-        optimizer.zero_grad()
-        if self.max_traj_len > len(action_scores)/self.num_episodes: #if avg episode len < max traj len, run through each episode
-            ends = self.get_episode_ends()
-            replay_starts = [0]
-            for e in ends[:len(ends) - 1]:
-                replay_starts.append(e + 1)
-        else:
-            replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
-        print("ENDS: %s \n LEN: %s" % (self.get_episode_ends(), len(action_scores)))
-        #THIS IMPLIES that the way we are ending the episodes is...improper...
-        for start in replay_starts:
-            end = self.get_trajectory_end(start, end = None)
-            loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
-            #print("START: %s END: %s" % (start, end))
-            self.agent.steps = 0
-            for ind in range(start, end): #-1 because terminal state doesn't matter?
-                self.agent.steps += 1
-                #i = ind
-                #optimizer.zero_grad()
-                #update hidden state for LSTM
-                #if module.lstm_size > 0:
-                #    obs = get_observation_tensor(state_history[i])
-                #    _ = module.forward(obs)
-                #R = norm_returns[i]
-                #R = get_discounted_reward(reward_history, i+1, gamma=gamma).unsqueeze(0).to(device)
-                R = self.get_discounted_reward(ind, end = end).unsqueeze(0).unsqueeze(0).to(device)
-                #print("i: %s len(action_score): %s value_scores: %s reward_history: %s" \
-                #        % (i, len(action_score_history), len(state_score_history), len(reward_history)))
-                action_score = action_scores[ind]
-                value_score = value_scores[ind] #NOTE: i vs i+1?!
-                #print("Value Score: ", value_scores)
-                #print("Return: ", R)
-                #print("Action Scores: %s \n Value Scores: %s\n" % (action_scores, value_scores))
-                #print(torch.isnan(s) for s in log_prob)
-                #print("Log Prob: ", log_prob)
-                #print("FIXING SCORE")
-                ##max_score, max_index = torch.max(action_scores, 1)
-                ##m = torch.distributions.Categorical(action_scores)
-                ##log_prob = m.log_prob(m.sample()).to(device)
-                ##print("Log Prob: ", log_prob)
-                #log_prob = m.log_prob(max_score)
-                #print("M: %s (sample) vs %s (indexed)"%(-m.log_prob(m.sample()), -m.log_prob(max_index))) #NOTE: This is important to understand wtf is happ
-                #reward = torch.clamp(torch.tensor(reward_history[i+1]), -1, 1)
-                #print("Discounted Reward: ", disc_reward)
-                #reward = reward_history[i+1]
-                #if disc_reward > 0.5:
-                    #print("Discounted reward: ", disc_reward)
-                advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
-                if self.agent.discrete:
-                    raise Exception("Hasn't been implemented for PPO")
-                    log_prob = action_score.log().max().to(device)
-                    action_loss = (-log_prob * advantage).squeeze(0)
-                else:
-                    state = self.agent.state_history[ind]
-                    action, value, normal = self.agent.evaluate(state) 
-                    new_score = normal.log_prob(action)
-                    rt = torch.exp(new_score - action_score) #action_score is recorded prob of action AT SAMPLE TIME
-                    eps = 0.2
-                    #loss_clip = torch.sum(torch.min(rt * advantage, torch.clamp(rt, 1-eps, 1+eps) * advantage))
-                    loss_clip = -1 * torch.min(rt * advantage, torch.clamp(rt, min=1-eps, max=1+eps) * advantage)
-                    #print("PPO BIATCH. Rt: ", rt)
-                    #action_loss = (-action_score * advantage).squeeze(0)
-                    action_loss = loss_clip.squeeze(0)
-                    #print("Clamped Loss: ", action_loss)
-                #action_loss -= self.entropy_coeff * self.get_policy_entropy(ind, end=None) #TODO: fix entropy
-
-                #make_dot(action_loss).view()
-                #input()
-                #print("Value score: %s Discounted: %s" % (value_score, R))
-                value_loss = self.value_coeff * criterion(value_score, R) 
-                if self.entropy_coeff > 0.0:
-                    entropy_loss = self.entropy_coeff * self.get_policy_entropy(ind, end=None)
-                    loss += action_loss + value_loss - entropy_loss #WEIGHTED
-                else:
-                    loss += action_loss + value_loss #WEIGHTED
-                
-                #make_dot(value_loss).view()
-                #input()
-                #print("Action Loss: %s Value Loss: %s" % (action_loss, value_loss))
-                #net_action_loss += action_loss
-                #net_value_loss += value_loss
-                #print("Action Loss: %s \n Value Loss: %s" % (action_loss, value_loss))
-                #if update_both:
-                #    loss = value_loss + action_loss
-                #else: 
-                #    if update_values:
-                #        print("CURRENT VALUE LOSS (to min): ", value_loss)
-                #        loss = value_loss
-                #    else:
-                #        loss = action_loss #TODO: occasionally (NOT simultaneously) update value estimator
-                #loss.backward(retain_graph = i < len(reward_history) - 2)
-                #raise Exception("Entropy + Value Loss Coefficients!")
-
-            print("LOSS: ", loss)
-            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
-            loss.backward(retain_graph = True)
-            self.agent.net_loss_history.append(loss.cpu().detach())
-            optimizer.step()
-                #print("Step %s Loss: %s" % (i, loss))
-        #print("FINAL i: ", i)
-        #if average_value_loss == True and i > 0:
-        #    net_value_loss /= i #correct for the inevitability of this loss being MASSIVE
-        #if update_both:
-        #    loss = net_action_loss + net_value_loss 
-            #print("CURRENT VALUE LOSS (to min): ", net_value_loss)
-            #print("CURRENT ACTION LOSS (to min): ", net_action_loss)
-        #else: 
-        #    if update_values:
-                #print("CURRENT VALUE LOSS (to min): ", net_value_loss)
-        #        loss = net_value_loss
-        #    else:
-                #print("CURRENT ACTION LOSS (to min): ", net_action_loss)
-                #loss = net_action_loss #TODO: occasionally (NOT simultaneously) update value estimator
-        #if not update_both and not update_values: #avoid entropy loss if just updating values
-        #loss -= ent_coeff * self.get_policy_entropy(ind, end=None)
-        #print("Loss: ", loss)        
-        #loss.backward(retain_graph = i < len(reward_history) - 2)
-        #torch.nn.utils.clip_grad_norm_(module.parameters(), 2)
-        #loss.backward(retain_graph = True)
-        #optimizer.step()
-        #if module.lstm_size > 0: #TODO: don't do full FF, to save computations? compartmentalize .forward()
-        #    module.reset_states() 
-        #return net_action_loss, net_value_loss
-
-
-
-
 class TFTrainer(Trainer):
     pass
-
-

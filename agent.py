@@ -7,8 +7,11 @@ import numpy as np
 
 import tensorflow as tf
 import torch
+from torch.autograd import Variable
 
 import torch.multiprocessing as mp
+
+import math
 
 class Agent:
     __metaclass__ = abc.ABCMeta
@@ -36,7 +39,10 @@ class Agent:
         self.reward_history = []
         self.net_reward_history = []
         self.net_loss_history = [] #wtf is this loss
+        self.action_loss_history = []
+        self.value_loss_history = []
         self.terminal_history = []
+        self.policy_entropy_history = []
 
         self.has_value_function = has_value_function
         self.value_history = [] #NOTE: this could be None
@@ -67,7 +73,7 @@ class Agent:
             if not self.discrete: #TODO: make this more efficient BY OUTPUTTING NORMAL DIST INSTEAD
                 action_score = normal.log_prob(action) #use constructed normal distribution to generate log prob
                 self.action_score_history.append(action_score) 
-                #print("ACTION: ", action)
+                #print("ACTION SCORE: ", action_score)
         return action 
 
     def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
@@ -86,14 +92,17 @@ class Agent:
             else:
                 action_mu, action_sigma = self.module(obs)
         if self.discrete: 
+            self.policy_entropy_history.append(self.get_policy_entropy(action_scores))
             return action_scores, value, normal
         if not self.discrete:
             #print("Action mu: %s Sigma^2: %s" % (action_mu, action_sigma))
+
             action_covariance = torch.eye(self.action_space, 
                     device = self.device) * action_sigma.to(self.device) #create SPHERICAL covariance
             action_covariance += torch.eye(self.action_space, device=self.device) * 1e-4
             action_mu = action_mu.to(self.device) #TODO: this should naturally happen via the MLP
             normal = torch.distributions.MultivariateNormal(action_mu, action_covariance)
+            self.policy_entropy_history.append(self.get_policy_entropy(action_sigma))
             try:
                 action = normal.sample()
             except: #resample
@@ -119,6 +128,7 @@ class Agent:
         self.reward_history = []
         self.terminal_history = []
         self.value_history = []
+        self.policy_entropy_history = []
 
     def sample_action(self, obs) -> np.ndarray:
         if self.discrete:
@@ -129,14 +139,6 @@ class Agent:
             maxs = self.action_constraints[1]
             return np.random.uniform(mins, maxs, (1, self.action_space))
 
-
-    #def construct_experience(self, s_k, a_k, r_k, s_K, terminal, **kwargs):
-    #    return [s_k, a_k, r_k, s_K, terminal, kwargs]
-    #    #TODO: Wrap these in tf / pytorch tensors?
-
-    #def save_experience(self, s_k, a_k, r_k, s_K, terminal, **kwargs): #TODO: Memory constraints for long-episode task??
-    #    e = self.assemble_experience(s_k, a_k, r_k, s_K, terminal, kwargs) 
-    #    self.exp_buffer.append(e) 
 
     def get_experience(self, k) -> []: 
         s = None
@@ -157,7 +159,11 @@ class Agent:
     
     def get_experience_structure(self):
         return ['s_k', 'a_k', 'r_k', 's_K', 'terminal', 'kwargs']
-        
+   
+    @abc.abstractmethod
+    def get_policy_entropy(self, s):
+        pass
+
     @abc.abstractmethod
     def transform_observation(self, obs, target_size = None, normalize_pixels = True, **kwargs) -> np.ndarray:
         if type(obs) is list:
@@ -175,6 +181,12 @@ class Agent:
         #assert(self.obs_var is not None)
         if self.obs_mean is not None and self.obs_var is not None:
             pass
+
+    @abc.abstractmethod
+    def clone(self):
+        return Agent(self.input_dimensions, self.action_space,
+                self.discrete, self.action_constraints, self.has_value_function,
+                self.terminal_penalty)
 
     @abc.abstractmethod
     def __call__(self, timestep):
@@ -329,6 +341,20 @@ class PyTorchAgent(Agent):
     @module.setter
     def module(self, m):
         self._module = m
+    
+    def get_policy_entropy(self, s):
+        #raise Exception("Make this accomodate continuous space (use distribution.entropy)")
+        if self.discrete:
+            # s in this case is prob of taking action
+            s = s.squeeze(0)
+            log_prob = s.log()
+            entropy = (log_prob * s).sum().to(self.device)
+            print("Score: %s Entropy: %s"%(action_score, entropy))
+            return entropy    
+        else: #continuous, based on 1602.01783 section 9
+            # s, in this case, is SIGMA    
+            entropy = -0.5 * (torch.log(2*math.pi*s)+1)
+            return entropy.squeeze(0)
 
     def compute_normalization(self, obs):
         last_mean = self.obs_mean.clone()
@@ -346,6 +372,11 @@ class PyTorchAgent(Agent):
         if self.obs_mean is not None and self.obs_var is not None:
             return self.normalize(obs)
         return obs
+    
+    def clone(self) -> Agent:
+        return PyTorchAgent(self.device, self.input_dimensions, self.action_space,
+                self.discrete, self.action_constraints, self.has_value_function,
+                self.terminal_penalty)
 
     def __call__(self, timestep):
         obs = timestep.observation
@@ -523,6 +554,12 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
             return torch.tensor(a, device = self.device).float().squeeze(0)
         else:
             return torch.tensor(a).cpu().float().squeeze(0)
+    
+    def clone(self) -> Agent:
+        return PyTorchMPCAgent(self.num_processes, self.horizon, self.k_shoots,
+                self.device, self.input_dimensions, self.action_space,
+                self.discrete, self.action_constraints, self.has_value_function,
+                self.terminal_penalty)
 
     def __call__(self, timestep):
         obs = timestep.observation
@@ -591,7 +628,7 @@ class PyTorchDiscreteACMLP(PyTorchMLP):
         self.action_space = action_space
         self.seperate_value_net = seperate_value_network
         super(PyTorchDiscreteACMLP, self).__init__(*args, **kwargs)
-        if seperate_value_network:
+        if seperate_value_network: #currently, this creates an IDENTICAL value function
             self.value_mlp = PyTorchMLP(*args, **kwargs)
         self.action_module = torch.nn.Linear(self.outdim, 
                 action_space, bias = action_bias)
@@ -619,12 +656,12 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
         self.seperate_value_net = seperate_value_network
         self.sigma_head = sigma_head
         super(PyTorchContinuousGaussACMLP, self).__init__(*args, **kwargs)
-        if seperate_value_network:
+        if seperate_value_network: #currently, this adds a SEPERATE value function
             self.value_mlp = PyTorchMLP(*args, **kwargs)
         self.action_mu_module = torch.nn.Linear(self.outdim, 
                 action_space, bias = action_bias)
         self.action_sigma_module = torch.nn.Linear(self.outdim,
-                action_space, bias = action_bias)
+                1, bias = action_bias)
         self.action_sigma_softplus = torch.nn.Softplus()
         self.value_module = torch.nn.Linear(self.outdim, 1, 
                 bias = value_bias)
@@ -685,14 +722,16 @@ def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0, action_constrai
                         self).forward(x)
                 if random.random() < self.eps: #randomize sigma values
                     self.update_eps()
-                    mins = self.action_constraints[0]
-                    maxs = self.action_constraints[1]
-                    action_mu =  np.random.uniform(mins, maxs, (1, self.action_space))
+                    #mins = self.action_constraints[0]
+                    #maxs = self.action_constraints[1]
+                    #action_mu =  np.random.uniform(mins, maxs, (1, self.action_space))
                     #action_sigma = np.random.random_integers(1, high = 2, size = (1, self.action_space))
-                    action_sigma = np.random.uniform(low = 0.000001, high = 3.0, size = (1, self.action_space))
-                    action_mu = torch.as_tensor(action_mu).float()
-                    action_sigma = torch.tensor(action_sigma).float()
-                    #print("RANDOMIZING! Eps: ", self.eps)
+                    #eps_sigma = np.random.uniform(low = 0.01, high = 3.0, size = (1, 1))
+                    #action_mu = torch.as_tensor(action_mu).float()
+                    noise = action_sigma.clone().normal_(1, 5)
+                    #print("Current sigma: ", action_sigma)
+                    action_sigma = torch.abs(action_sigma + noise)
+                    #print("New Sigma: %s Eps: %s"%(action_sigma, self.eps))
                 return action_mu, action_sigma, values 
                 raise Exception("Figure this out?")
 
