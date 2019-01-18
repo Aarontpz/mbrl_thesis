@@ -412,12 +412,12 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
         if self.num_processes == 1: #single-process
             return super().evaluate(obs, *args, **kwargs)
         else:
-            #try:
-            #    mp.set_start_method('spawn')
-            #except RuntimeError:
-            #    pass
+            try:
+                mp.set_start_method('spawn')
+            except RuntimeError:
+                pass
             #self.module = self.module.cpu()
-            #self.module.share_memory() 
+            self.module.share_memory() 
 
 
             traj = ()
@@ -428,21 +428,21 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
             processes = []
             
             #obs = obs.cpu()
-            #
-            #pool = mp.Pool(self.num_processes)
-            #results = pool.map(self.shoot, ((obs,False)))
-            #print("Results: ", results)
-            #for k in range(self.k_shoots):
-            #    #obs = obs.cpu()
-            ##    states, actions, rewards = pool.map(self.shoot, (obs,))
-            #    if sum(rewards) > max_r:
-            #        max_r = sum(rewards)
-            #        traj = (states, actions, rewards)
-            #states, actions, rewards = traj
-            #pool.close()
-            #pool.join()
-            ##print("ACTIONS: ", actions[0])
-            #return actions[0], None, None #TODO: ACTION SCORES TOO?!
+            
+            pool = mp.Pool(self.num_processes)
+            results = pool.map(self.shoot, [obs for i in range(self.num_processes)])
+            print("Results: ", results)
+            for k in range(self.k_shoots):
+                #obs = obs.cpu()
+            #    states, actions, rewards = pool.map(self.shoot, (obs,))
+                if sum(rewards) > max_r:
+                    max_r = sum(rewards)
+                    traj = (states, actions, rewards)
+            states, actions, rewards = traj
+            pool.close()
+            pool.join()
+            #print("ACTIONS: ", actions[0])
+            return actions[0], None, None #TODO: ACTION SCORES TOO?!
 
             #for k in range(self.k_shoots):
             #    results = queue.get()
@@ -547,6 +547,7 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
     def reset_histories(self):
         super().reset_histories()
         self.forward_history = []
+        self.shoots = []
 
     def sample_action(self, obs, gpu = True) -> np.ndarray:
         a = super().sample_action(obs)

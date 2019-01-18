@@ -343,7 +343,7 @@ class PyTorchNeuralDynamicsMPCTrainer(PyTorchTrainer):
     
     def step(self):
         #raise Exception("Train value function DURING THIS STEP TOO for proper behavioral cloning\
-        #?? Investigate!")
+        #?? Investigate! Also implement behavioral cloning phase (do we NEED to implement DAGGER?)?!")
         optimizer = self.opt
         horizon_loss = float('inf')
         avg_step_loss = float('inf')
@@ -387,9 +387,10 @@ class PyTorchNeuralDynamicsMPCTrainer(PyTorchTrainer):
             print("TRAINING STEP")
             loss = self.dynamic_step_loss(agent, agent.state_history, agent.action_history)
             loss.backward(retain_graph = True)
-            loss_history.append(loss.detach())
-            self.agent.net_loss_history.append(loss.cpu().detach())
             optimizer.step()
+            loss = loss.cpu().detach()
+            loss_history.append(loss)
+            #self.agent.net_loss_history.append(loss)
             
             ## Reset agent histories
             agent.reset_histories()

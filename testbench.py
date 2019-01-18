@@ -87,6 +87,11 @@ class RandomCartpoleAgent(RandomAgent):
         return Variable(torch.tensor(state).float(), requires_grad = True)
 
 class PyTorchMPCCartpoleAgent(PyTorchMPCAgent):
+    def __init__(self, *args, **kwargs):
+        global env
+        super().__init__(*args, **kwargs)
+        self.env = env
+
     def transform_observation(self, obs) -> Variable:
         '''Converts ordered-dictionary of position and velocity into
         1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
@@ -96,7 +101,7 @@ class PyTorchMPCCartpoleAgent(PyTorchMPCAgent):
         return Variable(torch.tensor(state).float(), requires_grad = False)
 
     def reward(self, st, at, *args, **kwargs):
-        upright = (env.physics.pole_angle_cosine() + 1) / 2
+        upright = (self.env.physics.pole_angle_cosine() + 1) / 2
         return upright
 
 
@@ -236,11 +241,14 @@ if __name__ == '__main__':
         #        action_constraints = action_constraints, has_value_function = False)
         
         if AGENT_TYPE == 'mpc': 
-            mlp_outdim = 500 #based on state size (approximation)
-            mlp_hdims = [500] 
-            mlp_activations = ['relu', 'relu'] #+1 for outdim activation, remember extra action/value modules
+            NUM_PROCESSES = 2
+            HORIZON = 40
+            K_SHOOTS = 20
+            #mlp_outdim = 500 #based on state size (approximation)
+            mlp_hdims = [500, 500] 
+            mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
             if ENV_TYPE == 'walker':
-                agent = PyTorchMPCWalkerAgent(1, 40, 20,  #num_processes, #horizon, k_shoots
+                agent = PyTorchMPCWalkerAgent(NUM_PROCESSES, HORIZON, K_SHOOTS,  #num_processes, #horizon, k_shoots
                         device, 
                         [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = False)
@@ -248,7 +256,7 @@ if __name__ == '__main__':
                         discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = False)
             elif ENV_TYPE == 'cartpole':
-                agent = PyTorchMPCCartpoleAgent(1, 10, 20,  #num_processes, #horizon, k_shoots
+                agent = PyTorchMPCCartpoleAgent(NUM_PROCESSES, HORIZON, K_SHOOTS,  #num_processes, #horizon, k_shoots
                         device, 
                         [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = False)
@@ -258,13 +266,13 @@ if __name__ == '__main__':
 
             print("This reward is only valid for walk / run tasks!")
             agent.module = PyTorchMLP(device, obs_size + action_size, obs_size, 
-                    hdims = [500, 500], activations = ['relu', 'relu', None], 
+                    hdims = mlp_hdims, activations = mlp_activations, 
                     initializer = mlp_initializer).to(device)    
             lr = 1.0e-3
             ADAM_BETAS = (0.9, 0.999)
             optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
             trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, 
-                    512, 1.0, 0.05, 0.5, 100, 500, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
+                    512, 1.0, 0.05, 0.5, 700, 700, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
                     device, value_coeff, entropy_coeff,
                     agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                     num_episodes = EPISODES_BEFORE_TRAINING) 
