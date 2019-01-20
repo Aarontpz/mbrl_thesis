@@ -184,7 +184,7 @@ class PyTorchACTrainer(PyTorchTrainer):
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
                 #make_dot(value_loss).view()
                 #input()
-            #torch.nn.utils.clip_grad_norm_(module.parameters(), 10)
+            torch.nn.utils.clip_grad_norm_(module.parameters(), 10)
             optimizer.zero_grad() #HAHAHAHA
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
@@ -283,7 +283,7 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
                 #make_dot(value_loss).view()
                 #input()
-            #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             optimizer.zero_grad() #HAHAHAHA
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())

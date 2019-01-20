@@ -11,6 +11,7 @@ from trainer import *
 from dm_control import suite
 from dm_control import viewer
 
+import gym
 
 import matplotlib.pyplot as plt
 
@@ -87,6 +88,19 @@ def create_dm_walker_agent(agent_base, *args, **kwargs):
     
     return DMWalkerAgent(*args, **kwargs)
 
+def create_gym_walker_agent(agent_base, *args, **kwargs):
+    '''Helper function to implement "transform_observation", and, in the case of MPC agents,
+    a reward function, for the walker2d environment.'''
+    class GymWalkerAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            return Variable(torch.tensor(obs).float(), requires_grad = True)
+    
+        def reward(self, st, at, *args, **kwargs):
+            raise Exception("Not implemented for Gym")
+    
+    return GymWalkerAgent(*args, **kwargs)
 #class TFVisionCartpoleAgent(TFAgent): #but...would we WANT this??
 
 def launch_viewer(env, agent):
@@ -174,8 +188,11 @@ else:
     EPISODES_BEFORE_TRAINING = 20
     replay_iterations = 30 #approximate based on episode length 
 
+LIB_TYPE = 'dm'
+LIB_TYPE = 'gym'
+
 AGENT_TYPE = 'mpc'
-#AGENT_TYPE = 'policy'
+AGENT_TYPE = 'policy'
 
 EPS = 1.5e-1
 EPS_MIN = 2e-2
@@ -197,25 +214,39 @@ if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
     #raise Exception("It is time...for...minibatches (vectorized) training. I think. INVESTIGATE?!")
-    env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
-    tmp_env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
-    action_space = env.action_spec()
-    obs_space = env.observation_spec()
+    if LIB_TYPE == 'dm':
+        env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
+        tmp_env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
+        action_space = env.action_spec()
+        obs_space = env.observation_spec()
 
-    if ENV_TYPE == 'walker':
-        obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0] + 1 #+1 for height
-    elif ENV_TYPE == 'cartpole':
-        obs_size = obs_space['position'].shape[0] + obs_space['velocity'].shape[0]
+        if ENV_TYPE == 'walker':
+            obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0] + 1 #+1 for height
+        elif ENV_TYPE == 'cartpole':
+            obs_size = obs_space['position'].shape[0] + obs_space['velocity'].shape[0]
 
-    action_size = action_space.shape[0] 
-    #action_size = 2
-    action_constraints = [action_space.minimum, action_space.maximum]
+        action_size = action_space.shape[0] 
+        #action_size = 2
+        action_constraints = [action_space.minimum, action_space.maximum]
 
-    print("Action Space: %s \n Observation Space: %s\n" % (action_size, obs_size))
-    print("Agent IS: Discrete: %s; Traj Length: %s; Replays: %s" % (DISCRETE_AGENT,
-        max_traj_len, replay_iterations))
-    print("Trainer Type: %s" % (TRAINER_TYPE))
-    print("MLP ACTIVATIONS: ", mlp_activations)
+        print("Action Space: %s \n Observation Space: %s\n" % (action_size, obs_size))
+        print("Agent IS: Discrete: %s; Traj Length: %s; Replays: %s" % (DISCRETE_AGENT,
+            max_traj_len, replay_iterations))
+        print("Trainer Type: %s" % (TRAINER_TYPE))
+        print("MLP ACTIVATIONS: ", mlp_activations)
+    elif LIB_TYPE == 'gym':
+        if ENV_TYPE == 'walker':
+            env_string = 'Walker2d-v2'    
+        elif ENV_TYPE == 'cartpole':
+            env_string = 'CartPole-v0'    
+        env = gym.make(env_string)
+        tmp_env = gym.make(env_string)
+        action_size = env.action_space.shape[0]
+        action_constraints = [env.action_space.low, env.action_space.high]
+        env.reset()
+        obs, reward, done, info = env.step(1)
+        obs_size = obs.size
+
     i = 0
     step = 0
     timestep = None
@@ -224,12 +255,6 @@ if __name__ == '__main__':
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         #device = torch.device("cpu") 
          
-        #env_clone = suite.load(domain_name = 'walker', task_name = 'stand')  
-        #agent = PyTorchMPCWalkerAgent(10, 1000,  #horizon, k_shoots
-        #        device, 
-        #        [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
-        #        action_constraints = action_constraints, has_value_function = False)
-        
         if AGENT_TYPE == 'mpc': 
             NUM_PROCESSES = 2
             HORIZON = 40
@@ -238,7 +263,7 @@ if __name__ == '__main__':
             mlp_hdims = [500, 500] 
             mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
             if ENV_TYPE == 'walker':
-                agent = PyTorchMPCWalkerAgent(NUM_PROCESSES, HORIZON, K_SHOOTS,  #num_processes, #horizon, k_shoots
+                agent = create_dm_walker_agent(PyTorchMPCAgent, NUM_PROCESSES, HORIZON, K_SHOOTS,  #num_processes, #horizon, k_shoots
                         device, 
                         [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = False)
@@ -272,17 +297,20 @@ if __name__ == '__main__':
         #pertinent from pg 9 of 1708.02596: "...ADAM optimizer lr = 0.001, batch size 512.
         #prior to training both the inputs and outputs in the dataset were preprocessed to have
         #zero mean, std dev = 1"
-
         #TODO TODO:^this could include a value function too?! SEPERATE VALUE FUNCTION
         # to benefit from MPC AND model-free agent sampling, since value functions are ubiquitous
 
-        #TODO TODO : implement inheritance so we don't need these explicitly 
-        #different initialization procedures?!
         elif AGENT_TYPE == 'policy':
             if ENV_TYPE == 'walker':
-                agent = create_dm_walker_agent(PyTorchAgent, device, [1, obs_size], action_size, 
-                        discrete_actions = DISCRETE_AGENT, 
-                        action_constraints = action_constraints, has_value_function = True)
+                if LIB_TYPE == 'dm':
+                    agent = create_dm_walker_agent(PyTorchAgent, device, [1, obs_size], action_size, 
+                            discrete_actions = DISCRETE_AGENT, 
+                            action_constraints = action_constraints, has_value_function = True)
+                elif LIB_TYPE == 'gym':
+                    agent = create_gym_walker_agent(PyTorchAgent, device, [1, obs_size], action_size, 
+                            discrete_actions = DISCRETE_AGENT, 
+                            action_constraints = action_constraints, has_value_function = True)
+
             elif ENV_TYPE == 'cartpole':
                 agent = create_dm_cartpole_agent(PyTorchAgent, device, [1, obs_size], action_size, 
                         discrete_actions = DISCRETE_AGENT, 
@@ -322,20 +350,30 @@ if __name__ == '__main__':
                 print("ITERATION: ", i)
                 # Exploration / evaluation step
                 for episode in range(EPISODES_BEFORE_TRAINING):
-                    timestep = env.reset()        
-                    while not timestep.last() and step < MAX_TIMESTEPS:
-                        reward = timestep.reward
-                        if reward is None:
-                            reward = 0.0
-                        #print("TIMESTEP %s: %s" % (step, timestep))
-                        observation = timestep.observation
-                        #print("Observation: ", observation)
-                        action = agent(timestep)
-                        #print("Action: ", action)
-                        agent.store_reward(reward)
-                        timestep = env.step(action)
-                        #print("Reward: %s" % (timestep.reward))
-                        step += 1
+                    if LIB_TYPE == 'dm':
+                        timestep = env.reset()        
+                        while not timestep.last() and step < MAX_TIMESTEPS:
+                            reward = timestep.reward
+                            if reward is None:
+                                reward = 0.0
+                            #print("TIMESTEP %s: %s" % (step, timestep))
+                            observation = timestep.observation
+                            #print("Observation: ", observation)
+                            action = agent(timestep)
+                            #print("Action: ", action)
+                            agent.store_reward(reward)
+                            timestep = env.step(action)
+                            #print("Reward: %s" % (timestep.reward))
+                            step += 1
+                    elif LIB_TYPE == 'gym':
+                        env.reset()
+                        observation, reward, done, info = env.step(env.action_space.sample())
+                        while not done and step < MAX_TIMESTEPS:
+                            action = agent.step(observation).cpu().numpy()
+                            env.render()
+                            observation, reward, done, info = env.step(action)
+                            agent.store_reward(reward)
+                            step += 1
                     step = 0
                     agent.terminate_episode() #oops forgot this lmao
                 # Update step
