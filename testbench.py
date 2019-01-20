@@ -18,16 +18,6 @@ import threading
 
 VIEWING = False
 
-class PyTorchStateWalkerAgent(PyTorchAgent):
-    def transform_observation(self, obs) -> Variable:
-        '''Converts ordered-dictionary of position and velocity into
-        1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
-        orientation = obs['orientations']
-        vel = obs['velocity']
-        height = np.asarray([obs['height'],])
-        state = np.concatenate((orientation, vel, height))
-        return Variable(torch.tensor(state).float(), requires_grad = True)
-
 class DMEnvMPCWalkerAgent(DMEnvMPCAgent):
     def transform_observation(self, obs) -> Variable:
         '''Converts ordered-dictionary of position and velocity into
@@ -38,53 +28,6 @@ class DMEnvMPCWalkerAgent(DMEnvMPCAgent):
         #state = np.concatenate((orientation, vel, height))
         return orientation
 
-
-class PyTorchMPCWalkerAgent(PyTorchMPCAgent):
-    def transform_observation(self, obs) -> Variable:
-        '''Converts ordered-dictionary of position and velocity into
-        1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
-        orientation = obs['orientations']
-        vel = obs['velocity']
-        height = np.asarray([obs['height'],])
-        state = np.concatenate((orientation, vel, height))
-        return Variable(torch.tensor(state).float(), requires_grad = False)
-
-    def reward(self, st, at, *args, **kwargs):
-        global TASK_NAME #GROOOOOOSSSSSSSTHH
-        if TASK_NAME in ['walk', 'run']:
-            return env.physics.horizontal_velocity() #TODO: this is only valid for walk / run tasks
-        else: 
-            return 0.0
-
-class RandomWalkerAgent(RandomAgent):
-    def transform_observation(self, obs) -> Variable:
-        '''Converts ordered-dictionary of position and velocity into
-        1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
-        orientation = obs['orientations']
-        vel = obs['velocity']
-        height = np.asarray([obs['height'],])
-        state = np.concatenate((orientation, vel, height))
-        return Variable(torch.tensor(state).float(), requires_grad = True)
-
-
-class PyTorchStateCartpoleAgent(PyTorchAgent):
-    def transform_observation(self, obs) -> Variable:
-        '''Converts ordered-dictionary of position and velocity into
-        1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
-        pos = obs['position']
-        vel = obs['velocity']
-        state = np.concatenate((pos, vel))
-        return Variable(torch.tensor(state).float(), requires_grad = True)
-
-
-class RandomCartpoleAgent(RandomAgent):
-    def transform_observation(self, obs) -> Variable:
-        '''Converts ordered-dictionary of position and velocity into
-        1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
-        pos = obs['position']
-        vel = obs['velocity']
-        state = np.concatenate((pos, vel))
-        return Variable(torch.tensor(state).float(), requires_grad = True)
 
 class PyTorchMPCCartpoleAgent(PyTorchMPCAgent):
     def __init__(self, *args, **kwargs):
@@ -104,6 +47,45 @@ class PyTorchMPCCartpoleAgent(PyTorchMPCAgent):
         upright = (self.env.physics.pole_angle_cosine() + 1) / 2
         return upright
 
+def create_dm_cartpole_agent(agent_base, *args, **kwargs):
+    '''Helper function to implement "transform_observation", and, in the case of MPC agents,
+    a reward function, for the cartpole environment.'''
+    class DMCartpoleAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            pos = obs['position']
+            vel = obs['velocity']
+            state = np.concatenate((pos, vel))
+            return Variable(torch.tensor(state).float(), requires_grad = False)
+    
+        def reward(self, st, at, *args, **kwargs):
+            upright = (self.env.physics.pole_angle_cosine() + 1) / 2
+            return upright
+    return DMCartpoleAgent(*args, **kwargs) 
+
+
+def create_dm_walker_agent(agent_base, *args, **kwargs):
+    '''Helper function to implement "transform_observation", and, in the case of MPC agents,
+    a reward function, for the walker2d environment.'''
+    class DMWalkerAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            orientation = obs['orientations']
+            vel = obs['velocity']
+            height = np.asarray([obs['height'],])
+            state = np.concatenate((orientation, vel, height))
+            return Variable(torch.tensor(state).float(), requires_grad = True)
+    
+        def reward(self, st, at, *args, **kwargs):
+            global TASK_NAME #GROOOOOOSSSSSSSTHH
+            if TASK_NAME in ['walk', 'run']:
+                return env.physics.horizontal_velocity() #TODO: this is only valid for walk / run tasks
+            else: 
+                return 0.0
+    
+    return DMWalkerAgent(*args, **kwargs)
 
 #class TFVisionCartpoleAgent(TFAgent): #but...would we WANT this??
 
@@ -121,9 +103,10 @@ def launch_best_agent(env, agent):
         pass
 
 def console(env, agent, lock, env_type = 'walker'):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    agent.device = device
-    agent.module.to(device)
+    #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
+    #agent.device = device
+    #agent.module.to(device)
     while True: 
         input()
         with lock:
@@ -139,6 +122,7 @@ def console(env, agent, lock, env_type = 'walker'):
                             action_constraints = action_constraints, has_value_function = True)
                 #clone = agent.clone()
                 clone.module = copy.deepcopy(agent.module)
+                clone.module.to(device)
                 launch_viewer(env, clone)    
                 print("RESUMING!")
 
@@ -151,12 +135,8 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-EPS = 0.05
-EPS_MIN = 1e-6
-EPS_DECAY = 1e-6
-
-mlp_outdim = 100 #based on state size (approximation)
-mlp_hdims = [100] 
+mlp_outdim = 200 #based on state size (approximation)
+mlp_hdims = [200] 
 mlp_activations = ['relu', 'relu'] #+1 for outdim activation, remember extra action/value modules
 #mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
 #mlp_outdim = 200 #based on state size (approximation)
@@ -164,15 +144,15 @@ mlp_activations = ['relu', 'relu'] #+1 for outdim activation, remember extra act
 #mlp_activations = ['relu'] #+1 for outdim activation, remember extra action/value modules
 mlp_initializer = None
 DISCRETE_AGENT = False
-FULL_EPISODE = True
-GAMMA = 0.99
 
 MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
 SMALL_TRAJECTORY_LENGTH = 100
 
-lr = 1.0e-4
+lr = 5.0e-4
 ADAM_BETAS = (0.9, 0.999)
-entropy_coeff = 1e-1
+MOMENTUM = 1e-3
+entropy_coeff = 5e-3
+ENTROPY_BONUS = True
 #entropy_coeff = 0 
 value_coeff = 5e-1
 
@@ -180,8 +160,10 @@ TRAINER_TYPE = 'AC'
 #TRAINER_TYPE = 'PPO'
 
 DISPLAY_HISTORY = True
+DISPLAY_AV_LOSS = False
 
 PRETRAINED = False
+FULL_EPISODE = True
 
 if FULL_EPISODE:
     max_traj_len = MAXIMUM_TRAJECTORY_LENGTH
@@ -195,14 +177,22 @@ else:
 AGENT_TYPE = 'mpc'
 #AGENT_TYPE = 'policy'
 
+EPS = 1.5e-1
+EPS_MIN = 2e-2
+EPS_DECAY = 1e-6
+GAMMA = 0.9
 ENV_TYPE = 'walker'
 TASK_NAME = 'run'
 TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-ENV_TYPE = 'cartpole'
-TASK_NAME = 'swingup'
-TASK_NAME = 'balance'
+#EPS = 1e-1
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
+#GAMMA = 0.9
+#ENV_TYPE = 'cartpole'
+#TASK_NAME = 'swingup'
+#TASK_NAME = 'balance'
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
@@ -271,7 +261,7 @@ if __name__ == '__main__':
             lr = 1.0e-3
             ADAM_BETAS = (0.9, 0.999)
             optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
-            trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, 
+            trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, optimizer, 
                     512, 1.0, 0.05, 0.5, 700, 700, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
                     device, value_coeff, entropy_coeff,
                     agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
@@ -290,10 +280,12 @@ if __name__ == '__main__':
         #different initialization procedures?!
         elif AGENT_TYPE == 'policy':
             if ENV_TYPE == 'walker':
-                agent = PyTorchStateWalkerAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
+                agent = create_dm_walker_agent(PyTorchAgent, device, [1, obs_size], action_size, 
+                        discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True)
             elif ENV_TYPE == 'cartpole':
-                agent = PyTorchStateCartpoleAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
+                agent = create_dm_cartpole_agent(PyTorchAgent, device, [1, obs_size], action_size, 
+                        discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True)
 
             if DISCRETE_AGENT:
@@ -307,12 +299,13 @@ if __name__ == '__main__':
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
             
             optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+            #optimizer = optim.SGD(agent.module.parameters(), lr = lr)
             if TRAINER_TYPE == 'AC':
-                trainer = PyTorchACTrainer(device, value_coeff, entropy_coeff,
+                trainer = PyTorchACTrainer(device, value_coeff, entropy_coeff, ENTROPY_BONUS,
                         agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING) 
             elif TRAINER_TYPE == 'PPO':
-                trainer = PyTorchPPOTrainer(device, value_coeff, entropy_coeff,
+                trainer = PyTorchPPOTrainer(device, value_coeff, entropy_coeff, ENTROPY_BONUS,
                         agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING) 
 
@@ -320,7 +313,7 @@ if __name__ == '__main__':
         if not PRETRAINED:
             ## set up listener for user input
             lock = threading.Lock()
-            console_args = (tmp_env, agent, lock, ENV_TYPE, AGENT_TYPE)
+            console_args = (tmp_env, agent, lock, ENV_TYPE)
             console_thread = threading.Thread(target = console, args = console_args)
             console_thread.daemon = True
             console_thread.start()
@@ -373,16 +366,17 @@ if __name__ == '__main__':
                     plt.subplot(2, 1, 2)
                     plt.ylabel("Net \n Loss")
                     plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.0)
-                    #plt.figure(2)
-                    #plt.clf()
-                    #plt.subplot(2, 1, 1)
-                    #plt.ylabel("Action Loss")
-                    #plt.scatter(range(len(agent.action_loss_history)), [l.numpy()[0] for l in agent.action_loss_history], s=0.1)
-                    #plt.subplot(2, 1, 2)
-                    #plt.ylabel("Value Loss")
-                    #plt.xlabel("Time")
-                    #plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
-                    #plt.draw()
+                    if DISPLAY_AV_LOSS is True:
+                        plt.figure(2)
+                        plt.clf()
+                        plt.subplot(2, 1, 1)
+                        plt.ylabel("Action Loss")
+                        plt.scatter(range(len(agent.action_loss_history)), [l.numpy() for l in agent.action_loss_history], s=0.1)
+                        plt.subplot(2, 1, 2)
+                        plt.ylabel("Value Loss")
+                        plt.xlabel("Time")
+                        plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
+                        plt.draw()
                     plt.pause(0.01)
                 i += 1
         else:

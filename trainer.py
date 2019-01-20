@@ -72,10 +72,12 @@ class Trainer:
 
 
 class PyTorchTrainer(Trainer):
-    def __init__(self, device, value_coeff = 0.1, entropy_coeff = 0.0, *args, **kwargs):
+    def __init__(self, device, value_coeff = 0.1, entropy_coeff = 0.0, 
+            entropy_bonus = False, *args, **kwargs):
         self.device = device
         self.value_coeff = value_coeff
         self.entropy_coeff = entropy_coeff
+        self.entropy_bonus = entropy_bonus
         super(PyTorchTrainer, self).__init__(*args, **kwargs)
 
     def get_discounted_rewards(self, rewards, scale = True) -> torch.tensor:
@@ -140,7 +142,6 @@ class PyTorchACTrainer(PyTorchTrainer):
         #for score in action_score_history:
         #    make_dot(score).view()
         #    input()
-        optimizer.zero_grad()
         if self.max_traj_len > len(action_scores)/self.num_episodes: #if avg episode len < max traj len, run through each episode
             ends = self.get_episode_ends()
             replay_starts = [0]
@@ -162,7 +163,9 @@ class PyTorchACTrainer(PyTorchTrainer):
                 #        % (i, len(action_score_history), len(state_score_history), len(reward_history)))
                 action_score = action_scores[ind]
                 value_score = value_scores[ind] #NOTE: i vs i+1?!
-                advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
+                advantage = R - value_score.detach() #TODO:estimate advantage w/ average disc_reward vs value_scores
+                if self.entropy_bonus:
+                    advantage += self.entropy_coeff * self.agent.policy_entropy_history[ind]
                 if self.agent.discrete:
                     log_prob = action_score.log().max().to(device)
                     action_loss = (-log_prob * advantage).squeeze(0)
@@ -171,16 +174,18 @@ class PyTorchACTrainer(PyTorchTrainer):
                 #make_dot(action_loss).view()
                 #input()
                 value_loss = self.value_coeff * value_criterion(value_score, R) 
-                if self.entropy_coeff > 0.0:
+                if self.entropy_coeff > 0.0 and not self.entropy_bonus:
                     entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
                     #print("Action %s Entropy: %s" % (action_loss, entropy_loss))
-                    action_loss -= entropy_loss #WEIGHTED
+                    #action_loss -= entropy_loss #WEIGHTED
+                    action_loss += entropy_loss #WEIGHTED
                 if self.agent.module.seperate_value_net:
                     pass
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
                 #make_dot(value_loss).view()
                 #input()
-            #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            #torch.nn.utils.clip_grad_norm_(module.parameters(), 10)
+            optimizer.zero_grad() #HAHAHAHA
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
             self.agent.action_loss_history.append(action_loss.cpu().detach())
@@ -249,7 +254,9 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                 R = rewards[ind - start]
                 action_score = action_scores[ind]
                 value_score = value_scores[ind] #NOTE: i vs i+1?!
-                advantage = R - value_score #TODO:estimate advantage w/ average disc_reward vs value_scores
+                advantage = R - value_score.detach() #TODO:estimate advantage w/ average disc_reward vs value_scores
+                if self.entropy_bonus:
+                    advantage += self.entropy_coeff * self.agent.policy_entropy_history[ind]
                 if self.agent.discrete:
                     raise Exception("Hasn't been implemented for PPO")
                     log_prob = action_score.log().max().to(device)
@@ -266,16 +273,18 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                 #make_dot(action_loss).view()
                 #input()
                 value_loss = self.value_coeff * value_criterion(value_score, R) 
-                if self.entropy_coeff > 0.0:
+                if self.entropy_coeff > 0.0 and not self.entropy_bonus:
                     entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
                     #print("Action %s Entropy: %s" % (action_loss, entropy_loss))
-                    action_loss -= entropy_loss #WEIGHTED
+                    #action_loss -= entropy_loss #WEIGHTED
+                    action_loss += entropy_loss #WEIGHTED
                 if self.agent.module.seperate_value_net:
                     pass
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
                 #make_dot(value_loss).view()
                 #input()
-            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            optimizer.zero_grad() #HAHAHAHA
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
             self.agent.action_loss_history.append(action_loss.cpu().detach())
@@ -386,6 +395,7 @@ class PyTorchNeuralDynamicsMPCTrainer(PyTorchTrainer):
             ## Training Step
             print("TRAINING STEP")
             loss = self.dynamic_step_loss(agent, agent.state_history, agent.action_history)
+            optimizer.zero_grad() #HAHAHAHA
             loss.backward(retain_graph = True)
             optimizer.step()
             loss = loss.cpu().detach()

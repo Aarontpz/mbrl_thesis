@@ -368,9 +368,9 @@ class PyTorchAgent(Agent):
 
     def preprocess(self, obs) -> torch.tensor:
         #TODO: add different means of pre-processing
-        self.compute_normalization(obs)
-        if self.obs_mean is not None and self.obs_var is not None:
-            return self.normalize(obs)
+        #self.compute_normalization(obs)
+        #if self.obs_mean is not None and self.obs_var is not None:
+        #    return self.normalize(obs)
         return obs
     
     def clone(self) -> Agent:
