@@ -189,7 +189,7 @@ else:
     replay_iterations = 30 #approximate based on episode length 
 
 LIB_TYPE = 'dm'
-LIB_TYPE = 'gym'
+#LIB_TYPE = 'gym'
 
 AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
@@ -197,19 +197,19 @@ AGENT_TYPE = 'policy'
 EPS = 1.5e-1
 EPS_MIN = 2e-2
 EPS_DECAY = 1e-6
-GAMMA = 0.9
+GAMMA = 0.95
 ENV_TYPE = 'walker'
 TASK_NAME = 'run'
 TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-#EPS = 1e-1
-#EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.9
-#ENV_TYPE = 'cartpole'
-#TASK_NAME = 'swingup'
-#TASK_NAME = 'balance'
+EPS = 1e-1
+EPS_MIN = 2e-2
+EPS_DECAY = 1e-6
+GAMMA = 0.95
+ENV_TYPE = 'cartpole'
+TASK_NAME = 'swingup'
+TASK_NAME = 'balance'
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")

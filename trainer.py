@@ -84,14 +84,16 @@ class PyTorchTrainer(Trainer):
         '''Generate list of discounted rewards. This is an improvement on the previous,
         INCREDIBLY inefficient method of generating discounted rewards previously used.
         Source: https://medium.com/@ts1829/policy-gradient-reinforcement-learning-in-pytorch-df1383ea0baf'''
+        #print("REWARDS BEFORE: ", rewards)
         R = 0
         disc_rewards = []
         for r in rewards[::-1]:
             R = r + self.gamma * R
             disc_rewards.insert(0, R)
-        rewards = torch.FloatTensor(rewards)
+        rewards = torch.FloatTensor(disc_rewards)
         if scale:
             rewards = (rewards - rewards.mean()) / (rewards.std() + np.finfo(np.float32).eps)
+        #print("REWARDS AFTER: ", rewards)
         return rewards
     
     def get_advantage(self, start, end = None) -> torch.tensor: 
@@ -184,7 +186,7 @@ class PyTorchACTrainer(PyTorchTrainer):
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
                 #make_dot(value_loss).view()
                 #input()
-            torch.nn.utils.clip_grad_norm_(module.parameters(), 10)
+            #torch.nn.utils.clip_grad_norm_(module.parameters(), 10)
             optimizer.zero_grad() #HAHAHAHA
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
@@ -283,7 +285,7 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
                 #make_dot(value_loss).view()
                 #input()
-            torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
+            #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             optimizer.zero_grad() #HAHAHAHA
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
