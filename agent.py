@@ -95,12 +95,12 @@ class Agent:
             self.policy_entropy_history.append(self.get_policy_entropy(action_scores))
             return action_scores, value, normal
         if not self.discrete:
-            #print("Action mu: %s Sigma^2: %s" % (action_mu, action_sigma))
-
+            #print("Action mu: %s \nSigma^2: %s" % (action_mu, action_sigma))
             action_covariance = torch.eye(self.action_space, 
                     device = self.device) * action_sigma.to(self.device) #create SPHERICAL covariance
-            action_covariance += torch.eye(self.action_space, device=self.device) * 1e-4
+            #action_covariance += torch.eye(self.action_space, device=self.device) * 1e-2
             action_mu = action_mu.to(self.device) #TODO: this should naturally happen via the MLP
+            #print("Mu: %s \n Covariance: %s\n" % (action_mu, action_covariance))
             normal = torch.distributions.MultivariateNormal(action_mu, action_covariance)
             self.policy_entropy_history.append(self.get_policy_entropy(action_sigma))
             try:
@@ -673,7 +673,7 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
         action_mu = self.action_mu_module(mlp_out) 
         if self.sigma_head:
             action_sigma = self.action_sigma_module(mlp_out)
-            action_sigma = self.action_sigma_softplus(action_sigma) #from 1602.01783 appendix 9
+            action_sigma = self.action_sigma_softplus(action_sigma) + 0.01 #from 1602.01783 appendix 9
         else: #assume sigma is currently zeros
             action_sigma = torch.ones([1, self.action_space], dtype=torch.float32) * 0.0001
         if self.seperate_value_net:
@@ -729,9 +729,10 @@ def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0, action_constrai
                     #action_sigma = np.random.random_integers(1, high = 2, size = (1, self.action_space))
                     #eps_sigma = np.random.uniform(low = 0.01, high = 3.0, size = (1, 1))
                     #action_mu = torch.as_tensor(action_mu).float()
-                    noise = action_sigma.clone().normal_(1, 5)
+                    #noise = action_sigma.clone().uniform_(0, 3)
+                    noise = action_sigma.clone().uniform_(0, 3)
                     #print("Current sigma: ", action_sigma)
-                    action_sigma = torch.abs(action_sigma + noise)
+                    action_sigma += noise
                     #print("New Sigma: %s Eps: %s"%(action_sigma, self.eps))
                 return action_mu, action_sigma, values 
                 raise Exception("Figure this out?")

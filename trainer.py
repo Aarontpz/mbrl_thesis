@@ -20,12 +20,13 @@ class Trainer:
     
     Args: *replay: not None if random trajectory sampling is enabled
     (to reduce variance / biases from starting conditions)'''
-    def __init__(self, agent : Agent, env, optimizer, 
+    def __init__(self, agent : Agent, env, optimizer, scheduler = None,
             replay = 10, max_traj_len = 30, 
             gamma = 0.98, num_episodes = 2, *args, **kwargs):
         self.agent = agent
         self.env = env
         self.opt = optimizer
+        self.scheduler = scheduler
         self.replay = replay
         self.num_episodes = num_episodes
 
@@ -188,6 +189,8 @@ class PyTorchACTrainer(PyTorchTrainer):
                 #input()
             #torch.nn.utils.clip_grad_norm_(module.parameters(), 10)
             optimizer.zero_grad() #HAHAHAHA
+            if self.scheduler is not None:
+                self.scheduler.step()
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
             self.agent.action_loss_history.append(action_loss.cpu().detach())
@@ -287,6 +290,8 @@ class PyTorchPPOTrainer(PyTorchTrainer):
                 #input()
             #torch.nn.utils.clip_grad_norm_(module.parameters(), 5)
             optimizer.zero_grad() #HAHAHAHA
+            if self.scheduler is not None:
+                self.scheduler.step()
             loss.backward(retain_graph = True)
             self.agent.net_loss_history.append(loss.cpu().detach())
             self.agent.action_loss_history.append(action_loss.cpu().detach())

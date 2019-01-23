@@ -101,6 +101,22 @@ def create_gym_walker_agent(agent_base, *args, **kwargs):
             raise Exception("Not implemented for Gym")
     
     return GymWalkerAgent(*args, **kwargs)
+
+
+def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwargs):
+    agent = None
+    if lib_type == 'gym':
+        if env_type == 'walker':
+            return create_gym_walker_agent(agent_base, *args, **kwargs)
+        elif env_type == 'cartpole':
+            return create_gym_cartpole_agent(agent_base, *args, **kwargs)
+    elif lib_type == 'dm':
+        if env_type == 'walker':
+            return create_dm_walker_agent(agent_base, *args, **kwargs)
+        elif env_type == 'cartpole':
+            return create_dm_cartpole_agent(agent_base, *args, **kwargs)
+    return agent
+
 #class TFVisionCartpoleAgent(TFAgent): #but...would we WANT this??
 
 def launch_viewer(env, agent):
@@ -116,7 +132,7 @@ def launch_best_agent(env, agent):
     except: 
         pass
 
-def console(env, agent, lock, env_type = 'walker'):
+def console(env, agent, lock, lib_type = 'dm', env_type = 'walker'):
     #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device("cpu")
     #agent.device = device
@@ -128,12 +144,9 @@ def console(env, agent, lock, env_type = 'walker'):
             if cmd.lower() == 'v': #view with thread locked?
                 print("VIEWING!")
                 ## We create a clone of the agent (to preserve the training agent's history) 
-                if env_type == 'walker':
-                    clone = PyTorchStateWalkerAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
-                            action_constraints = action_constraints, has_value_function = True) 
-                elif env_type == 'cartpole':
-                    clone = PyTorchStateCartpoleAgent(device, [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
-                            action_constraints = action_constraints, has_value_function = True)
+                clone = create_agent(PyTorchAgent, LIB_TYPE, env_type, device, [1, obs_size], 
+                        action_size, discrete_actions = DISCRETE_AGENT, 
+                        action_constraints = action_constraints, has_value_function = True)
                 #clone = agent.clone()
                 clone.module = copy.deepcopy(agent.module)
                 clone.module.to(device)
@@ -151,8 +164,8 @@ VIEW_END = True
 
 mlp_outdim = 200 #based on state size (approximation)
 mlp_hdims = [200] 
-mlp_activations = ['relu', 'relu'] #+1 for outdim activation, remember extra action/value modules
-#mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
+#mlp_activations = ['relu', 'relu'] #+1 for outdim activation, remember extra action/value modules
+mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
 #mlp_outdim = 200 #based on state size (approximation)
 #mlp_hdims = []
 #mlp_activations = ['relu'] #+1 for outdim activation, remember extra action/value modules
@@ -162,12 +175,13 @@ DISCRETE_AGENT = False
 MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
 SMALL_TRAJECTORY_LENGTH = 100
 
-lr = 5.0e-4
+lr = 1.0e-4
 ADAM_BETAS = (0.9, 0.999)
 MOMENTUM = 1e-3
-entropy_coeff = 5e-3
-ENTROPY_BONUS = True
+MOMENTUM = 0
+entropy_coeff = 1e-4
 #entropy_coeff = 0 
+ENTROPY_BONUS = False
 value_coeff = 5e-1
 
 TRAINER_TYPE = 'AC'
@@ -194,22 +208,22 @@ LIB_TYPE = 'dm'
 AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
-EPS = 1.5e-1
+EPS = 0.5e-1
 EPS_MIN = 2e-2
 EPS_DECAY = 1e-6
 GAMMA = 0.95
 ENV_TYPE = 'walker'
 TASK_NAME = 'run'
-TASK_NAME = 'walk'
-TASK_NAME = 'stand'
+#TASK_NAME = 'walk'
+#TASK_NAME = 'stand'
 
-EPS = 1e-1
-EPS_MIN = 2e-2
-EPS_DECAY = 1e-6
-GAMMA = 0.95
-ENV_TYPE = 'cartpole'
-TASK_NAME = 'swingup'
-TASK_NAME = 'balance'
+#EPS = 1e-1
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
+#GAMMA = 0.95
+#ENV_TYPE = 'cartpole'
+#TASK_NAME = 'swingup'
+#TASK_NAME = 'balance'
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
@@ -262,19 +276,16 @@ if __name__ == '__main__':
             #mlp_outdim = 500 #based on state size (approximation)
             mlp_hdims = [500, 500] 
             mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
-            if ENV_TYPE == 'walker':
-                agent = create_dm_walker_agent(PyTorchMPCAgent, NUM_PROCESSES, HORIZON, K_SHOOTS,  #num_processes, #horizon, k_shoots
+            agent = create_agent(PyTorchMPCAgent, LIB_TYPE, ENV_TYPE, 
+                        NUM_PROCESSES, HORIZON, K_SHOOTS,  #num_processes, #horizon, k_shoots
                         device, 
                         [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = False)
+            if ENV_TYPE == 'walker':
                 random_agent = RandomWalkerAgent([1, obs_size], action_size, 
                         discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = False)
             elif ENV_TYPE == 'cartpole':
-                agent = PyTorchMPCCartpoleAgent(NUM_PROCESSES, HORIZON, K_SHOOTS,  #num_processes, #horizon, k_shoots
-                        device, 
-                        [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
-                        action_constraints = action_constraints, has_value_function = False)
                 random_agent = RandomCartpoleAgent([1, obs_size], action_size, 
                         discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = False)
@@ -286,7 +297,7 @@ if __name__ == '__main__':
             lr = 1.0e-3
             ADAM_BETAS = (0.9, 0.999)
             optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
-            trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, optimizer, 
+            trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, optimizer,
                     512, 1.0, 0.05, 0.5, 700, 700, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
                     device, value_coeff, entropy_coeff,
                     agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
@@ -301,21 +312,9 @@ if __name__ == '__main__':
         # to benefit from MPC AND model-free agent sampling, since value functions are ubiquitous
 
         elif AGENT_TYPE == 'policy':
-            if ENV_TYPE == 'walker':
-                if LIB_TYPE == 'dm':
-                    agent = create_dm_walker_agent(PyTorchAgent, device, [1, obs_size], action_size, 
-                            discrete_actions = DISCRETE_AGENT, 
-                            action_constraints = action_constraints, has_value_function = True)
-                elif LIB_TYPE == 'gym':
-                    agent = create_gym_walker_agent(PyTorchAgent, device, [1, obs_size], action_size, 
-                            discrete_actions = DISCRETE_AGENT, 
-                            action_constraints = action_constraints, has_value_function = True)
-
-            elif ENV_TYPE == 'cartpole':
-                agent = create_dm_cartpole_agent(PyTorchAgent, device, [1, obs_size], action_size, 
-                        discrete_actions = DISCRETE_AGENT, 
+            agent = create_agent(PyTorchAgent, LIB_TYPE, ENV_TYPE, device, [1, obs_size], 
+                        action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True)
-
             if DISCRETE_AGENT:
                 mlp_base = PyTorchDiscreteACMLP
             else:
@@ -327,21 +326,25 @@ if __name__ == '__main__':
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
             
             optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
-            #optimizer = optim.SGD(agent.module.parameters(), lr = lr)
+            #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
+            scheduler = None
+            #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 200, gamma = 0.75)
             if TRAINER_TYPE == 'AC':
                 trainer = PyTorchACTrainer(device, value_coeff, entropy_coeff, ENTROPY_BONUS,
-                        agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+                        agent, env, optimizer, scheduler = scheduler, 
+                        replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING) 
             elif TRAINER_TYPE == 'PPO':
                 trainer = PyTorchPPOTrainer(device, value_coeff, entropy_coeff, ENTROPY_BONUS,
-                        agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+                        agent, env, optimizer, scheduler = scheduler,
+                        replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING) 
 
         ## RUN AGENT / TRAINING
         if not PRETRAINED:
             ## set up listener for user input
             lock = threading.Lock()
-            console_args = (tmp_env, agent, lock, ENV_TYPE)
+            console_args = (tmp_env, agent, lock, LIB_TYPE, ENV_TYPE)
             console_thread = threading.Thread(target = console, args = console_args)
             console_thread.daemon = True
             console_thread.start()
