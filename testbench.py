@@ -172,26 +172,24 @@ mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra actio
 mlp_initializer = None
 DISCRETE_AGENT = False
 
-MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
-SMALL_TRAJECTORY_LENGTH = 100
 
 lr = 1.0e-4
 ADAM_BETAS = (0.9, 0.999)
 MOMENTUM = 1e-3
 MOMENTUM = 0
-entropy_coeff = 1e-4
+entropy_coeff = 10e-4
 #entropy_coeff = 0 
 ENTROPY_BONUS = False
 value_coeff = 5e-1
 
-TRAINER_TYPE = 'AC'
-#TRAINER_TYPE = 'PPO'
 
 DISPLAY_HISTORY = True
 DISPLAY_AV_LOSS = False
 
 PRETRAINED = False
 FULL_EPISODE = True
+MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
+SMALL_TRAJECTORY_LENGTH = 100
 
 if FULL_EPISODE:
     max_traj_len = MAXIMUM_TRAJECTORY_LENGTH
@@ -199,7 +197,7 @@ if FULL_EPISODE:
     replay_iterations = EPISODES_BEFORE_TRAINING #approximate based on episode length 
 else:
     max_traj_len = SMALL_TRAJECTORY_LENGTH
-    EPISODES_BEFORE_TRAINING = 20
+    EPISODES_BEFORE_TRAINING = 5
     replay_iterations = 30 #approximate based on episode length 
 
 LIB_TYPE = 'dm'
@@ -207,6 +205,9 @@ LIB_TYPE = 'dm'
 
 AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
+
+TRAINER_TYPE = 'AC'
+TRAINER_TYPE = 'PPO'
 
 EPS = 0.5e-1
 EPS_MIN = 2e-2
@@ -325,18 +326,20 @@ if __name__ == '__main__':
                     device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
             
-            optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
-            #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
+            #optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+            optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
             scheduler = None
-            #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 200, gamma = 0.75)
+            #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 200, gamma = 0.85)
             if TRAINER_TYPE == 'AC':
-                trainer = PyTorchACTrainer(device, value_coeff, entropy_coeff, ENTROPY_BONUS,
-                        agent, env, optimizer, scheduler = scheduler, 
+                trainer = PyTorchACTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS,
+                        device, optimizer, scheduler,   
+                        agent, env, 
                         replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING) 
             elif TRAINER_TYPE == 'PPO':
-                trainer = PyTorchPPOTrainer(device, value_coeff, entropy_coeff, ENTROPY_BONUS,
-                        agent, env, optimizer, scheduler = scheduler,
+                trainer = PyTorchPPOTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, 
+                        device, optimizer, scheduler, 
+                        agent, env, 
                         replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING) 
 
