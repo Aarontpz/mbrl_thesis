@@ -173,18 +173,10 @@ mlp_initializer = None
 DISCRETE_AGENT = False
 
 
-lr = 1.0e-4
-ADAM_BETAS = (0.9, 0.999)
-MOMENTUM = 1e-3
-MOMENTUM = 0
-entropy_coeff = 10e-4
-#entropy_coeff = 0 
-ENTROPY_BONUS = False
-value_coeff = 5e-1
 
 
 DISPLAY_HISTORY = True
-DISPLAY_AV_LOSS = False
+DISPLAY_AV_LOSS = True
 
 PRETRAINED = False
 FULL_EPISODE = True
@@ -207,15 +199,23 @@ AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
 TRAINER_TYPE = 'AC'
-TRAINER_TYPE = 'PPO'
+#TRAINER_TYPE = 'PPO'
+lr = 1.0e-3
+ADAM_BETAS = (0.9, 0.999)
+MOMENTUM = 1e-3
+MOMENTUM = 0
+entropy_coeff = 10e-4
+#entropy_coeff = 0 
+ENTROPY_BONUS = False
+value_coeff = 5e-1
 
 EPS = 0.5e-1
 EPS_MIN = 2e-2
 EPS_DECAY = 1e-6
 GAMMA = 0.95
 ENV_TYPE = 'walker'
-TASK_NAME = 'run'
-#TASK_NAME = 'walk'
+#TASK_NAME = 'run'
+TASK_NAME = 'walk'
 #TASK_NAME = 'stand'
 
 #EPS = 1e-1
@@ -326,10 +326,10 @@ if __name__ == '__main__':
                     device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
             
-            #optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
-            optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
+            optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+            #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
             scheduler = None
-            #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 200, gamma = 0.85)
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
             if TRAINER_TYPE == 'AC':
                 trainer = PyTorchACTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS,
                         device, optimizer, scheduler,   

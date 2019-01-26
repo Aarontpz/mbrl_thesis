@@ -620,6 +620,30 @@ class PyTorchMLP(torch.nn.Module):
             x = self.layers[l](x)
         return x
 
+
+class PyTorchAutoEncoder(torch.nn.Module):
+    pass
+
+class PyTorchUNetEncoder(torch.nn.Module):
+    pass
+
+def PyTorchSAEncoder(encoder_base, forward_state = False, forward_dynamics = False, 
+        linear_forward = False, *args, **kwargs):
+    '''Construct an Autoencoder, encoding State/Action pairs into some space, 
+    and decoding the same state/action pair from that space. 
+    
+    Arguments: 
+        @forward_state: Determines whether or not the autoencoder also outputs
+        x_t+1, computed from the (xt, at).
+        @forward_dynamics: Determines whether or not the autoencoder encodes
+        x_t+1 = xt + f(encoded(xt, at)), the next state is represented as 
+        some additive term.
+        @linear_forward: Imposes a limitation in which the forward_dynamics are
+        computed linearly: x_t+1 = xt + A*encoded_state(xt, at) + B*encoded_action(xt, at)
+        This limitation should be investigated for the potential of imposing linearity on the
+        inner space.'''
+    pass
+
 class PyTorchDiscreteACMLP(PyTorchMLP):
     '''Adds action / value heads to the end of an MLP constructed
     via PyTorchMLP '''

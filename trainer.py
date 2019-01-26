@@ -57,6 +57,10 @@ class Trainer:
             #TODO: consider minimal traj length too?
         return end
 
+    @abc.abstractmethod
+    def compute_action_penalty(self, start):
+        pass
+
     def report(self):
         ''' '''
         pass 
@@ -94,6 +98,18 @@ class PyTorchTrainer(Trainer):
         V_st = self.agent.value_history[start] 
         V_st_k = self.gamma**(end - start) * self.agent.value_history[end]
         return R + V_st_k - V_st
+    
+    def compute_action_penalty(self, ind, R_mat = None):
+        '''Compute additional penalty term (in addition to action, value, entropy losses).
+        In this case, it is a quadratic penalty on the actions selected, in order to penalize 
+        expending too much energy for controls.'''
+        action = self.agent.action_history[ind]
+        action_size = self.agent.action_space
+        if R_mat is None:
+            R_mat = torch.eye(action_size, device = self.device)
+        penalty = torch.matmul(action.unsqueeze(0), R_mat)
+        penalty = torch.matmul(penalty, action.unsqueeze(0).t())
+        return penalty.squeeze(0).squeeze(0)
 
 
 class PyTorchPolicyGradientTrainer(PyTorchTrainer):
@@ -122,22 +138,13 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
         optimizer = self.opt
         action_scores = self.agent.action_score_history
         value_scores = self.agent.value_history
-        #print("A_H len: %s V_H len: %s Reward Len: %s" % (len(action_scores), len(value_scores), len(self.agent.reward_history)))
         assert(len(value_scores) == len(action_scores)) #necessary
-        ## FOR STORING LOSS HISTORIES
         
-        ##
         #TODO: Make this run with mini-batches?!
-        loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        value_criterion = torch.nn.MSELoss()
-        net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        net_value_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         if hasattr(module, 'rec_size') and module.rec_size > 0: 
             #TODO: don't do full FF, to save computations? 
             #compartmentalize .forward()
             module.reset_states(module.batch_size, False) 
-        
-        i = 0
         #for score in action_score_history:
         #    make_dot(score).view()
         #    input()
@@ -152,6 +159,8 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
         for start in replay_starts:
             end = self.get_trajectory_end(start, end = None)
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+            net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+            net_value_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
             rewards = self.get_discounted_rewards(self.agent.reward_history[start:end], scale = True).to(device)
             print("START: %s END: %s" % (start, end))
             for ind in range(start, end): #-1 because terminal state doesn't matter?
@@ -171,12 +180,14 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                     action_loss += entropy_loss #WEIGHTED
                 if self.agent.module.seperate_value_net:
                     pass
+                action_penalty = self.compute_action_penalty(ind)
+                action_loss += action_penalty
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
                 net_action_loss += action_loss
                 net_value_loss += value_loss
                 #make_dot(value_loss).view()
                 #input()
-            #torch.nn.utils.clip_grad_norm_(module.parameters(), 10)
+            torch.nn.utils.clip_grad_norm_(module.parameters(), 100)
             optimizer.zero_grad() #HAHAHAHA
             if self.scheduler is not None:
                 self.scheduler.step()
