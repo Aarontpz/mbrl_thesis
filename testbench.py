@@ -215,8 +215,8 @@ EPS_DECAY = 1e-6
 GAMMA = 0.95
 ENV_TYPE = 'walker'
 #TASK_NAME = 'run'
-TASK_NAME = 'walk'
-#TASK_NAME = 'stand'
+#TASK_NAME = 'walk'
+TASK_NAME = 'stand'
 
 #EPS = 1e-1
 #EPS_MIN = 2e-2

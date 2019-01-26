@@ -19,6 +19,7 @@ class Agent:
     def __init__(self, input_dimensions : [], action_space : int, 
             discrete_actions = True, action_constraints : [] = None, 
             has_value_function = True, terminal_penalty = 0.0, 
+            policy_entropy = True, energy_penalty = True, 
             *args, **kwargs):
         '''Assumes flat action-space vector'''
         self.obs_mean = None
@@ -42,7 +43,11 @@ class Agent:
         self.action_loss_history = []
         self.value_loss_history = []
         self.terminal_history = []
-        self.policy_entropy_history = []
+        
+        if policy_entropy:
+            self.policy_entropy_history = []
+        if energy_penalty:
+            self.energy_history = []
 
         self.has_value_function = has_value_function
         self.value_history = [] #NOTE: this could be None
@@ -102,7 +107,10 @@ class Agent:
             action_mu = action_mu.to(self.device) #TODO: this should naturally happen via the MLP
             #print("Mu: %s \n Covariance: %s\n" % (action_mu, action_covariance))
             normal = torch.distributions.MultivariateNormal(action_mu, action_covariance)
-            self.policy_entropy_history.append(self.get_policy_entropy(action_sigma))
+            if hasattr(self, 'policy_entropy_history'):
+                self.policy_entropy_history.append(self.get_policy_entropy(action_sigma))
+            if hasattr(self, 'energy_history'):
+                self.energy_history.append(self.get_energy_penalty(action_mu, R_mat = None))
             try:
                 action = normal.sample()
             except: #resample
@@ -164,6 +172,10 @@ class Agent:
     def get_policy_entropy(self, s):
         pass
 
+    @abc.abstractmethod
+    def get_energy_penalty(self, a, R_mat = None):
+        pass
+    
     @abc.abstractmethod
     def transform_observation(self, obs, target_size = None, normalize_pixels = True, **kwargs) -> np.ndarray:
         if type(obs) is list:
@@ -355,6 +367,17 @@ class PyTorchAgent(Agent):
             # s, in this case, is SIGMA    
             entropy = -0.5 * (torch.log(2*math.pi*s)+1)
             return entropy.squeeze(0)
+
+    def get_energy_penalty(self, a, R_mat = None):
+        '''Use policy network mu term to compute quadratic penalty
+        associated with 'energy' expended in action a. (aT * R * a)'''
+        action_size = self.action_space
+        if R_mat is None:
+            R_mat = torch.eye(action_size, device = self.device)
+        penalty = torch.matmul(a.unsqueeze(0), R_mat)
+        penalty = torch.matmul(penalty, a.unsqueeze(0).t())
+        return penalty.squeeze(0).squeeze(0)
+
 
     def compute_normalization(self, obs):
         last_mean = self.obs_mean.clone()
@@ -621,13 +644,19 @@ class PyTorchMLP(torch.nn.Module):
         return x
 
 
-class PyTorchAutoEncoder(torch.nn.Module):
+class PyTorchAutoencoder(torch.nn.Module):
+    def __init__(self, encoder_layers = 3, decoder_layers = 3, ):
+        pass
+
+class PyTorchUnetEncoder(torch.nn.Module):
     pass
 
-class PyTorchUNetEncoder(torch.nn.Module):
+class PyTorchLinearAutoencoder(PyTorchAutoencoder):
+    pass
+class PyTorchLinearUnetEncoder(PyTorchUnetEncoder):
     pass
 
-def PyTorchSAEncoder(encoder_base, forward_state = False, forward_dynamics = False, 
+def PyTorchLinearSAEncoder(encoder_base, forward_state = False, forward_dynamics = False, 
         linear_forward = False, *args, **kwargs):
     '''Construct an Autoencoder, encoding State/Action pairs into some space, 
     and decoding the same state/action pair from that space. 

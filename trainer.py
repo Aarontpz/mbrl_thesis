@@ -99,19 +99,6 @@ class PyTorchTrainer(Trainer):
         V_st_k = self.gamma**(end - start) * self.agent.value_history[end]
         return R + V_st_k - V_st
     
-    def compute_action_penalty(self, ind, R_mat = None):
-        '''Compute additional penalty term (in addition to action, value, entropy losses).
-        In this case, it is a quadratic penalty on the actions selected, in order to penalize 
-        expending too much energy for controls.'''
-        action = self.agent.action_history[ind]
-        action_size = self.agent.action_space
-        if R_mat is None:
-            R_mat = torch.eye(action_size, device = self.device)
-        penalty = torch.matmul(action.unsqueeze(0), R_mat)
-        penalty = torch.matmul(penalty, action.unsqueeze(0).t())
-        return penalty.squeeze(0).squeeze(0)
-
-
 class PyTorchPolicyGradientTrainer(PyTorchTrainer):
     def __init__(self, value_coeff = 0.1, entropy_coeff = 0.0, 
             entropy_bonus = False, *args, **kwargs):
@@ -168,11 +155,6 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                 #    obs = get_observation_tensor(state_history[i])
                 #    _ = module.forward(obs)
                 R = rewards[ind - start]
-                action_score = action_scores[ind]
-                value_score = value_scores[ind] #NOTE: i vs i+1?!
-                advantage = R - value_score.detach() #TODO:estimate advantage w/ average disc_reward vs value_scores
-                #make_dot(action_loss).view()
-                #input()
                 action_loss = self.compute_action_loss(R, ind)
                 value_loss = self.compute_value_loss(R, ind)
                 if self.entropy_coeff > 0.0 and not self.entropy_bonus:
@@ -180,12 +162,14 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                     action_loss += entropy_loss #WEIGHTED
                 if self.agent.module.seperate_value_net:
                     pass
-                action_penalty = self.compute_action_penalty(ind)
+                if hasattr(self.agent, 'energy_history'):
+                    action_penalty = self.agent.energy_history[ind]
+                #print("Action penalty: ", action_penalty)
                 action_loss += action_penalty
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
                 net_action_loss += action_loss
                 net_value_loss += value_loss
-                #make_dot(value_loss).view()
+                #make_dot(action_penalty).view()
                 #input()
             torch.nn.utils.clip_grad_norm_(module.parameters(), 100)
             optimizer.zero_grad() #HAHAHAHA
