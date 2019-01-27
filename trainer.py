@@ -101,10 +101,11 @@ class PyTorchTrainer(Trainer):
     
 class PyTorchPolicyGradientTrainer(PyTorchTrainer):
     def __init__(self, value_coeff = 0.1, entropy_coeff = 0.0, 
-            entropy_bonus = False, *args, **kwargs):
+            entropy_bonus = False, energy_coeff = 0.0, *args, **kwargs):
         self.value_coeff = value_coeff
         self.entropy_coeff = entropy_coeff
         self.entropy_bonus = entropy_bonus
+        self.energy_coeff = energy_coeff
         super(PyTorchPolicyGradientTrainer, self).__init__(*args, **kwargs)
 
     @abc.abstractmethod
@@ -164,14 +165,14 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                     pass
                 if hasattr(self.agent, 'energy_history'):
                     action_penalty = self.agent.energy_history[ind]
-                #print("Action penalty: ", action_penalty)
-                action_loss += action_penalty
+                    #print("Action penalty: ", action_penalty)
+                    #make_dot(action_penalty).view()
+                    #input()
+                    action_loss += self.energy_coeff * action_penalty
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
                 net_action_loss += action_loss
                 net_value_loss += value_loss
-                #make_dot(action_penalty).view()
-                #input()
-            torch.nn.utils.clip_grad_norm_(module.parameters(), 100)
+            #torch.nn.utils.clip_grad_norm_(module.parameters(), 100)
             optimizer.zero_grad() #HAHAHAHA
             if self.scheduler is not None:
                 self.scheduler.step()

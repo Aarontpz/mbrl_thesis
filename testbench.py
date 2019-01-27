@@ -208,6 +208,7 @@ entropy_coeff = 10e-4
 #entropy_coeff = 0 
 ENTROPY_BONUS = False
 value_coeff = 5e-1
+energy_penalty_coeff = 5e-2
 
 EPS = 0.5e-1
 EPS_MIN = 2e-2
@@ -215,16 +216,16 @@ EPS_DECAY = 1e-6
 GAMMA = 0.95
 ENV_TYPE = 'walker'
 #TASK_NAME = 'run'
-#TASK_NAME = 'walk'
-TASK_NAME = 'stand'
+TASK_NAME = 'walk'
+#TASK_NAME = 'stand'
 
-#EPS = 1e-1
-#EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.95
-#ENV_TYPE = 'cartpole'
-#TASK_NAME = 'swingup'
-#TASK_NAME = 'balance'
+EPS = 0.5e-1
+EPS_MIN = 2e-2
+EPS_DECAY = 1e-6
+GAMMA = 0.95
+ENV_TYPE = 'cartpole'
+TASK_NAME = 'swingup'
+TASK_NAME = 'balance'
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
@@ -315,7 +316,9 @@ if __name__ == '__main__':
         elif AGENT_TYPE == 'policy':
             agent = create_agent(PyTorchAgent, LIB_TYPE, ENV_TYPE, device, [1, obs_size], 
                         action_size, discrete_actions = DISCRETE_AGENT, 
-                        action_constraints = action_constraints, has_value_function = True)
+                        action_constraints = action_constraints, has_value_function = True,
+                        terminal_penalty = 0.0, 
+                        policy_entropy_history = True, energy_penalty_history = True)
             if DISCRETE_AGENT:
                 mlp_base = PyTorchDiscreteACMLP
             else:
@@ -331,13 +334,13 @@ if __name__ == '__main__':
             scheduler = None
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
             if TRAINER_TYPE == 'AC':
-                trainer = PyTorchACTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS,
+                trainer = PyTorchACTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, energy_penalty_coeff,
                         device, optimizer, scheduler,   
                         agent, env, 
                         replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING) 
             elif TRAINER_TYPE == 'PPO':
-                trainer = PyTorchPPOTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, 
+                trainer = PyTorchPPOTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, energy_penalty_coeff,
                         device, optimizer, scheduler, 
                         agent, env, 
                         replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,

@@ -136,7 +136,10 @@ class Agent:
         self.reward_history = []
         self.terminal_history = []
         self.value_history = []
-        self.policy_entropy_history = []
+        if hasattr(self, 'policy_entropy_history'):
+            self.policy_entropy_history = []
+        if hasattr(self, 'energy_history'):
+            self.energy_history = []
 
     def sample_action(self, obs) -> np.ndarray:
         if self.discrete:
@@ -644,24 +647,97 @@ class PyTorchMLP(torch.nn.Module):
         return x
 
 
-class PyTorchAutoencoder(torch.nn.Module):
-    def __init__(self, encoder_layers = 3, decoder_layers = 3, ):
-        pass
+class PyTorchLinearAutoencoder(torch.nn.Module):
+    def __init__(self, indim, device, depth, activations : [] = [], encoded_activations = [], 
+            reduction_factor = 0.75):
+        '''Arguments:
+            @activations: Determines the activations at each layer (?except the first and last layer?).
+            @Depth: Determines the number of layers in the encoder / decoder layer.
+            @Reduction_factor: Determines how much smaller / larger each layer is from the last. This
+            also informs the size of the encoded space, which equals indim * floor((factor)^depth)'''
+        self.activations = activations
+        self.encoded_activations = encoded_activations
+        self.encoded_space = indim * math.floor(reduction ** depth)
+        self.depth = depth
+        self.reduction = reduction_factor
+        self.device = device
+        self.indim = indim
+        #assert(len(activations) == len(encoder_layers + decoder_layers) + 1)
+        
+        layers = []
+        prev_size = indim
+        ## create encoder
+        for i in range(depth):
+            size = math.floor(prev_size * self.reduction) 
+            linear = torch.nn.Linear(prev_size, size, bias = True)
+            layers.append(linear)
+            functions = activations if i < depth - 1 else encoded_activations
+            for a in functions:
+                if a == 'relu':
+                    layers.append(torch.nn.LeakyReLU())
+                elif a == 'sig':
+                    layers.append(torch.nn.Sigmoid())
+            prev_size = size
+        self.encoder = torch.nn.ModuleList(layers)
+        ##create decoder
+        layers = []
+        for i in range(depth):
+            size = math.floor(prev_size / self.reduction) 
+            linear = torch.nn.Linear(prev_size, size, bias = True)
+            layers.append(linear)
+            functions = activations if i < depth - 1 else encoded_activations
+            for a in activations:
+                if a == 'relu':
+                    layers.append(torch.nn.LeakyReLU())
+                elif a == 'sig':
+                    layers.append(torch.nn.Sigmoid())
+            prev_size = size
+        self.decoder = torch.nn.ModuleList(layers)
+    
+    def encode(self, x):
+        for l in range(len(self.encoder)):
+            x = self.encoder[l](x)
+        return x
 
-class PyTorchUnetEncoder(torch.nn.Module):
-    pass
+    def decode(self, x):
+        assert(x.size == self.encoded_space)
+        for l in range(len(self.decoder)):
+            x = self.decoder[l](x)
+        return x
 
-class PyTorchLinearAutoencoder(PyTorchAutoencoder):
-    pass
-class PyTorchLinearUnetEncoder(PyTorchUnetEncoder):
-    pass
+    def forward(self, x):
+        encoded = self.encode(x)
+        decoded = self.decode(encoded)
+        return decoded
+            
 
-def PyTorchLinearSAEncoder(encoder_base, forward_state = False, forward_dynamics = False, 
-        linear_forward = False, *args, **kwargs):
+
+class PyTorchLinearUnetEncoder(torch.nn.Module):
+    def __init__(self, indim, device, depth, activations : [] = [], encoded_activations = [], 
+            reduction_factor = 0.75):
+        '''Arguments:
+            @activations: Determines the activations at each layer (?except the first and last layer?).
+            @Depth: Determines the number of layers in the encoder / decoder layer.
+            @Reduction_factor: Determines how much smaller / larger each layer is from the last. This
+            also informs the size of the encoded space, which equals indim * floor((factor)^depth)'''
+        self.activations = activations
+        self.encoded_activations = encoded_activations
+        self.encoded_space = indim * math.floor(reduction ** depth)
+        self.depth = depth
+        self.reduction = reduction_factor
+        self.device = device
+        self.indim = indim
+        #assert(len(activations) == len(encoder_layers + decoder_layers) + 1)
+
+def LinearSAAutoencoder(encoder_base, state_size, action_size, forward_mlp,
+        coupled_sa = False,
+        forward_dynamics = False, *args, **kwargs):
     '''Construct an Autoencoder, encoding State/Action pairs into some space, 
     and decoding the same state/action pair from that space. 
     
     Arguments: 
+        @coupled_sa: Indicates whether or not the State/Action encoding should be
+        coupled or decoupled. 
         @forward_state: Determines whether or not the autoencoder also outputs
         x_t+1, computed from the (xt, at).
         @forward_dynamics: Determines whether or not the autoencoder encodes
@@ -671,7 +747,76 @@ def PyTorchLinearSAEncoder(encoder_base, forward_state = False, forward_dynamics
         computed linearly: x_t+1 = xt + A*encoded_state(xt, at) + B*encoded_action(xt, at)
         This limitation should be investigated for the potential of imposing linearity on the
         inner space.'''
-    pass
+    class PyTorchLinearSAAutoencoder(encoder_base):
+        def __init__(self, state_size, action_size, forward_mlp, 
+                coupled_sa = False, forward_dynamics = False, 
+                *args, **kwargs):
+            self.forward_state = forward_state
+            self.forward_dynamics = forward_dynamics
+            self.coupled_sa = coupled_sa
+
+            self.action_size = action_size
+            self.state_size = state_size
+            
+            indim = state_size if not coupled_sa else state_size + action_size
+            if coupled_sa:
+                super().__init__(indim, *args, **kwargs)
+            else:
+                super().__init__(state_size, *args, **kwargs) #treat encode, decode as SPECIFICALLY for state
+                self.action_ae = encoder_base(action_size, *args, **kwargs) #create identical second encoder for actions
+            
+            self.forward_mlp = forward_mlp #LINEAR MLP structure if the desire is to constrain encoded space to linear function
+             
+
+        def forward(self, s, a):
+            if self.coupled_sa:
+                inp = torch.cat((st, at), 0) 
+                decoded = super().forward(inp)
+                #seperate s / a
+                s, a = self.separate_decoded(decoded)
+            else:
+                decoded_state = super().forward(s)
+                decoded_action = self.action_ae(a)
+            return decoded_state, decoded_action    
+
+        def separate_encoded(self, e):
+            assert(self.coupled_sa)
+
+        def separate_decoded(self, d):
+            assert(self.coupled_sa)
+
+        def forward_encode(self, s, a):
+            '''Maps ENCODED s / a to an ENCODED s_t+1.'''
+            if self.couple_sa:
+                inp = torch.cat((s_, a_), 0) 
+                encoded = super().encode(inp)
+                s_, a_ = self.separate_encoded(encoded) 
+            else:
+                s_ = super().encode(s)
+                a_ = self.action_ae.encode(a)
+            inp = torch.cat((s_, a_), 0) 
+            f = self.forward_mlp(f) 
+            if self.forward_dynamics:
+                return s_ + f
+            else:
+                return f
+
+        def forward_predict(self, s, a):
+            '''Maps full s/a to s_t+1 (not encoded s_t+1)'''
+            f = self.forward_encode(s, a)      
+            if self.couple_sa:
+                decoded = self.decode(f, a)
+                s_d, a_d = self.separate_decoded(decoded)
+                return s_d
+            else:
+                decoded_state = super().decode(f)
+                return decoded_state
+
+    return PyTorchLinearSAAutoencoder(state_size, action-size, 
+            forward_mlp, coupled_sa, forward_dynamics,
+            *args, **kwargs)
+
+
 
 class PyTorchDiscreteACMLP(PyTorchMLP):
     '''Adds action / value heads to the end of an MLP constructed
