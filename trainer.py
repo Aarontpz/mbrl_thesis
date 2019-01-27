@@ -60,11 +60,50 @@ class Trainer:
     @abc.abstractmethod
     def compute_action_penalty(self, start):
         pass
-
+    @abc.abstractmethod
     def report(self):
         ''' '''
         pass 
 
+class Dataset:
+    '''By default Dataset acts as if it is storing samples from an MDP'''
+    def __init__(self, aggregate_examples = False, shuffle = True):
+        self.samples = []
+        self.aggregate_examples = aggregate_examples
+        self.shuffle = shuffle
+
+        self.ind = 0
+    
+    def sample(self, batch_size = None):
+        batch = None
+        if batch_size == None:
+            batch_size = 0
+        if self.shuffle:
+            batch = random.sample(self.samples, batch_size + 1)  
+        else:
+            batch = self.samples[self.ind + batch_size]
+            self.ind += batch_size
+        return batch
+        
+
+    def trainer_step(self, trainer):
+        samples = []
+        sample = []
+        agent = trainer.agent
+        for i in range(len(agent.reward_history) - 1): #-1 for terminal state
+            sample.append(agent.state_history[i])
+            sample.append(agent.action_history[i])
+            sample.append(agent.reward_history[i])
+            sample.append(agent.state_history[i+1])
+            samples.append(sample)
+            sample = []
+        if self.aggregate_examples:
+            self.samples.extend(samples)
+        else:
+            self.samples = samples
+
+    def get_sample_structure(self) -> str:
+        return 'sk, ak, rk, sk+1'
 
 
 class PyTorchTrainer(Trainer):
@@ -233,6 +272,121 @@ class PyTorchPPOTrainer(PyTorchPolicyGradientTrainer):
         value_loss = self.value_coeff * value_criterion(value_score, R) 
         return value_loss
 
+    def __init__(self, device, optimizer, scheduler = None, *args, **kwargs):
+        self.device = device
+        self.opt = optimizer
+        self.scheduler = scheduler
+        super(PyTorchTrainer, self).__init__(*args, **kwargs)
+
+class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
+    def __init__(self, autoencoder, dataset, batch_size = 64, train_forward = True, 
+            train_action = True,
+            *args, **kwargs):
+        super(PyTorchSAAutoencoderTrainer, self).__init__(*args, **kwargs)
+        self._dataset = None
+        self.dataset = dataset
+        self.autoencoder = autoencoder
+        self.batch_size = batch_size
+
+        self.train_forward = train_forward
+        self.train_action = train_action
+        
+        self.net_loss_history = []
+        self.encoder_loss_history = []
+        self.forward_loss_history = []
+
+    @property
+    @abc.abstractmethod
+    def dataset(self):
+        return self._dataset
+
+    @dataset.setter
+    @abc.abstractmethod
+    def dataset(self, d):
+        self._dataset = d
+   
+    def get_sample_s(self, s):
+        return s[0]
+    def get_sample_a(self, s):
+        return s[1]
+    def get_sample_r(self, s):
+        return s[2]
+    def get_sample_s_(self, s):
+        return s[3]
+
+    def step(self):
+        super().step()
+        requires_grad = True
+        reward = None
+        ## Porting this function into the ACTrainer class
+        module = self.autoencoder
+        autoencoder = self.autoencoder
+        #YAY REFERENCES
+        device = self.device
+        optimizer = self.opt
+        dataset = self.dataset
+        
+        #TODO: Make this run with mini-batches?!
+        if hasattr(module, 'rec_size') and module.rec_size > 0: 
+            #TODO: don't do full FF, to save computations? 
+            #compartmentalize .forward()
+            module.reset_states(module.batch_size, False) 
+        #for score in action_score_history:
+        #    make_dot(score).view()
+        #    input()
+        dataset.trainer_step(self) 
+        loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+        net_autoencoder_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        net_forward_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        
+        autoencoder_criterion = torch.nn.MSELoss()
+        forward_criterion = torch.nn.MSELoss()
+        for r in range(self.replay):
+            sample = dataset.sample(self.batch_size) 
+            for i in range(len(sample)):
+                s = self.get_sample_s(sample[i])
+                a = self.get_sample_a(sample[i])
+                r = self.get_sample_r(sample[i])
+                s_ = self.get_sample_s_(sample[i])
+                #print('s: %s \n a: %s \n r: %s \n s_: %s' % (s, a, r, s_))
+                decoded_state, decoded_action = autoencoder.forward(s, a)
+                forward = autoencoder.forward_predict(s, a)
+                autoencoder_state_loss = autoencoder_criterion(s, decoded_state)
+                autoencoder_action_loss = autoencoder_criterion(a, decoded_action)
+                forward_loss = forward_criterion(s_, forward)
+                loss += autoencoder_state_loss
+                if self.train_action:
+                    loss += autoencoder_action_loss
+                if self.train_forward:
+                    loss += forward_loss
+                net_autoencoder_loss += autoencoder_state_loss
+                if self.train_action:
+                    net_autoencoder_loss += autoencoder_action_loss
+                net_forward_loss += forward_loss
+            #torch.nn.utils.clip_grad_norm_(module.parameters(), 100)
+        optimizer.zero_grad() #HAHAHAHA
+        if self.scheduler is not None:
+            self.scheduler.step()
+        loss.backward(retain_graph = True)
+        self.net_loss_history.append(loss.cpu().detach())
+        self.encoder_loss_history.append(net_autoencoder_loss.cpu().detach())
+        self.forward_loss_history.append(net_forward_loss.cpu().detach())
+        optimizer.step()
+
+    def plot_loss_histories(self):
+        plt.figure(5)
+        plt.subplot(2, 1, 1)
+        plt.title("Autoencoder Loss and Autoencoded-Forward-Loss History")
+        plt.xlim(0, len(self.encoder_loss_history))
+        plt.ylim(0, max(self.encoder_loss_history)+1)
+        plt.ylabel("Net \n Autoencoder Loss")
+        plt.scatter(range(len(self.encoder_loss_history)), [r.numpy()[0] for r in self.encoder_loss_history], s=1.0)
+        plt.subplot(2, 1, 2)
+        plt.ylabel("Net \n Forward")
+        plt.xlim(0, len(self.forward_loss_history))
+        plt.ylim(0, max(self.forward_loss_history)+1)
+        plt.scatter(range(len(self.forward_loss_history)), [r.numpy()[0] for r in self.forward_loss_history], s=1.0)
+        plt.pause(0.01)
 
 class PyTorchPreTrainer(PyTorchTrainer):
     def __init__(self, trainer, *args, **kwargs):

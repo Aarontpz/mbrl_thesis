@@ -162,10 +162,10 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-mlp_outdim = 200 #based on state size (approximation)
-mlp_hdims = [200] 
+#mlp_outdim = 200 #based on state size (approximation)
+#mlp_hdims = [200] 
 #mlp_activations = ['relu', 'relu'] #+1 for outdim activation, remember extra action/value modules
-mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
+#mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
 #mlp_outdim = 200 #based on state size (approximation)
 #mlp_hdims = []
 #mlp_activations = ['relu'] #+1 for outdim activation, remember extra action/value modules
@@ -191,6 +191,10 @@ else:
     max_traj_len = SMALL_TRAJECTORY_LENGTH
     EPISODES_BEFORE_TRAINING = 5
     replay_iterations = 30 #approximate based on episode length 
+
+
+
+
 
 LIB_TYPE = 'dm'
 #LIB_TYPE = 'gym'
@@ -249,7 +253,6 @@ if __name__ == '__main__':
         print("Agent IS: Discrete: %s; Traj Length: %s; Replays: %s" % (DISCRETE_AGENT,
             max_traj_len, replay_iterations))
         print("Trainer Type: %s" % (TRAINER_TYPE))
-        print("MLP ACTIVATIONS: ", mlp_activations)
     elif LIB_TYPE == 'gym':
         if ENV_TYPE == 'walker':
             env_string = 'Walker2d-v2'    
@@ -314,6 +317,12 @@ if __name__ == '__main__':
         # to benefit from MPC AND model-free agent sampling, since value functions are ubiquitous
 
         elif AGENT_TYPE == 'policy':
+            mlp_indim = obs_size
+            mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
+            mlp_hdims = [mlp_indim * 5, ] 
+            mlp_outdim = mlp_indim * 5 #based on state size (approximation)
+            print("MLP INDIM: %s HDIM: %s OUTDIM: %s " % (obs_size, mlp_hdims, mlp_outdim))
+            print("MLP ACTIVATIONS: ", mlp_activations)
             agent = create_agent(PyTorchAgent, LIB_TYPE, ENV_TYPE, device, [1, obs_size], 
                         action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True,
@@ -345,6 +354,60 @@ if __name__ == '__main__':
                         agent, env, 
                         replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING) 
+            
+            ## Autoencoder addition
+            TRAIN_AUTOENCODER = True
+            autoencoder_base = PyTorchLinearAutoencoder
+            autoencoder = None
+            autoencoder_trainer = None
+            AE_BATCHES = 64
+            #AE_BATCHES = None
+            TRAIN_FORWARD = True
+            TRAIN_ACTION = True
+
+            mlp_outdim = None
+            DEPTH = 3
+            REDUCTION_FACTOR = 0.8
+            COUPLED_SA = True
+            FORWARD_DYNAMICS = False #False reflects potential for linear transformation
+            LINEAR_FORWARD = False
+            AE_ACTIVATIONS = ['relu']
+            ENCODED_ACTIVATIONS = []
+
+
+            mlp_indim = math.floor((obs_size + action_size) * REDUCTION_FACTOR**DEPTH)  
+            #TODO: ^ this works...in both cases (coupled_sa or not)
+            mlp_outdim = obs_size * (REDUCTION_FACTOR**DEPTH)
+            mlp_hdims = [mlp_indim * 5, mlp_indim * 5,] 
+            mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
+            print("FORWARD MLP !!!")
+            if LINEAR_FORWARD:
+                raise Exception("Reduce to the sum of TWO matrices representing \
+                        Ax + Bu where x=state and u=action")
+                forward_mlp = PyTorchMLP(device, mlp_indim, mlp_outdim, 
+                        hdims = mlp_hdims, activations = mlp_activations, 
+                        initializer = mlp_initializer).to(device)
+            else:
+                forward_mlp = PyTorchMLP(device, mlp_indim, math.floor(mlp_outdim), 
+                        hdims = mlp_hdims, activations = mlp_activations, 
+                        initializer = mlp_initializer).to(device)   
+
+            print("AUTOENCODER !!!")
+            if TRAIN_AUTOENCODER == True:
+
+                AUTOENCODER_DATASET = Dataset(aggregate_examples = False, shuffle = True)
+                #AUTOENCODER_DATASET = DAggerDataset()
+                autoencoder = LinearSAAutoencoder(autoencoder_base, 
+                        obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
+                        device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR)
+                autoencoder_trainer = PyTorchSAAutoencoderTrainer(
+                        autoencoder, AUTOENCODER_DATASET, AE_BATCHES, TRAIN_FORWARD, TRAIN_ACTION,
+                        device, optimizer, scheduler, 
+                        agent, env, 
+                        replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+                        num_episodes = EPISODES_BEFORE_TRAINING)
+                
+
 
         ## RUN AGENT / TRAINING
         if not PRETRAINED:
@@ -389,6 +452,9 @@ if __name__ == '__main__':
                 if not PRETRAINED:
                     trainer.step()
                     print("Agent Net Loss: ", agent.net_loss_history[i])
+                if TRAIN_AUTOENCODER:
+                    autoencoder_trainer.step()
+                    autoencoder_trainer.plot_loss_histories()
 
                 agent.reset_histories()
                 print("Agent Net Reward: ", agent.net_reward_history[i])
