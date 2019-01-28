@@ -223,12 +223,12 @@ ENV_TYPE = 'walker'
 TASK_NAME = 'walk'
 #TASK_NAME = 'stand'
 
-EPS = 0.5e-1
-EPS_MIN = 2e-2
-EPS_DECAY = 1e-6
-GAMMA = 0.95
-ENV_TYPE = 'cartpole'
-TASK_NAME = 'swingup'
+#EPS = 0.5e-1
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
+#GAMMA = 0.95
+#ENV_TYPE = 'cartpole'
+#TASK_NAME = 'swingup'
 #TASK_NAME = 'balance'
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
@@ -427,7 +427,11 @@ if __name__ == '__main__':
                             action_bias = True, value_bias = True, sigma_head = True, 
                             device = device, indim = mlp_indim, outdim = action_size, hdims = mlp_hdims,
                             activations = mlp_activations, initializer = mlp_initializer).to(device)
+                    agent.encode_inputs = True
+                    agent.encoder = autoencoder
                     print("Module: ", agent.module)
+                else:
+                    agent.encode_inputs = False
 
         ## RUN AGENT / TRAINING
         if not PRETRAINED:
@@ -450,13 +454,7 @@ if __name__ == '__main__':
                                 reward = 0.0
                             #print("TIMESTEP %s: %s" % (step, timestep))
                             observation = timestep.observation
-                            if PREAGENT and not COUPLED_SA:
-                                obs = agent.transform_observation(observation).to(device)
-                                encoded = autoencoder.encode(obs) #encode only state -> state'
-                                #print("ENCODED: ", encoded)
-                                action = agent.step(encoded, transform = False).cpu().numpy()
-                            else:
-                                action = agent.step(observation).cpu().numpy()
+                            action = agent.step(observation).cpu().numpy()
                             #print("Observation: ", observation)
                             #action = agent(timestep)
                             #print("Action: ", action)
@@ -468,11 +466,7 @@ if __name__ == '__main__':
                         env.reset()
                         observation, reward, done, info = env.step(env.action_space.sample())
                         while not done and step < MAX_TIMESTEPS:
-                            if PREAGENT and not COUPLED_SA:
-                                encoded = autoencoder.encode(observation) #encode only state -> state'
-                                action = agent.step(encoded).cpu().numpy()
-                            else:
-                                action = agent.step(observation).cpu().numpy()
+                            action = agent.step(observation).cpu().numpy()
                             env.render()
                             observation, reward, done, info = env.step(action)
                             agent.store_reward(reward)

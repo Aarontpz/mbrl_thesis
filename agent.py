@@ -20,6 +20,7 @@ class Agent:
             discrete_actions = True, action_constraints : [] = None, 
             has_value_function = True, terminal_penalty = 0.0, 
             policy_entropy = True, energy_penalty = True, 
+            encode_inputs = False, encoder = None, 
             *args, **kwargs):
         '''Assumes flat action-space vector'''
         self.obs_mean = None
@@ -49,6 +50,9 @@ class Agent:
         if energy_penalty:
             self.energy_history = []
 
+        self.encode_inputs = encode_inputs
+        self.encoder = encoder
+
         self.has_value_function = has_value_function
         self.value_history = [] #NOTE: this could be None
 
@@ -65,7 +69,8 @@ class Agent:
     @abc.abstractmethod
     def step(self, obs, *args, **kwargs) -> np.array:
         self.steps += 1
-        self.state_history.append(obs)
+        if not self.encode_inputs: #otherwise, obs is already encoded...
+            self.state_history.append(obs)
         self.terminal_history.append(0)
         action, value, normal = self.evaluate(obs, *args, **kwargs) #action may be ONE SHOT or continuous, values may be None
         self.action_history.append(action)
@@ -178,7 +183,12 @@ class Agent:
     @abc.abstractmethod
     def get_energy_penalty(self, a, R_mat = None):
         pass
-    
+
+    @abc.abstractmethod
+    def encode_input(self, inp):
+        '''Project / encode the input to some alternative space (as a preprocessing method)'''
+        pass
+
     @abc.abstractmethod
     def transform_observation(self, obs, target_size = None, normalize_pixels = True, **kwargs) -> np.ndarray:
         if type(obs) is list:
@@ -337,6 +347,12 @@ class PyTorchAgent(Agent):
         #print("PyTorch Step")
         if transform:
             obs = self.transform_observation(obs).to(self.device)
+        if self.encode_inputs:
+            self.state_history.append(obs) #store ORIGINAL observation
+            obs = self.encode_input(obs)
+            detach = True
+            if detach:
+                obs = obs.detach()
         return super(PyTorchAgent, self).step(obs)
    
     def evaluate(self, obs, *args, **kwargs) -> torch.tensor:
@@ -382,6 +398,9 @@ class PyTorchAgent(Agent):
         penalty = torch.matmul(penalty, a.unsqueeze(0).t())
         return penalty.squeeze(0).squeeze(0)
 
+    def encode_input(self, inp):
+        encoded = self.encoder.encode(inp) 
+        return encoded
 
     def compute_normalization(self, obs):
         last_mean = self.obs_mean.clone()
@@ -711,6 +730,8 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
         return x
 
     def decode(self, x):
+        #print("Inp: ", len(x))
+        #print("Encoded: ", self.encoded_space)
         if len(self.decoder) > 0:
             assert(len(x) == self.encoded_space)
             for l in range(len(self.decoder)):
