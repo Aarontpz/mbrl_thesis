@@ -328,14 +328,15 @@ class PyTorchAgent(Agent):
         self.obs_mean = torch.zeros(self.input_dimensions).to(device)
         self.obs_var = torch.zeros(self.input_dimensions).to(device)
 
-    def step(self, obs) -> np.ndarray:
+    def step(self, obs, transform = True) -> np.ndarray:
         '''Transforms observation, stores relevant data in replay buffers, then
         outputs action. 
         
         Outputs as np.ndarray because that's what the environment
         needs'''
         #print("PyTorch Step")
-        obs = self.transform_observation(obs).to(self.device)
+        if transform:
+            obs = self.transform_observation(obs).to(self.device)
         return super(PyTorchAgent, self).step(obs)
    
     def evaluate(self, obs, *args, **kwargs) -> torch.tensor:
@@ -662,6 +663,7 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
         self.reduction = reduction_factor
         self.encoded_space = math.floor(indim * self.reduction ** depth)
         self.depth = depth
+        print("DEPTH: ", self.depth)
         self.device = device
         self.indim = indim
         #assert(len(activations) == len(encoder_layers + decoder_layers) + 1)
@@ -680,7 +682,6 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
                 elif a == 'sig':
                     layers.append(torch.nn.Sigmoid())
             prev_size = prev_size * self.reduction #necessary to carry floating point
-        print("Layers: ", layers)
         layers = [l.to(device) for l in layers]
         self.encoder = torch.nn.ModuleList(layers)
         ##create decoder
@@ -696,21 +697,24 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
                 elif a == 'sig':
                     layers.append(torch.nn.Sigmoid())
             prev_size = prev_size / self.reduction #necessary to carry floating point
-        print("Layers: ", layers)
         layers = [l.to(device) for l in layers]
         self.decoder = torch.nn.ModuleList(layers)
+        print("Encoder: ", self.encoder)
+        print("Decoder: ", self.decoder)
     
     def encode(self, x):
-        for l in range(len(self.encoder)):
-            x = self.encoder[l](x)
-        #print("Len: %s Encoded Space: %s" % (len(x), self.encoded_space))
-        assert(len(x) == self.encoded_space)
+        if len(self.encoder) > 0:
+            for l in range(len(self.encoder)):
+                x = self.encoder[l](x)
+            #print("Len: %s Encoded Space: %s" % (len(x), self.encoded_space))
+            assert(len(x) == self.encoded_space)
         return x
 
     def decode(self, x):
-        assert(len(x) == self.encoded_space)
-        for l in range(len(self.decoder)):
-            x = self.decoder[l](x)
+        if len(self.decoder) > 0:
+            assert(len(x) == self.encoded_space)
+            for l in range(len(self.decoder)):
+                x = self.decoder[l](x)
         return x
 
     def forward(self, x):
@@ -770,6 +774,13 @@ def LinearSAAutoencoder(encoder_base, state_size, action_size, forward_mlp,
                 super().__init__(indim, *args, **kwargs)
             else:
                 super().__init__(indim, *args, **kwargs) #treat encode, decode as SPECIFICALLY for state
+                if action_size == 1: #identity module
+                    a = [args[0], 0]
+                    a.extend(args[2:])
+                    print('ARGS: ', args)
+                    print("A: ", a)
+                    args = a
+                #else:
                 self.action_ae = encoder_base(action_size, *args, **kwargs) #create identical second encoder for actions
             
             self.forward_mlp = forward_mlp #LINEAR MLP structure if the desire is to constrain encoded space to linear function

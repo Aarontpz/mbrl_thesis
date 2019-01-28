@@ -176,7 +176,7 @@ DISCRETE_AGENT = False
 
 
 DISPLAY_HISTORY = True
-DISPLAY_AV_LOSS = True
+DISPLAY_AV_LOSS = False
 
 PRETRAINED = False
 FULL_EPISODE = True
@@ -229,7 +229,7 @@ EPS_DECAY = 1e-6
 GAMMA = 0.95
 ENV_TYPE = 'cartpole'
 TASK_NAME = 'swingup'
-TASK_NAME = 'balance'
+#TASK_NAME = 'balance'
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
@@ -368,11 +368,19 @@ if __name__ == '__main__':
             mlp_outdim = None
             DEPTH = 3
             REDUCTION_FACTOR = 0.8
-            COUPLED_SA = True
+            COUPLED_SA = False #have S/A feed into same encoded space or not
+            PREAGENT = True
             FORWARD_DYNAMICS = False #False reflects potential for linear transformation
-            LINEAR_FORWARD = False
+            LINEAR_FORWARD = False #imposes linear function on forward dynamics
             AE_ACTIVATIONS = ['relu']
             ENCODED_ACTIVATIONS = []
+
+            lr = 1.0e-3
+            ADAM_BETAS = (0.9, 0.999)
+            MOMENTUM = 1e-3
+            MOMENTUM = 0
+
+            AE_REPLAYS = 20
 
 
             mlp_indim = math.floor((obs_size + action_size) * REDUCTION_FACTOR**DEPTH)  
@@ -380,6 +388,11 @@ if __name__ == '__main__':
             mlp_outdim = obs_size * (REDUCTION_FACTOR**DEPTH)
             mlp_hdims = [mlp_indim * 5, mlp_indim * 5,] 
             mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
+            
+            #optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+            optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
+            scheduler = None
+            #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
             print("FORWARD MLP !!!")
             if LINEAR_FORWARD:
                 raise Exception("Reduce to the sum of TWO matrices representing \
@@ -404,10 +417,17 @@ if __name__ == '__main__':
                         autoencoder, AUTOENCODER_DATASET, AE_BATCHES, TRAIN_FORWARD, TRAIN_ACTION,
                         device, optimizer, scheduler, 
                         agent, env, 
-                        replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+                        replay = AE_REPLAYS, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING)
-                
-
+                if PREAGENT and not COUPLED_SA:
+                    print("Feeding ENCODED state information into PolicyGradient agent!")
+                    mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH)  
+                    agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, [], 
+                            action_size, seperate_value_network = True, 
+                            action_bias = True, value_bias = True, sigma_head = True, 
+                            device = device, indim = mlp_indim, outdim = action_size, hdims = mlp_hdims,
+                            activations = mlp_activations, initializer = mlp_initializer).to(device)
+                    print("Module: ", agent.module)
 
         ## RUN AGENT / TRAINING
         if not PRETRAINED:
@@ -430,8 +450,15 @@ if __name__ == '__main__':
                                 reward = 0.0
                             #print("TIMESTEP %s: %s" % (step, timestep))
                             observation = timestep.observation
+                            if PREAGENT and not COUPLED_SA:
+                                obs = agent.transform_observation(observation).to(device)
+                                encoded = autoencoder.encode(obs) #encode only state -> state'
+                                #print("ENCODED: ", encoded)
+                                action = agent.step(encoded, transform = False).cpu().numpy()
+                            else:
+                                action = agent.step(observation).cpu().numpy()
                             #print("Observation: ", observation)
-                            action = agent(timestep)
+                            #action = agent(timestep)
                             #print("Action: ", action)
                             agent.store_reward(reward)
                             timestep = env.step(action)
@@ -441,7 +468,11 @@ if __name__ == '__main__':
                         env.reset()
                         observation, reward, done, info = env.step(env.action_space.sample())
                         while not done and step < MAX_TIMESTEPS:
-                            action = agent.step(observation).cpu().numpy()
+                            if PREAGENT and not COUPLED_SA:
+                                encoded = autoencoder.encode(observation) #encode only state -> state'
+                                action = agent.step(encoded).cpu().numpy()
+                            else:
+                                action = agent.step(observation).cpu().numpy()
                             env.render()
                             observation, reward, done, info = env.step(action)
                             agent.store_reward(reward)

@@ -105,6 +105,9 @@ class Dataset:
     def get_sample_structure(self) -> str:
         return 'sk, ak, rk, sk+1'
 
+#class DAgger(Dataset):
+
+
 
 class PyTorchTrainer(Trainer):
     def __init__(self, device, optimizer, scheduler = None, *args, **kwargs):
@@ -348,7 +351,7 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
                 a = self.get_sample_a(sample[i])
                 r = self.get_sample_r(sample[i])
                 s_ = self.get_sample_s_(sample[i])
-                #print('s: %s \n a: %s \n r: %s \n s_: %s' % (s, a, r, s_))
+                print('s: %s \n a: %s \n r: %s \n s_: %s' % (s, a, r, s_))
                 decoded_state, decoded_action = autoencoder.forward(s, a)
                 forward = autoencoder.forward_predict(s, a)
                 autoencoder_state_loss = autoencoder_criterion(s, decoded_state)
