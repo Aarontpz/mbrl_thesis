@@ -132,7 +132,7 @@ def launch_best_agent(env, agent):
     except: 
         pass
 
-def console(env, agent, lock, lib_type = 'dm', env_type = 'walker'):
+def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = None):
     #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device("cpu")
     #agent.device = device
@@ -144,9 +144,14 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker'):
             if cmd.lower() == 'v': #view with thread locked?
                 print("VIEWING!")
                 ## We create a clone of the agent (to preserve the training agent's history) 
+                encoder_clone = None
+                encode_inputs = encoder is not None
+                if encode_inputs:
+                    encoder_clone = copy.deepcopy(encoder).to(device)
                 clone = create_agent(PyTorchAgent, LIB_TYPE, env_type, device, [1, obs_size], 
                         action_size, discrete_actions = DISCRETE_AGENT, 
-                        action_constraints = action_constraints, has_value_function = True)
+                        action_constraints = action_constraints, has_value_function = True, 
+                        encode_inputs = encode_inputs, encoder = encoder_clone)
                 #clone = agent.clone()
                 clone.module = copy.deepcopy(agent.module)
                 clone.module.to(device)
@@ -389,10 +394,6 @@ if __name__ == '__main__':
             mlp_hdims = [mlp_indim * 5, mlp_indim * 5,] 
             mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
             
-            #optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
-            optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
-            scheduler = None
-            #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
             print("FORWARD MLP !!!")
             if LINEAR_FORWARD:
                 raise Exception("Reduce to the sum of TWO matrices representing \
@@ -413,9 +414,13 @@ if __name__ == '__main__':
                 autoencoder = LinearSAAutoencoder(autoencoder_base, 
                         obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
                         device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR)
+                #ae_optimizer = optim.Adam(autoencoder.parameters(), lr = lr, betas = ADAM_BETAS)
+                ae_optimizer = optim.SGD(autoencoder.parameters(), lr = lr, momentum = MOMENTUM)
+                ae_scheduler = None
+                #ae_scheduler = torch.optim.lr_scheduler.StepLR(ae_optimizer, step_size = 300, gamma = 0.85)
                 autoencoder_trainer = PyTorchSAAutoencoderTrainer(
                         autoencoder, AUTOENCODER_DATASET, AE_BATCHES, TRAIN_FORWARD, TRAIN_ACTION,
-                        device, optimizer, scheduler, 
+                        device, ae_optimizer, ae_scheduler, 
                         agent, env, 
                         replay = AE_REPLAYS, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING)
@@ -429,7 +434,13 @@ if __name__ == '__main__':
                             activations = mlp_activations, initializer = mlp_initializer).to(device)
                     agent.encode_inputs = True
                     agent.encoder = autoencoder
-                    print("Module: ", agent.module)
+                    print("Post-encoder Module: ", agent.module)
+                    optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+                    #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
+                    scheduler = None
+                    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
+                    trainer.opt = optimizer
+                    trainer.scheduler = scheduler
                 else:
                     agent.encode_inputs = False
 
@@ -437,7 +448,7 @@ if __name__ == '__main__':
         if not PRETRAINED:
             ## set up listener for user input
             lock = threading.Lock()
-            console_args = (tmp_env, agent, lock, LIB_TYPE, ENV_TYPE)
+            console_args = (tmp_env, agent, lock, LIB_TYPE, ENV_TYPE, agent.encoder)
             console_thread = threading.Thread(target = console, args = console_args)
             console_thread.daemon = True
             console_thread.start()
