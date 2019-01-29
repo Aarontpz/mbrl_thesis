@@ -105,7 +105,39 @@ class Dataset:
     def get_sample_structure(self) -> str:
         return 'sk, ak, rk, sk+1'
 
-#class DAgger(Dataset):
+#TODO TODO TODO: accomodate multiple-episodes? Is this necessary for the purpose that
+#dataset serves (supervised vs reinforcement learning)
+
+class DAgger(Dataset):
+    '''When sampling, samples from PREVIOUS episode / trainer step
+    with probability recent_prob, else samples from AGGREGATE.'''
+    def __init__(self, recent_prob = 0.5, *args, **kwargs):
+        self.aggregate = []
+        self.recent_prob = recent_prob
+        super().__init__(*args, **kwargs)
+        self.aggregate_examples = False #because we AUTOMATICALLY aggregate samples lol
+
+    def sample(self, batch_size = None):
+        sample_recent = random.random() < self.recent_prob
+        if len(self.aggregate) >= batch_size:
+            samples = self.samples if sample_recent else self.aggregate
+        else:
+            samples = self.samples
+        #print("Sample Recent: ", sample_recent)
+        batch = None
+        if batch_size == None:
+            batch_size = 0
+        if self.shuffle:
+            batch = random.sample(samples, batch_size + 1)  
+        else:
+            batch = samples[self.ind + batch_size]
+            self.ind += batch_size
+        return batch
+
+    def trainer_step(self, trainer):
+        self.aggregate.extend(self.samples) #add PREVIOUS self.samples to aggregate
+        print("Aggregate Size: ", len(self.aggregate))
+        super().trainer_step(trainer)
 
 
 
