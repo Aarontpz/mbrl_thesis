@@ -92,7 +92,7 @@ class Dataset:
         agent = trainer.agent
         for i in range(len(agent.reward_history) - 1): #-1 for terminal state
             sample.append(agent.state_history[i])
-            sample.append(agent.action_history[i])
+            sample.append(agent.action_history[i].detach())
             sample.append(agent.reward_history[i])
             sample.append(agent.state_history[i+1])
             samples.append(sample)
@@ -235,7 +235,7 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                 if self.entropy_coeff > 0.0 and not self.entropy_bonus:
                     entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
                     action_loss += entropy_loss #WEIGHTED
-                if self.agent.module.seperate_value_net:
+                if self.agent.module.value_module is not False:
                     pass
                 if hasattr(self.agent, 'energy_history'):
                     action_penalty = self.agent.energy_history[ind]

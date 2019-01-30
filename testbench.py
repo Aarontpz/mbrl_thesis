@@ -181,7 +181,7 @@ DISCRETE_AGENT = False
 
 
 DISPLAY_HISTORY = True
-DISPLAY_AV_LOSS = False
+DISPLAY_AV_LOSS = True
 
 PRETRAINED = False
 FULL_EPISODE = True
@@ -217,7 +217,9 @@ entropy_coeff = 10e-4
 #entropy_coeff = 0 
 ENTROPY_BONUS = False
 value_coeff = 5e-1
-energy_penalty_coeff = 5e-2
+
+energy_penalty_coeff = 5e-2 #HIGH, if energy is a consideration
+#energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
 
 EPS = 0.5e-1
 EPS_MIN = 2e-2
@@ -338,7 +340,8 @@ if __name__ == '__main__':
             else:
                 mlp_base = PyTorchContinuousGaussACMLP
             agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
-                    action_size, seperate_value_network = True, 
+                    action_size, 
+                    seperate_value_module = None, seperate_value_module_input = False,
                     action_bias = True, value_bias = True, sigma_head = True, 
                     device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
@@ -359,7 +362,7 @@ if __name__ == '__main__':
                         agent, env, 
                         replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
                         num_episodes = EPISODES_BEFORE_TRAINING) 
-            
+            print("AGENT MODULE (pre-autoencoder?)", agent.module)
             ## Autoencoder addition
             TRAIN_AUTOENCODER = True
             autoencoder_base = PyTorchLinearAutoencoder
@@ -375,12 +378,14 @@ if __name__ == '__main__':
             REDUCTION_FACTOR = 0.8
             COUPLED_SA = False #have S/A feed into same encoded space or not
             PREAGENT = True
+            PREAGENT_VALUE_FUNC = False
+            PREAGENT_VALUE_HEAD = True 
             FORWARD_DYNAMICS = False #False reflects potential for linear transformation
             LINEAR_FORWARD = False #imposes linear function on forward dynamics
             AE_ACTIVATIONS = ['relu']
             ENCODED_ACTIVATIONS = []
 
-            lr = 1.0e-3
+            lr = 0.5e-3
             ADAM_BETAS = (0.9, 0.999)
             MOMENTUM = 1e-3
             MOMENTUM = 0
@@ -394,7 +399,6 @@ if __name__ == '__main__':
             mlp_hdims = [mlp_indim * 5, mlp_indim * 5,] 
             mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
             
-            print("FORWARD MLP !!!")
             if LINEAR_FORWARD:
                 raise Exception("Reduce to the sum of TWO matrices representing \
                         Ax + Bu where x=state and u=action")
@@ -406,16 +410,15 @@ if __name__ == '__main__':
                         hdims = mlp_hdims, activations = mlp_activations, 
                         initializer = mlp_initializer).to(device)   
 
-            print("AUTOENCODER !!!")
             if TRAIN_AUTOENCODER == True:
 
-                AUTOENCODER_DATASET = Dataset(aggregate_examples = False, shuffle = True)
-                #AUTOENCODER_DATASET = DAggerDataset()
+                #AUTOENCODER_DATASET = Dataset(aggregate_examples = True, shuffle = True)
+                AUTOENCODER_DATASET = DAgger(recent_prob = 0.5, aggregate_examples = False, shuffle = True)
                 autoencoder = LinearSAAutoencoder(autoencoder_base, 
                         obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
                         device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR)
-                #ae_optimizer = optim.Adam(autoencoder.parameters(), lr = lr, betas = ADAM_BETAS)
-                ae_optimizer = optim.SGD(autoencoder.parameters(), lr = lr, momentum = MOMENTUM)
+                ae_optimizer = optim.Adam(autoencoder.parameters(), lr = lr, betas = ADAM_BETAS)
+                #ae_optimizer = optim.SGD(autoencoder.parameters(), lr = lr, momentum = MOMENTUM)
                 ae_scheduler = None
                 #ae_scheduler = torch.optim.lr_scheduler.StepLR(ae_optimizer, step_size = 300, gamma = 0.85)
                 autoencoder_trainer = PyTorchSAAutoencoderTrainer(
@@ -426,12 +429,19 @@ if __name__ == '__main__':
                         num_episodes = EPISODES_BEFORE_TRAINING)
                 if PREAGENT and not COUPLED_SA:
                     print("Feeding ENCODED state information into PolicyGradient agent!")
+                    value_module = None
+                    if PREAGENT_VALUE_FUNC == True:
+                        value_module = torch.nn.Sequential(agent.module.value_mlp, #copy for safekeeping :)
+                                agent.module.value_module)
                     mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH)  
                     agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, [], 
-                            action_size, seperate_value_network = True, 
+                            action_size, 
+                            seperate_value_module = value_module, seperate_value_module_input = True,
+                            value_head = PREAGENT_VALUE_HEAD,
                             action_bias = True, value_bias = True, sigma_head = True, 
                             device = device, indim = mlp_indim, outdim = action_size, hdims = mlp_hdims,
-                            activations = mlp_activations, initializer = mlp_initializer).to(device)
+                            activations = mlp_activations, initializer = mlp_initializer,
+                            ).to(device)
                     agent.encode_inputs = True
                     agent.encoder = autoencoder
                     print("Post-encoder Module: ", agent.module)
