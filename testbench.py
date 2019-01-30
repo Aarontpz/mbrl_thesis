@@ -16,6 +16,7 @@ import gym
 import matplotlib.pyplot as plt
 
 import threading
+import pickle
 
 VIEWING = False
 
@@ -158,8 +159,42 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                 launch_viewer(env, clone)    
                 print("RESUMING!")
 
-    
+   
+def get_max_min_path(LIB_TYPE = 'dm', ENV_TYPE = 'walker', 
+        norm_dir = './norm'):
+    if not os.path.exists(norm_dir):
+        os.makedirs(norm_dir)
+    return os.path.join(norm_dir, LIB_TYPE + '_' + ENV_TYPE)
 
+def get_max_min_filename(LIB_TYPE = 'dm', ENV_TYPE = 'walker', 
+        norm_dir = './norm'):
+    return get_max_min_path(LIB_TYPE, ENV_TYPE, norm_dir) + '.pkl'
+
+def retrieve_max_min(mx_shape, mn_shape, LIB_TYPE = 'dm', 
+        ENV_TYPE = 'walker',
+        norm_dir = 'norm') -> (np.ndarray, np.ndarray):
+    filename = get_max_min_filename(LIB_TYPE, ENV_TYPE, norm_dir)
+    if not os.path.exists(filename):
+        mx = np.ones(mx_shape)
+        mn = np.zeros(mn_shape)
+    else:
+        with open(filename, 'rb') as f:
+            mx_mn = pickle.load(f)
+        mx = mx_mn['mx']
+        mn = mx_mn['mn']
+    return mx, mn
+
+def store_max_min(mx, mn, LIB_TYPE = 'dm', ENV_TYPE = 'walker',
+        norm_dir = 'norm'):
+    filename = get_max_min_filename(LIB_TYPE, ENV_TYPE, norm_dir)
+    mx_mn = {'mx':mx, 'mn':mn}
+    with open(filename, 'wb') as f:
+        pickle.dump(mx_mn, f, pickle.HIGHEST_PROTOCOL)
+
+
+def normalize_max_min(observation : np.ndarray, 
+        mx : np.ndarray, mn : np.ndarray):
+    return (observation - mn) / (mx - mn)
 
 
 LIB = 'pytorch'
@@ -237,10 +272,14 @@ TASK_NAME = 'walk'
 #ENV_TYPE = 'cartpole'
 #TASK_NAME = 'swingup'
 #TASK_NAME = 'balance'
+
+MAXMIN_NORMALIZATION = True
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
     #raise Exception("It is time...for...minibatches (vectorized) training. I think. INVESTIGATE?!")
+    if MAXMIN_NORMALIZATION: 
+        print(get_max_min_path(LIB_TYPE, ENV_TYPE))
     if LIB_TYPE == 'dm':
         env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
         tmp_env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
@@ -342,6 +381,7 @@ if __name__ == '__main__':
             agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
                     action_size, 
                     seperate_value_module = None, seperate_value_module_input = False,
+                    value_head = True,
                     action_bias = True, value_bias = True, sigma_head = True, 
                     device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
@@ -378,8 +418,8 @@ if __name__ == '__main__':
             REDUCTION_FACTOR = 0.8
             COUPLED_SA = False #have S/A feed into same encoded space or not
             PREAGENT = True
-            PREAGENT_VALUE_FUNC = False
-            PREAGENT_VALUE_HEAD = True 
+            PREAGENT_VALUE_FUNC = True #(True, None) or False
+            PREAGENT_VALUE_HEAD = True #(True, None) or False
             FORWARD_DYNAMICS = False #False reflects potential for linear transformation
             LINEAR_FORWARD = False #imposes linear function on forward dynamics
             AE_ACTIVATIONS = ['relu']
@@ -433,11 +473,12 @@ if __name__ == '__main__':
                     if PREAGENT_VALUE_FUNC == True:
                         value_module = torch.nn.Sequential(agent.module.value_mlp, #copy for safekeeping :)
                                 agent.module.value_module)
+                        #value_module = agent.module.value_mlp
                     mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH)  
                     agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, [], 
                             action_size, 
                             seperate_value_module = value_module, seperate_value_module_input = True,
-                            value_head = PREAGENT_VALUE_HEAD,
+                            value_head = not PREAGENT_VALUE_HEAD,
                             action_bias = True, value_bias = True, sigma_head = True, 
                             device = device, indim = mlp_indim, outdim = action_size, hdims = mlp_hdims,
                             activations = mlp_activations, initializer = mlp_initializer,

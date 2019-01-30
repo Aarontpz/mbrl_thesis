@@ -879,21 +879,20 @@ class PyTorchDiscreteACMLP(PyTorchMLP):
             *args, **kwargs):
         self.action_space = action_space
         super(PyTorchDiscreteACMLP, self).__init__(*args, **kwargs)
-        self.value_mlp = seperate_value_module
         self.seperate_value_module_input = seperate_value_module_input
-        if self.value_mlp is not False: #currently, this creates an IDENTICAL value function
+        self.sigma_head = sigma_head
+        if seperate_value_module is not False: #currently, this creates an IDENTICAL value function
             print("seperate_value_module")
-            if self.value_mlp is None:
+            if seperate_value_module is None:
                 print("self.value_mlp = PyTorchMLP")
                 self.value_mlp = PyTorchMLP(*args, **kwargs)
             else:
                 self.value_mlp = seperate_value_module
-
-        self.action_module = torch.nn.Linear(self.outdim, 
-                action_space, bias = action_bias)
-        if value_head: #we don't need this as an attribute, do we?
+        if seperate_value_module is False or value_head is True: #we don't need this as an attribute, do we?
             self.value_module = torch.nn.Linear(self.outdim, 1, 
                     bias = value_bias)
+        self.action_module = torch.nn.Linear(self.outdim, 
+                action_space, bias = action_bias)
     
     def forward(self, x, value_input = None):
         mlp_out = super(PyTorchDiscreteACMLP, self).forward(x)
@@ -901,7 +900,7 @@ class PyTorchDiscreteACMLP(PyTorchMLP):
         actions = self.action_module(mlp_out) 
         action_scores = torch.nn.functional.softmax(actions, dim=-1)
         if self.value_mlp is not False:
-            if self.seperate_value_module_input == False:
+            if self.seperate_value_module_input == True:
                 mlp_out = self.value_mlp.forward(value_input)
             else:
                 mlp_out = self.value_mlp.forward(x)
@@ -919,24 +918,23 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
             *args, **kwargs):
         self.action_space = action_space
         super(PyTorchContinuousGaussACMLP, self).__init__(*args, **kwargs)
-        self.value_module = seperate_value_module
         self.seperate_value_module_input = seperate_value_module_input
         self.sigma_head = sigma_head
-        if self.value_module is not False: #currently, this creates an IDENTICAL value function
+        if seperate_value_module is not False: #currently, this creates an IDENTICAL value function
             print("seperate_value_module")
-            if self.value_module is None:
+            if seperate_value_module is None:
                 print("self.value_mlp = PyTorchMLP")
                 self.value_mlp = PyTorchMLP(*args, **kwargs)
             else:
                 self.value_mlp = seperate_value_module
+        if seperate_value_module is False or value_head is True: #we don't need this as an attribute, do we?
+            self.value_module = torch.nn.Linear(self.outdim, 1, 
+                    bias = value_bias)
         self.action_mu_module = torch.nn.Linear(self.outdim, 
                 action_space, bias = action_bias)
         self.action_sigma_module = torch.nn.Linear(self.outdim,
                 1, bias = action_bias)
         self.action_sigma_softplus = torch.nn.Softplus()
-        if value_head: #we don't need this as an attribute, do we?
-            self.value_module = torch.nn.Linear(self.outdim, 1, 
-                    bias = value_bias)
     
     def forward(self, x, value_input = None):
         mlp_out = super(PyTorchContinuousGaussACMLP, self).forward(x)
@@ -947,13 +945,16 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
             action_sigma = self.action_sigma_softplus(action_sigma) + 0.01 #from 1602.01783 appendix 9
         else: #assume sigma is currently zeros
             action_sigma = torch.ones([1, self.action_space], dtype=torch.float32) * 0.0001
-        if self.value_module is not False:
-            if self.seperate_value_module_input == False:
+        if hasattr(self, 'value_mlp'):
+            if self.seperate_value_module_input == True:
                 mlp_out = self.value_mlp.forward(value_input)
             else:
                 mlp_out = self.value_mlp.forward(x)
         if hasattr(self, 'value_module'):
             value = self.value_module(mlp_out)
+        else:
+            assert(hasattr(self, 'value_mlp'))
+            value = mlp_out #assuming value_mlp creates value
         #print("ACTION: %s VALUE: %s" % (actions, value))
         return action_mu, action_sigma, value
 

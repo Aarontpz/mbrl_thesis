@@ -235,8 +235,8 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                 if self.entropy_coeff > 0.0 and not self.entropy_bonus:
                     entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
                     action_loss += entropy_loss #WEIGHTED
-                if self.agent.module.value_module is not False:
-                    pass
+                #if self.agent.module.value_module is not False:
+                #    pass
                 if hasattr(self.agent, 'energy_history'):
                     action_penalty = self.agent.energy_history[ind]
                     #print("Action penalty: ", action_penalty)
