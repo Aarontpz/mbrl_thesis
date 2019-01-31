@@ -182,8 +182,8 @@ def retrieve_max_min(mx_shape, mn_shape, LIB_TYPE = 'dm',
         norm_dir = 'norm') -> (np.ndarray, np.ndarray):
     filename = get_max_min_filename(LIB_TYPE, ENV_TYPE, norm_dir)
     if not os.path.exists(filename):
-        mx = np.ones(mx_shape)
-        mn = np.zeros(mn_shape)
+        mx = np.ones(mx_shape) * (-1) * float('inf') #s.t. anything is larger
+        mn = np.ones(mx_shape) * float('inf') #such that ANYTHING is smaller
     else:
         with open(filename, 'rb') as f:
             mx_mn = pickle.load(f)
@@ -201,6 +201,8 @@ def store_max_min(mx, mn, LIB_TYPE = 'dm', ENV_TYPE = 'walker',
 
 def normalize_max_min(observation : np.ndarray, 
         mx : np.ndarray, mn : np.ndarray):
+    if mn[0] >= float('inf'):
+        return observation
     return (observation - mn) / (mx - mn)
 
 def update_max_min(observation : np.ndarray, 
@@ -418,14 +420,13 @@ if __name__ == '__main__':
             autoencoder_base = PyTorchLinearAutoencoder
             autoencoder = None
             autoencoder_trainer = None
-            AE_BATCHES = 64
             #AE_BATCHES = None
             TRAIN_FORWARD = True
             TRAIN_ACTION = True
 
             mlp_outdim = None
             DEPTH = 3
-            REDUCTION_FACTOR = 0.75
+            REDUCTION_FACTOR = 0.8
             COUPLED_SA = False #have S/A feed into same encoded space or not
             PREAGENT = True
             PREAGENT_VALUE_FUNC = True #(True, None) or False
@@ -440,6 +441,7 @@ if __name__ == '__main__':
             ae_MOMENTUM = 1e-3
             ae_MOMENTUM = 0
 
+            AE_BATCHES = 64
             AE_REPLAYS = 20
             DATASET_RECENT_PROB = 0.6
 
@@ -537,6 +539,7 @@ if __name__ == '__main__':
                             if MAXMIN_NORMALIZATION:
                                 observation = agent.transform_observation(observation)
                                 observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
+                                #print("Observation:", observation)
                             action = agent.step(observation).cpu().numpy()
                             #print("Observation: ", observation)
                             #action = agent(timestep)
