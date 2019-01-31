@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 
 import threading
 import pickle
+import collections
 
 VIEWING = False
 
@@ -56,9 +57,12 @@ def create_dm_cartpole_agent(agent_base, *args, **kwargs):
         def transform_observation(self, obs) -> Variable:
             '''Converts ordered-dictionary of position and velocity into
             1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
-            pos = obs['position']
-            vel = obs['velocity']
-            state = np.concatenate((pos, vel))
+            if type(obs) == type(collections.OrderedDict()):
+                pos = obs['position']
+                vel = obs['velocity']
+                state = np.concatenate((pos, vel))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
             return Variable(torch.tensor(state).float(), requires_grad = False)
     
         def reward(self, st, at, *args, **kwargs):
@@ -74,10 +78,13 @@ def create_dm_walker_agent(agent_base, *args, **kwargs):
         def transform_observation(self, obs) -> Variable:
             '''Converts ordered-dictionary of position and velocity into
             1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
-            orientation = obs['orientations']
-            vel = obs['velocity']
-            height = np.asarray([obs['height'],])
-            state = np.concatenate((orientation, vel, height))
+            if type(obs) == type(collections.OrderedDict()):
+                orientation = obs['orientations']
+                vel = obs['velocity']
+                height = np.asarray([obs['height'],])
+                state = np.concatenate((orientation, vel, height))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
             return Variable(torch.tensor(state).float(), requires_grad = True)
     
         def reward(self, st, at, *args, **kwargs):
@@ -196,6 +203,11 @@ def normalize_max_min(observation : np.ndarray,
         mx : np.ndarray, mn : np.ndarray):
     return (observation - mn) / (mx - mn)
 
+def update_max_min(observation : np.ndarray, 
+        mx : np.ndarray, mn : np.ndarray):
+    mx = np.maximum(mx, observation)
+    mn = np.minimum(mn, observation)
+    return mx, mn
 
 LIB = 'pytorch'
 MAX_ITERATIONS = 10000
@@ -278,8 +290,6 @@ if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
     #raise Exception("It is time...for...minibatches (vectorized) training. I think. INVESTIGATE?!")
-    if MAXMIN_NORMALIZATION: 
-        print(get_max_min_path(LIB_TYPE, ENV_TYPE))
     if LIB_TYPE == 'dm':
         env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
         tmp_env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
@@ -414,8 +424,8 @@ if __name__ == '__main__':
             TRAIN_ACTION = True
 
             mlp_outdim = None
-            DEPTH = 4
-            REDUCTION_FACTOR = 0.7
+            DEPTH = 3
+            REDUCTION_FACTOR = 0.75
             COUPLED_SA = False #have S/A feed into same encoded space or not
             PREAGENT = True
             PREAGENT_VALUE_FUNC = True #(True, None) or False
@@ -431,7 +441,7 @@ if __name__ == '__main__':
             ae_MOMENTUM = 0
 
             AE_REPLAYS = 20
-
+            DATASET_RECENT_PROB = 0.6
 
             mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + math.floor(action_size * REDUCTION_FACTOR**DEPTH)
             #TODO: ^ this works...in both cases (coupled_sa or not)
@@ -453,7 +463,7 @@ if __name__ == '__main__':
             if TRAIN_AUTOENCODER == True:
 
                 #AUTOENCODER_DATASET = Dataset(aggregate_examples = True, shuffle = True)
-                AUTOENCODER_DATASET = DAgger(recent_prob = 0.7, aggregate_examples = False, shuffle = True)
+                AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
                 autoencoder = LinearSAAutoencoder(autoencoder_base, 
                         obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
                         device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR)
@@ -497,6 +507,12 @@ if __name__ == '__main__':
                 else:
                     agent.encode_inputs = False
 
+        if MAXMIN_NORMALIZATION: 
+            print(get_max_min_path(LIB_TYPE, ENV_TYPE))
+            mx, mn = retrieve_max_min([obs_size],[obs_size],LIB_TYPE, ENV_TYPE, norm_dir = 'norm')
+            print("CURRENT MX: %s \n MN: %s \n" % (mx, mn))
+            new_mx, new_mn = mx, mn #copy them for updating
+        
         ## RUN AGENT / TRAINING
         if not PRETRAINED:
             ## set up listener for user input
@@ -518,6 +534,9 @@ if __name__ == '__main__':
                                 reward = 0.0
                             #print("TIMESTEP %s: %s" % (step, timestep))
                             observation = timestep.observation
+                            if MAXMIN_NORMALIZATION:
+                                observation = agent.transform_observation(observation)
+                                observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
                             action = agent.step(observation).cpu().numpy()
                             #print("Observation: ", observation)
                             #action = agent(timestep)
@@ -525,17 +544,19 @@ if __name__ == '__main__':
                             agent.store_reward(reward)
                             timestep = env.step(action)
                             #print("Reward: %s" % (timestep.reward))
-                            step += 1
                     elif LIB_TYPE == 'gym':
                         env.reset()
                         observation, reward, done, info = env.step(env.action_space.sample())
                         while not done and step < MAX_TIMESTEPS:
+                            if MAXMIN_NORMALIZATION:
+                                observation = agent.transform_observation(observation)
+                                observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
                             action = agent.step(observation).cpu().numpy()
                             env.render()
                             observation, reward, done, info = env.step(action)
                             agent.store_reward(reward)
-                            step += 1
-                    step = 0
+                    if MAXMIN_NORMALIZATION:
+                        new_mx, new_mn = update_max_min(observation, mx, mn)
                     agent.terminate_episode() #oops forgot this lmao
                 # Update step
                 if not PRETRAINED:
@@ -544,6 +565,12 @@ if __name__ == '__main__':
                 if TRAIN_AUTOENCODER == True:
                     autoencoder_trainer.step()
                     autoencoder_trainer.plot_loss_histories()
+                if i % 5 == 0: #periodic tasks
+                    print("Performing Periodic Tasks")
+                    if MAXMIN_NORMALIZATION: 
+                        print("(stored) max: %s\n min: %s\n"%(new_mx, new_mn))
+                        store_max_min(new_mx, new_mn, LIB_TYPE, ENV_TYPE, norm_dir = 'norm') 
+                            
 
                 agent.reset_histories()
                 print("Agent Net Reward: ", agent.net_reward_history[i])
