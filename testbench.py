@@ -244,7 +244,7 @@ AGENT_TYPE = 'policy'
 
 TRAINER_TYPE = 'AC'
 #TRAINER_TYPE = 'PPO'
-lr = 1.0e-3
+lr = 0.5e-3
 ADAM_BETAS = (0.9, 0.999)
 MOMENTUM = 1e-3
 MOMENTUM = 0
@@ -253,8 +253,8 @@ entropy_coeff = 10e-4
 ENTROPY_BONUS = False
 value_coeff = 5e-1
 
-energy_penalty_coeff = 5e-2 #HIGH, if energy is a consideration
-#energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
+#energy_penalty_coeff = 5e-2 #HIGH, if energy is a consideration
+energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
 
 EPS = 0.5e-1
 EPS_MIN = 2e-2
@@ -414,26 +414,26 @@ if __name__ == '__main__':
             TRAIN_ACTION = True
 
             mlp_outdim = None
-            DEPTH = 3
-            REDUCTION_FACTOR = 0.8
+            DEPTH = 4
+            REDUCTION_FACTOR = 0.7
             COUPLED_SA = False #have S/A feed into same encoded space or not
             PREAGENT = True
             PREAGENT_VALUE_FUNC = True #(True, None) or False
-            PREAGENT_VALUE_HEAD = True #(True, None) or False
+            PREAGENT_VALUE_INPUT = not (PREAGENT_VALUE_FUNC in (None, False))
             FORWARD_DYNAMICS = False #False reflects potential for linear transformation
             LINEAR_FORWARD = False #imposes linear function on forward dynamics
             AE_ACTIVATIONS = ['relu']
             ENCODED_ACTIVATIONS = []
 
-            lr = 0.5e-3
-            ADAM_BETAS = (0.9, 0.999)
-            MOMENTUM = 1e-3
-            MOMENTUM = 0
+            ae_lr = 0.5e-3
+            ae_ADAM_BETAS = (0.9, 0.999)
+            ae_MOMENTUM = 1e-3
+            ae_MOMENTUM = 0
 
             AE_REPLAYS = 20
 
 
-            mlp_indim = math.floor((obs_size + action_size) * REDUCTION_FACTOR**DEPTH)  
+            mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + math.floor(action_size * REDUCTION_FACTOR**DEPTH)
             #TODO: ^ this works...in both cases (coupled_sa or not)
             mlp_outdim = obs_size * (REDUCTION_FACTOR**DEPTH)
             mlp_hdims = [mlp_indim * 5, mlp_indim * 5,] 
@@ -453,12 +453,13 @@ if __name__ == '__main__':
             if TRAIN_AUTOENCODER == True:
 
                 #AUTOENCODER_DATASET = Dataset(aggregate_examples = True, shuffle = True)
-                AUTOENCODER_DATASET = DAgger(recent_prob = 0.5, aggregate_examples = False, shuffle = True)
+                AUTOENCODER_DATASET = DAgger(recent_prob = 0.7, aggregate_examples = False, shuffle = True)
                 autoencoder = LinearSAAutoencoder(autoencoder_base, 
                         obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
                         device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR)
-                ae_optimizer = optim.Adam(autoencoder.parameters(), lr = lr, betas = ADAM_BETAS)
-                #ae_optimizer = optim.SGD(autoencoder.parameters(), lr = lr, momentum = MOMENTUM)
+                print("AUTOENCODER: ", autoencoder)
+                ae_optimizer = optim.Adam(autoencoder.parameters(), lr = ae_lr, betas = ae_ADAM_BETAS)
+                #ae_optimizer = optim.SGD(autoencoder.parameters(), lr = ae_lr, momentum = ae_MOMENTUM)
                 ae_scheduler = None
                 #ae_scheduler = torch.optim.lr_scheduler.StepLR(ae_optimizer, step_size = 300, gamma = 0.85)
                 autoencoder_trainer = PyTorchSAAutoencoderTrainer(
@@ -477,8 +478,9 @@ if __name__ == '__main__':
                     mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH)  
                     agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, [], 
                             action_size, 
-                            seperate_value_module = value_module, seperate_value_module_input = True,
-                            value_head = not PREAGENT_VALUE_HEAD,
+                            seperate_value_module = value_module, 
+                            seperate_value_module_input = PREAGENT_VALUE_INPUT,
+                            value_head = not PREAGENT_VALUE_FUNC, 
                             action_bias = True, value_bias = True, sigma_head = True, 
                             device = device, indim = mlp_indim, outdim = action_size, hdims = mlp_hdims,
                             activations = mlp_activations, initializer = mlp_initializer,
@@ -539,7 +541,7 @@ if __name__ == '__main__':
                 if not PRETRAINED:
                     trainer.step()
                     print("Agent Net Loss: ", agent.net_loss_history[i])
-                if TRAIN_AUTOENCODER:
+                if TRAIN_AUTOENCODER == True:
                     autoencoder_trainer.step()
                     autoencoder_trainer.plot_loss_histories()
 

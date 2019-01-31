@@ -712,11 +712,16 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
         ##create decoder
         layers = []
         for i in range(depth):
-            size = math.floor(prev_size / self.reduction) 
+            if i < depth - 1:
+                size = math.floor(prev_size / self.reduction) 
+            else:
+                size = indim
             linear = torch.nn.Linear(math.floor(prev_size), size, bias = True)
             layers.append(linear)
             functions = activations if i < depth - 1 else encoded_activations
             for a in activations:
+                if i >= depth - 1: #output should HAVE NO NONLINEARITY?
+                    break
                 if a == 'relu':
                     layers.append(torch.nn.LeakyReLU())
                 elif a == 'sig':
@@ -724,8 +729,6 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
             prev_size = prev_size / self.reduction #necessary to carry floating point
         layers = [l.to(device) for l in layers]
         self.decoder = torch.nn.ModuleList(layers)
-        print("Encoder: ", self.encoder)
-        print("Decoder: ", self.decoder)
     
     def encode(self, x):
         if len(self.encoder) > 0:

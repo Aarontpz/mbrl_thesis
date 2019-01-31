@@ -404,8 +404,8 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
             self.scheduler.step()
         loss.backward(retain_graph = True)
         self.net_loss_history.append(loss.cpu().detach())
-        self.encoder_loss_history.append(net_autoencoder_loss.cpu().detach())
-        self.forward_loss_history.append(net_forward_loss.cpu().detach())
+        self.encoder_loss_history.append((net_autoencoder_loss / (self.replay * len(sample))).cpu().detach())
+        self.forward_loss_history.append((net_forward_loss / (self.replay * len(sample))).cpu().detach())
         optimizer.step()
 
     def plot_loss_histories(self):
