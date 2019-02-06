@@ -68,6 +68,9 @@ def create_dm_cartpole_agent(agent_base, *args, **kwargs):
         def reward(self, st, at, *args, **kwargs):
             upright = (self.env.physics.pole_angle_cosine() + 1) / 2
             return upright
+
+        #def get_observation_size(self):
+        #    return 
     return DMCartpoleAgent(*args, **kwargs) 
 
 
@@ -110,6 +113,35 @@ def create_gym_walker_agent(agent_base, *args, **kwargs):
     
     return GymWalkerAgent(*args, **kwargs)
 
+def create_dm_humanoid_agent(agent_base, *args, **kwargs):
+    '''Helper function to implement "transform_observation", and, in the case of MPC agents,
+    a reward function, for the walker2d environment.'''
+    class DMHumanoidAgent(agent_base):
+        def transform_observation(self, obs, extra_info = False) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            if type(obs) == type(collections.OrderedDict()):
+                angles = obs['joint_angles']
+                extremities = obs['extremities']
+                velocity = obs['velocity']
+                state = np.concatenate((angles, extremities, velocity))
+                if extra_info:
+                    com_velocity = obs['com_velocity']
+                    head_height = obs['head_height']
+                    torso_vertical = obs['torso_vertical']
+                    state = np.concatenate((state, com_velocity, head_height, torso_vertical))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
+            return Variable(torch.tensor(state).float(), requires_grad = True)
+    
+        def reward(self, st, at, *args, **kwargs):
+            global TASK_NAME #GROOOOOOSSSSSSSTHH
+            if TASK_NAME in ['walk', 'run']:
+                return env.physics.horizontal_velocity() #TODO: this is only valid for walk / run tasks
+            else: 
+                return 0.0
+    
+    return DMHumanoidAgent(*args, **kwargs)
 
 def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwargs):
     agent = None
@@ -123,6 +155,8 @@ def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwar
             return create_dm_walker_agent(agent_base, *args, **kwargs)
         elif env_type == 'cartpole':
             return create_dm_cartpole_agent(agent_base, *args, **kwargs)
+        elif env_type == 'humanoid':
+            return create_dm_humanoid_agent(agent_base, *args, **kwargs)
     return agent
 
 #class TFVisionCartpoleAgent(TFAgent): #but...would we WANT this??
@@ -194,6 +228,10 @@ def retrieve_max_min(mx_shape, mn_shape, LIB_TYPE = 'dm',
 def store_max_min(mx, mn, LIB_TYPE = 'dm', ENV_TYPE = 'walker',
         norm_dir = 'norm'):
     filename = get_max_min_filename(LIB_TYPE, ENV_TYPE, norm_dir)
+    curr_mx, curr_mn = retrieve_max_min(mx.shape, mn.shape, LIB_TYPE, ENV_TYPE,
+            norm_dir)
+    mx = np.maximum(curr_mx, mx) #in order to prevent parallel processes overwriting
+    mn = np.minimum(curr_mn, mn)
     mx_mn = {'mx':mx, 'mn':mn}
     with open(filename, 'wb') as f:
         pickle.dump(mx_mn, f, pickle.HIGHEST_PROTOCOL)
@@ -223,6 +261,7 @@ VIEW_END = True
 #mlp_outdim = 200 #based on state size (approximation)
 #mlp_hdims = []
 #mlp_activations = ['relu'] #+1 for outdim activation, remember extra action/value modules
+WIDENING_CONST = 2 #indim * WIDENING_CONST = hidden layer size
 mlp_initializer = None
 DISCRETE_AGENT = False
 
@@ -253,41 +292,52 @@ else:
 LIB_TYPE = 'dm'
 #LIB_TYPE = 'gym'
 
-AGENT_TYPE = 'mpc'
+#AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
 TRAINER_TYPE = 'AC'
 #TRAINER_TYPE = 'PPO'
-lr = 0.5e-3
+lr = 0.4e-3
 ADAM_BETAS = (0.9, 0.999)
 MOMENTUM = 1e-3
-MOMENTUM = 0
-entropy_coeff = 10e-4
+#MOMENTUM = 0
+entropy_coeff = 5e-3
 #entropy_coeff = 0 
 ENTROPY_BONUS = False
-value_coeff = 5e-1
+value_coeff = 5e-2
 
 #energy_penalty_coeff = 5e-2 #HIGH, if energy is a consideration
-energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
+#energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
+energy_penalty_coeff = 0 #zero, to not penalize at all
+
+EPS = 1.0e-1
+EPS_MIN = 1e-2
+EPS_DECAY = 1e-8
+GAMMA = 0.98
+ENV_TYPE = 'humanoid'
+#TASK_NAME = 'run'
+#TASK_NAME = 'walk'
+TASK_NAME = 'stand'
 
 EPS = 0.5e-1
 EPS_MIN = 2e-2
 EPS_DECAY = 1e-6
-GAMMA = 0.95
+GAMMA = 0.98
 ENV_TYPE = 'walker'
 #TASK_NAME = 'run'
-TASK_NAME = 'walk'
-#TASK_NAME = 'stand'
+#TASK_NAME = 'walk'
+TASK_NAME = 'stand'
 
-#EPS = 0.5e-1
+#EPS = 0.7e-1
 #EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.95
+#EPS_DECAY = 1e-7
+#GAMMA = 0.98
 #ENV_TYPE = 'cartpole'
 #TASK_NAME = 'swingup'
 #TASK_NAME = 'balance'
 
-MAXMIN_NORMALIZATION = True
+MAXMIN_NORMALIZATION = False
+TRAIN_AUTOENCODER = True
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
@@ -297,11 +347,13 @@ if __name__ == '__main__':
         tmp_env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
         action_space = env.action_spec()
         obs_space = env.observation_spec()
-
         if ENV_TYPE == 'walker':
             obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0] + 1 #+1 for height
         elif ENV_TYPE == 'cartpole':
             obs_size = obs_space['position'].shape[0] + obs_space['velocity'].shape[0]
+        elif ENV_TYPE == 'humanoid':
+            obs_size = obs_space['joint_angles'].shape[0] + obs_space['extremities'].shape[0]
+            obs_size = obs_size + obs_space['velocity'].shape[0]#+1 for height
 
         action_size = action_space.shape[0] 
         #action_size = 2
@@ -318,6 +370,7 @@ if __name__ == '__main__':
             env_string = 'CartPole-v0'    
         env = gym.make(env_string)
         tmp_env = gym.make(env_string)
+        #print("Action space: ", env.action_space)
         action_size = env.action_space.shape[0]
         action_constraints = [env.action_space.low, env.action_space.high]
         env.reset()
@@ -376,9 +429,9 @@ if __name__ == '__main__':
 
         elif AGENT_TYPE == 'policy':
             mlp_indim = obs_size
-            mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [mlp_indim * 5, ] 
-            mlp_outdim = mlp_indim * 5 #based on state size (approximation)
+            mlp_activations = [None, None, 'relu'] #+1 for outdim activation, remember extra action/value modules
+            mlp_hdims = [mlp_indim * WIDENING_CONST, mlp_indim,] 
+            mlp_outdim = mlp_indim * WIDENING_CONST #based on state size (approximation)
             print("MLP INDIM: %s HDIM: %s OUTDIM: %s " % (obs_size, mlp_hdims, mlp_outdim))
             print("MLP ACTIVATIONS: ", mlp_activations)
             agent = create_agent(PyTorchAgent, LIB_TYPE, ENV_TYPE, device, [1, obs_size], 
@@ -401,7 +454,7 @@ if __name__ == '__main__':
             optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
             #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
             scheduler = None
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
+            #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
             if TRAINER_TYPE == 'AC':
                 trainer = PyTorchACTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, energy_penalty_coeff,
                         device, optimizer, scheduler,   
@@ -416,7 +469,6 @@ if __name__ == '__main__':
                         num_episodes = EPISODES_BEFORE_TRAINING) 
             print("AGENT MODULE (pre-autoencoder?)", agent.module)
             ## Autoencoder addition
-            TRAIN_AUTOENCODER = True
             autoencoder_base = PyTorchLinearAutoencoder
             autoencoder = None
             autoencoder_trainer = None
@@ -426,6 +478,7 @@ if __name__ == '__main__':
 
             mlp_outdim = None
             DEPTH = 3
+            UNIFORM_LAYERS = False
             REDUCTION_FACTOR = 0.8
             COUPLED_SA = False #have S/A feed into same encoded space or not
             PREAGENT = True
@@ -443,12 +496,14 @@ if __name__ == '__main__':
 
             AE_BATCHES = 64
             AE_REPLAYS = 20
-            DATASET_RECENT_PROB = 0.6
-
-            mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + math.floor(action_size * REDUCTION_FACTOR**DEPTH)
+            DATASET_RECENT_PROB = 0.75
+            if action_size > 1:
+                mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + math.floor(action_size * REDUCTION_FACTOR**DEPTH)
+            else:
+                mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + 1
             #TODO: ^ this works...in both cases (coupled_sa or not)
             mlp_outdim = obs_size * (REDUCTION_FACTOR**DEPTH)
-            mlp_hdims = [mlp_indim * 5, mlp_indim * 5,] 
+            mlp_hdims = [mlp_indim * WIDENING_CONST, mlp_indim * WIDENING_CONST,] 
             mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
             
             if LINEAR_FORWARD:
@@ -468,7 +523,8 @@ if __name__ == '__main__':
                 AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
                 autoencoder = LinearSAAutoencoder(autoencoder_base, 
                         obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
-                        device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR)
+                        device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR,
+                        UNIFORM_LAYERS)
                 print("AUTOENCODER: ", autoencoder)
                 ae_optimizer = optim.Adam(autoencoder.parameters(), lr = ae_lr, betas = ae_ADAM_BETAS)
                 #ae_optimizer = optim.SGD(autoencoder.parameters(), lr = ae_lr, momentum = ae_MOMENTUM)
@@ -503,7 +559,7 @@ if __name__ == '__main__':
                     optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
                     #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
                     scheduler = None
-                    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
+                    #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 200, gamma = 0.85)
                     trainer.opt = optimizer
                     trainer.scheduler = scheduler
                 else:
@@ -559,7 +615,7 @@ if __name__ == '__main__':
                             observation, reward, done, info = env.step(action)
                             agent.store_reward(reward)
                     if MAXMIN_NORMALIZATION:
-                        new_mx, new_mn = update_max_min(observation, mx, mn)
+                        new_mx, new_mn = update_max_min(observation, new_mx, new_mn)
                     agent.terminate_episode() #oops forgot this lmao
                 # Update step
                 if not PRETRAINED:
@@ -568,7 +624,7 @@ if __name__ == '__main__':
                 if TRAIN_AUTOENCODER == True:
                     autoencoder_trainer.step()
                     autoencoder_trainer.plot_loss_histories()
-                if i % 5 == 0: #periodic tasks
+                if i % 50 == 0: #periodic tasks
                     print("Performing Periodic Tasks")
                     if MAXMIN_NORMALIZATION: 
                         print("(stored) max: %s\n min: %s\n"%(new_mx, new_mn))
@@ -576,6 +632,9 @@ if __name__ == '__main__':
                             
 
                 agent.reset_histories()
+                if AGENT_TYPE == 'policy' and not PRETRAINED:
+                    print("Agent Net Action loss: ", agent.value_loss_history[i])
+                    print("Agent Net Value loss: ", agent.action_loss_history[i])
                 print("Agent Net Reward: ", agent.net_reward_history[i])
                 #i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
@@ -592,7 +651,7 @@ if __name__ == '__main__':
                     #graph.set_ydata([r for r in total_reward_history])
                     #plt.scatter(range(len(total_reward_history)), [r.numpy()[0] for r in total_reward_history])
                     plt.xlim(0, len(agent.net_reward_history))
-                    plt.ylim(0, max(agent.net_reward_history)+1)
+                    plt.ylim(0, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
                     plt.ylabel("Net \n Reward")
                     plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.0)
                     plt.subplot(2, 1, 2)

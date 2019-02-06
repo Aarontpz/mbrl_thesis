@@ -676,7 +676,7 @@ class PyTorchMLP(torch.nn.Module):
 
 class PyTorchLinearAutoencoder(torch.nn.Module):
     def __init__(self, indim, device, depth, activations : [] = [], encoded_activations = [], 
-            reduction_factor = 0.75):
+            reduction_factor = 0.75, uniform_layers = False):
         '''Arguments:
             @activations: Determines the activations at each layer (?except the first and last layer?).
             @Depth: Determines the number of layers in the encoder / decoder layer.
@@ -689,6 +689,7 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
         self.encoded_space = math.floor(indim * self.reduction ** depth)
         self.depth = depth
         print("DEPTH: ", self.depth)
+        print("Indim: ", indim)
         self.device = device
         self.indim = indim
         #assert(len(activations) == len(encoder_layers + decoder_layers) + 1)
@@ -697,7 +698,12 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
         prev_size = indim
         ## create encoder
         for i in range(depth):
-            size = math.floor(prev_size * self.reduction) 
+            if uniform_layers:
+                size = prev_size
+            elif i < depth - 1:
+                size = math.floor(prev_size * self.reduction) 
+            if i >= depth - 1:
+                size = math.floor(indim * self.reduction ** depth)
             linear = torch.nn.Linear(math.floor(prev_size), size, bias = True)
             layers.append(linear)
             functions = activations if i < depth - 1 else encoded_activations
@@ -706,13 +712,21 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
                     layers.append(torch.nn.LeakyReLU())
                 elif a == 'sig':
                     layers.append(torch.nn.Sigmoid())
-            prev_size = prev_size * self.reduction #necessary to carry floating point
+            if not uniform_layers:
+                prev_size = prev_size * self.reduction #necessary to carry floating point
         layers = [l.to(device) for l in layers]
         self.encoder = torch.nn.ModuleList(layers)
         ##create decoder
         layers = []
         for i in range(depth):
-            if i < depth - 1:
+            if uniform_layers:
+                if i == 0:
+                    size = prev_size
+                    prev_size = math.floor(indim * self.reduction ** depth)
+                else:
+                    size = indim
+                    prev_size = size
+            elif i < depth - 1:
                 size = math.floor(prev_size / self.reduction) 
             else:
                 size = indim
@@ -726,7 +740,8 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
                     layers.append(torch.nn.LeakyReLU())
                 elif a == 'sig':
                     layers.append(torch.nn.Sigmoid())
-            prev_size = prev_size / self.reduction #necessary to carry floating point
+            if not uniform_layers:
+                prev_size = prev_size / self.reduction #necessary to carry floating point
         layers = [l.to(device) for l in layers]
         self.decoder = torch.nn.ModuleList(layers)
     

@@ -127,6 +127,8 @@ class DAgger(Dataset):
         batch = None
         if batch_size == None:
             batch_size = 0
+        if batch_size > len(samples) - 1:
+            batch_size = len(samples) - 1
         if self.shuffle:
             batch = random.sample(samples, batch_size + 1)  
         else:
@@ -240,9 +242,12 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                 if hasattr(self.agent, 'energy_history'):
                     action_penalty = self.agent.energy_history[ind]
                     #print("Action penalty: ", action_penalty)
-                    #make_dot(action_penalty).view()
-                    #input()
                     action_loss += self.energy_coeff * action_penalty
+                #print("Action Loss: %s\n Value Loss: %s" % (action_loss, value_loss))
+                #make_dot(action_loss).view()
+                #input()
+                #make_dot(value_loss).view()
+                #input()
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
                 net_action_loss += action_loss
                 net_value_loss += value_loss
