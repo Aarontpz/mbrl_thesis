@@ -333,6 +333,7 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
         
         self.net_loss_history = []
         self.encoder_loss_history = []
+        self.action_loss_history = []
         self.forward_loss_history = []
 
     @property
@@ -378,7 +379,7 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
         loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
         net_autoencoder_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         net_forward_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        
+        net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         autoencoder_criterion = torch.nn.MSELoss()
         forward_criterion = torch.nn.MSELoss()
         for r in range(self.replay):
@@ -396,12 +397,13 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
                 forward_loss = forward_criterion(s_, forward)
                 loss += autoencoder_state_loss
                 if self.train_action:
+                    net_action_loss += autoencoder_action_loss
                     loss += autoencoder_action_loss
                 if self.train_forward:
                     loss += forward_loss
-                net_autoencoder_loss += autoencoder_state_loss
-                if self.train_action:
-                    net_autoencoder_loss += autoencoder_action_loss
+                net_autoencoder_loss += autoencoder_state_loss #now it's just state autoencoding loss??
+                #if self.train_action:
+                #    net_autoencoder_loss += autoencoder_action_loss
                 net_forward_loss += forward_loss
             #torch.nn.utils.clip_grad_norm_(module.parameters(), 100)
         optimizer.zero_grad() #HAHAHAHA
@@ -411,18 +413,25 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
         self.net_loss_history.append(loss.cpu().detach())
         self.encoder_loss_history.append((net_autoencoder_loss / (self.replay * len(sample))).cpu().detach())
         self.forward_loss_history.append((net_forward_loss / (self.replay * len(sample))).cpu().detach())
+        if self.train_action:
+            self.action_loss_history.append((net_action_loss / (self.replay * len(sample))).cpu().detach())
         optimizer.step()
 
     def plot_loss_histories(self):
         plt.figure(5)
-        plt.subplot(2, 1, 1)
+        plt.subplot(3, 1, 1)
         plt.title("Autoencoder Loss and Autoencoded-Forward-Loss History")
         plt.xlim(0, len(self.encoder_loss_history))
         plt.ylim(0, max(self.encoder_loss_history)+1)
-        plt.ylabel("Net \n Autoencoder Loss")
+        plt.ylabel("Net \n State AE Loss")
         plt.scatter(range(len(self.encoder_loss_history)), [r.numpy()[0] for r in self.encoder_loss_history], s=1.0)
-        plt.subplot(2, 1, 2)
-        plt.ylabel("Net \n Forward")
+        plt.subplot(3, 1, 2)
+        plt.xlim(0, len(self.encoder_loss_history))
+        plt.ylim(0, max(self.encoder_loss_history)+1)
+        plt.ylabel("Net \n Action AE Loss")
+        plt.scatter(range(len(self.encoder_loss_history)), [r.numpy()[0] for r in self.encoder_loss_history], s=1.0)
+        plt.subplot(3, 1, 3)
+        plt.ylabel("Net \n Forward Loss")
         plt.xlim(0, len(self.forward_loss_history))
         plt.ylim(0, max(self.forward_loss_history)+1)
         plt.scatter(range(len(self.forward_loss_history)), [r.numpy()[0] for r in self.forward_loss_history], s=1.0)
