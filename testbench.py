@@ -297,7 +297,7 @@ AGENT_TYPE = 'policy'
 
 TRAINER_TYPE = 'AC'
 #TRAINER_TYPE = 'PPO'
-lr = 0.4e-3
+lr = 0.5e-3
 ADAM_BETAS = (0.9, 0.999)
 MOMENTUM = 1e-3
 #MOMENTUM = 0

@@ -1,6 +1,7 @@
 *.swp
 *.py.*
 *.gv
-
+*.pdf
+__pycache__
 
 
