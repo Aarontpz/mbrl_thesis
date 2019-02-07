@@ -7,6 +7,7 @@ import copy
 import numpy as np
 from agent import *
 from trainer import *
+from control_environment import *
 
 from dm_control import suite
 from dm_control import viewer
@@ -143,6 +144,14 @@ def create_dm_humanoid_agent(agent_base, *args, **kwargs):
     
     return DMHumanoidAgent(*args, **kwargs)
 
+def create_numpy_agent(agent_base, *args, **kwargs):
+    class NumpyAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            assert(type(obs) == type(np.zeros(0)))
+            return Variable(torch.tensor(obs).float(), requires_grad = False)
+    return NumpyAgent(*args, **kwargs)
+
+
 def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwargs):
     agent = None
     if lib_type == 'gym':
@@ -157,6 +166,8 @@ def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwar
             return create_dm_cartpole_agent(agent_base, *args, **kwargs)
         elif env_type == 'humanoid':
             return create_dm_humanoid_agent(agent_base, *args, **kwargs)
+    else:
+        return create_numpy_agent(agent_base, *args, **kwargs)
     return agent
 
 #class TFVisionCartpoleAgent(TFAgent): #but...would we WANT this??
@@ -184,6 +195,9 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
         with lock:
             cmd = input('>')
             if cmd.lower() == 'v': #view with thread locked?
+                if lib_type == 'control':
+                    print("INVALID OPTION!")
+                    break
                 print("VIEWING!")
                 ## We create a clone of the agent (to preserve the training agent's history) 
                 encoder_clone = None
@@ -271,7 +285,6 @@ DISCRETE_AGENT = False
 DISPLAY_HISTORY = True
 DISPLAY_AV_LOSS = True
 
-PRETRAINED = False
 FULL_EPISODE = True
 MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
 SMALL_TRAJECTORY_LENGTH = 100
@@ -288,9 +301,12 @@ else:
 
 
 
+PRETRAINED = True
+RUN_ANYWAYS = True
 
-LIB_TYPE = 'dm'
+#LIB_TYPE = 'dm'
 #LIB_TYPE = 'gym'
+LIB_TYPE = 'control'
 
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
@@ -301,14 +317,14 @@ lr = 0.5e-3
 ADAM_BETAS = (0.9, 0.999)
 MOMENTUM = 1e-3
 #MOMENTUM = 0
-entropy_coeff = 9e-3
+entropy_coeff = 5e-3
 #entropy_coeff = 0 
 ENTROPY_BONUS = False
 value_coeff = 5e-2
 
 #energy_penalty_coeff = 5e-2 #HIGH, if energy is a consideration
-#energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
-energy_penalty_coeff = 0 #zero, to not penalize at all
+energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
+#energy_penalty_coeff = 0 #zero, to not penalize at all
 
 EPS = 1.0e-1
 EPS_MIN = 1e-2
@@ -325,8 +341,8 @@ EPS_DECAY = 1e-6
 GAMMA = 0.98
 ENV_TYPE = 'walker'
 #TASK_NAME = 'run'
-#TASK_NAME = 'walk'
-TASK_NAME = 'stand'
+TASK_NAME = 'walk'
+#TASK_NAME = 'stand'
 
 #EPS = 0.7e-1
 #EPS_MIN = 2e-2
@@ -336,10 +352,19 @@ TASK_NAME = 'stand'
 #TASK_NAME = 'swingup'
 #TASK_NAME = 'balance'
 
+#CONTROL ENVIRONMENTS
+EPS = 0.5e-1
+EPS_MIN = 2e-2
+EPS_DECAY = 1e-6
+GAMMA = 0.98
+ENV_TYPE = 'rossler'
+ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.0001, 'interval' : 10}
+TASK_NAME = 'point'
+
 MA_LEN = -1
 MA_LEN = 20
 
-MAXMIN_NORMALIZATION = True
+MAXMIN_NORMALIZATION = False
 TRAIN_AUTOENCODER = True
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
@@ -380,6 +405,12 @@ if __name__ == '__main__':
         obs, reward, done, info = env.step(1)
         obs_size = obs.size
 
+    elif LIB_TYPE == 'control':
+        env = retrieve_control_environment(ENV_TYPE, **ENV_KWARGS)
+        tmp_env = retrieve_control_environment(ENV_TYPE, **ENV_KWARGS)
+        action_size = env.get_action_size()
+        action_constraints = env.get_action_constraints()
+        obs_size = env.get_observation_size()
     
     MA = 0
     averages = []
@@ -579,7 +610,7 @@ if __name__ == '__main__':
             new_mx, new_mn = mx, mn #copy them for updating
         
         ## RUN AGENT / TRAINING
-        if not PRETRAINED:
+        if (not PRETRAINED) or (RUN_ANYWAYS):
             ## set up listener for user input
             lock = threading.Lock()
             console_args = (tmp_env, agent, lock, LIB_TYPE, ENV_TYPE, agent.encoder)
@@ -621,6 +652,15 @@ if __name__ == '__main__':
                             env.render()
                             observation, reward, done, info = env.step(action)
                             agent.store_reward(reward)
+                    elif LIB_TYPE == 'control':
+                        env.reset()
+                        while not env.episode_is_done() and step < MAX_TIMESTEPS:
+                            obs = env.get_state()
+                            action = agent.step(obs).cpu().numpy()
+                            env.step(action)
+                            reward = env.get_reward()
+                            agent.store_reward(reward)
+
                     if MAXMIN_NORMALIZATION:
                         new_mx, new_mn = update_max_min(observation, new_mx, new_mn)
                     agent.terminate_episode() #oops forgot this lmao
@@ -645,6 +685,27 @@ if __name__ == '__main__':
                 print("Agent Net Reward: ", agent.net_reward_history[i])
                 #i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
+                    if LIB_TYPE == 'control' and TRAIN_AUTOENCODER:
+                        #TODO: encapsulate this AE testing...and all else
+                        #we now display forward dynamics to compare with 
+                        #control trajectory
+                        env.generate_state_history_plot()
+                        #shift in predicted states, plot for side-by-side
+                        #comparison
+                        print("Compare with Autoencoder results!")
+                        ae_history = [] 
+                        for j in range(len(env.state_history)): 
+                            s = env.state_history[j]
+                            s = torch.tensor(s).to(device).float()
+                            a = torch.tensor(np.ones(1)).to(device).float()
+                            forward = autoencoder.forward_predict(s, a)
+                            ae_history.append(forward)
+                        #print("HISTORY: ", ae_history)
+                        env.generate_state_history_plot(ae_history)
+                        #plt.pause(0.01)
+                        #plt.clf()
+
+                            
                     plt.figure(1)
                     plt.subplot(2, 1, 1)
                     plt.title("Algorithm:%s \n\

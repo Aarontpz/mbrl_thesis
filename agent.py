@@ -31,8 +31,8 @@ class Agent:
         self.action_space = action_space
         self.discrete = discrete_actions
         if discrete_actions is False:
-            assert(action_constraints is not None)
-            assert(len(action_constraints) == 2) #low/high for values
+            #assert(action_constraints is not None)
+            #assert(len(action_constraints) == 2) #low/high for values
             self.action_constraints = action_constraints
         self.terminal_penalty = terminal_penalty
         self.state_history = []
