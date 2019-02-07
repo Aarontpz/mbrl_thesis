@@ -660,7 +660,7 @@ if __name__ == '__main__':
                     plt.xlim(0, len(agent.net_reward_history))
                     plt.ylim(0, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
                     plt.ylabel("Net \n Reward")
-                    plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.0)
+                    plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.5, c='b')
                     if MA_LEN > 0 and len(agent.net_reward_history) > 0:
                         MA += agent.net_reward_history[-1]
                         val = MA #in order to divide
@@ -671,10 +671,10 @@ if __name__ == '__main__':
                             val = val / (i + 1)
                         averages.append(val)
                         #plt.plot(np.convolve(np.ones((MA_LEN,)), agent.net_reward_history, mode=m)) #alternative modes: 'full', 'same', 'valid'
-                        plt.plot(range(len(agent.net_reward_history)), averages) 
+                        plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
                     plt.subplot(2, 1, 2)
                     plt.ylabel("Net \n Loss")
-                    plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.0)
+                    plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
                     if DISPLAY_AV_LOSS is True:
                         plt.figure(2)
                         plt.clf()
