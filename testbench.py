@@ -301,7 +301,7 @@ lr = 0.4e-3
 ADAM_BETAS = (0.9, 0.999)
 MOMENTUM = 1e-3
 #MOMENTUM = 0
-entropy_coeff = 5e-3
+entropy_coeff = 9e-3
 #entropy_coeff = 0 
 ENTROPY_BONUS = False
 value_coeff = 5e-2
@@ -336,7 +336,10 @@ TASK_NAME = 'stand'
 #TASK_NAME = 'swingup'
 #TASK_NAME = 'balance'
 
-MAXMIN_NORMALIZATION = False
+MA_LEN = -1
+MA_LEN = 20
+
+MAXMIN_NORMALIZATION = True
 TRAIN_AUTOENCODER = True
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
@@ -376,6 +379,10 @@ if __name__ == '__main__':
         env.reset()
         obs, reward, done, info = env.step(1)
         obs_size = obs.size
+
+    
+    MA = 0
+    averages = []
 
     i = 0
     step = 0
@@ -654,6 +661,17 @@ if __name__ == '__main__':
                     plt.ylim(0, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
                     plt.ylabel("Net \n Reward")
                     plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.0)
+                    if MA_LEN > 0 and len(agent.net_reward_history) > 0:
+                        MA += agent.net_reward_history[-1]
+                        val = MA #in order to divide
+                        if i >= MA_LEN - 1: 
+                            MA -= agent.net_reward_history[i - MA_LEN]
+                            val = val / MA_LEN
+                        else:
+                            val = val / (i + 1)
+                        averages.append(val)
+                        #plt.plot(np.convolve(np.ones((MA_LEN,)), agent.net_reward_history, mode=m)) #alternative modes: 'full', 'same', 'valid'
+                        plt.plot(range(len(agent.net_reward_history)), averages) 
                     plt.subplot(2, 1, 2)
                     plt.ylabel("Net \n Loss")
                     plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.0)
