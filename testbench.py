@@ -301,12 +301,12 @@ else:
 
 
 
-PRETRAINED = True
-RUN_ANYWAYS = True
+PRETRAINED = False
+RUN_ANYWAYS = False
 
-#LIB_TYPE = 'dm'
+LIB_TYPE = 'dm'
 #LIB_TYPE = 'gym'
-LIB_TYPE = 'control'
+#LIB_TYPE = 'control'
 
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
@@ -342,29 +342,32 @@ GAMMA = 0.98
 ENV_TYPE = 'walker'
 #TASK_NAME = 'run'
 TASK_NAME = 'walk'
-#TASK_NAME = 'stand'
+TASK_NAME = 'stand'
 
 #EPS = 0.7e-1
 #EPS_MIN = 2e-2
 #EPS_DECAY = 1e-7
 #GAMMA = 0.98
 #ENV_TYPE = 'cartpole'
-#TASK_NAME = 'swingup'
+##TASK_NAME = 'swingup'
 #TASK_NAME = 'balance'
 
-#CONTROL ENVIRONMENTS
-EPS = 0.5e-1
-EPS_MIN = 2e-2
-EPS_DECAY = 1e-6
-GAMMA = 0.98
-ENV_TYPE = 'rossler'
-ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.0001, 'interval' : 10}
-TASK_NAME = 'point'
+###CONTROL ENVIRONMENTS
+#LIB_TYPE = 'control'
+#EPS = 0.5e-1
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
+#GAMMA = 0.98
+#ENV_TYPE = 'rossler'
+#ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.0001, 'interval' : 10}
+#TASK_NAME = 'point'
+#PRETRAINED = True
+#RUN_ANYWAYS = True
 
 MA_LEN = -1
 MA_LEN = 20
 
-MAXMIN_NORMALIZATION = False
+MAXMIN_NORMALIZATION = True
 TRAIN_AUTOENCODER = True
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
@@ -468,7 +471,7 @@ if __name__ == '__main__':
         elif AGENT_TYPE == 'policy':
             mlp_indim = obs_size
             mlp_activations = [None, None, 'relu'] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [mlp_indim * WIDENING_CONST, mlp_indim,] 
+            mlp_hdims = [mlp_indim * WIDENING_CONST, mlp_indim * WIDENING_CONST,] 
             mlp_outdim = mlp_indim * WIDENING_CONST #based on state size (approximation)
             print("MLP INDIM: %s HDIM: %s OUTDIM: %s " % (obs_size, mlp_hdims, mlp_outdim))
             print("MLP ACTIVATIONS: ", mlp_activations)
@@ -516,7 +519,7 @@ if __name__ == '__main__':
 
             mlp_outdim = None
             DEPTH = 3
-            UNIFORM_LAYERS = False
+            UNIFORM_LAYERS = True
             REDUCTION_FACTOR = 0.8
             COUPLED_SA = False #have S/A feed into same encoded space or not
             PREAGENT = True
@@ -527,7 +530,7 @@ if __name__ == '__main__':
             AE_ACTIVATIONS = ['relu']
             ENCODED_ACTIVATIONS = []
 
-            ae_lr = 0.5e-3
+            ae_lr = 0.9e-3
             ae_ADAM_BETAS = (0.9, 0.999)
             ae_MOMENTUM = 1e-3
             ae_MOMENTUM = 0
@@ -557,8 +560,8 @@ if __name__ == '__main__':
 
             if TRAIN_AUTOENCODER == True:
 
-                #AUTOENCODER_DATASET = Dataset(aggregate_examples = True, shuffle = True)
-                AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
+                AUTOENCODER_DATASET = Dataset(aggregate_examples = (LIB_TYPE is not 'control'), shuffle = True)
+                #AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
                 autoencoder = LinearSAAutoencoder(autoencoder_base, 
                         obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
                         device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR,
@@ -685,69 +688,72 @@ if __name__ == '__main__':
                 print("Agent Net Reward: ", agent.net_reward_history[i])
                 #i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
-                    if LIB_TYPE == 'control' and TRAIN_AUTOENCODER:
-                        #TODO: encapsulate this AE testing...and all else
-                        #we now display forward dynamics to compare with 
-                        #control trajectory
-                        env.generate_state_history_plot()
-                        #shift in predicted states, plot for side-by-side
-                        #comparison
-                        print("Compare with Autoencoder results!")
-                        ae_history = [] 
-                        for j in range(len(env.state_history)): 
-                            s = env.state_history[j]
-                            s = torch.tensor(s).to(device).float()
-                            a = torch.tensor(np.ones(1)).to(device).float()
-                            forward = autoencoder.forward_predict(s, a)
-                            ae_history.append(forward)
-                        #print("HISTORY: ", ae_history)
-                        env.generate_state_history_plot(ae_history)
-                        #plt.pause(0.01)
-                        #plt.clf()
+                    try:
+                        if LIB_TYPE == 'control' and TRAIN_AUTOENCODER and i > 50:
+                            #TODO: encapsulate this AE testing...and all else
+                            #we now display forward dynamics to compare with 
+                            #control trajectory
+                            env.generate_state_history_plot()
+                            #shift in predicted states, plot for side-by-side
+                            #comparison
+                            print("Compare with Autoencoder results!")
+                            ae_history = [] 
+                            for j in range(len(env.state_history)): 
+                                s = env.state_history[j]
+                                s = torch.tensor(s).to(device).float()
+                                a = torch.tensor(np.ones(1)).to(device).float()
+                                forward = autoencoder.forward_predict(s, a)
+                                ae_history.append(forward)
+                            #print("HISTORY: ", ae_history)
+                            env.generate_state_history_plot(ae_history)
+                            #plt.pause(0.01)
+                            #plt.clf()
 
-                            
-                    plt.figure(1)
-                    plt.subplot(2, 1, 1)
-                    plt.title("Algorithm:%s \n\
-                            Activations: %s  Hdims: %s Outdims: %s\n\
-                            lr=%s betas=%s eps=%s min_eps=%s eps_decay=%s\n\
-                            gamma = %s"\
-                            %(TRAINER_TYPE, mlp_activations,
-                            mlp_hdims, mlp_outdim, 
-                            lr, ADAM_BETAS, EPS, EPS_MIN, EPS_DECAY, GAMMA))
-                    #graph.set_xdata(range(len(total_reward_history)))
-                    #graph.set_ydata([r for r in total_reward_history])
-                    #plt.scatter(range(len(total_reward_history)), [r.numpy()[0] for r in total_reward_history])
-                    plt.xlim(0, len(agent.net_reward_history))
-                    plt.ylim(0, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
-                    plt.ylabel("Net \n Reward")
-                    plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.5, c='b')
-                    if MA_LEN > 0 and len(agent.net_reward_history) > 0:
-                        MA += agent.net_reward_history[-1]
-                        val = MA #in order to divide
-                        if i >= MA_LEN - 1: 
-                            MA -= agent.net_reward_history[i - MA_LEN]
-                            val = val / MA_LEN
-                        else:
-                            val = val / (i + 1)
-                        averages.append(val)
-                        #plt.plot(np.convolve(np.ones((MA_LEN,)), agent.net_reward_history, mode=m)) #alternative modes: 'full', 'same', 'valid'
-                        plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
-                    plt.subplot(2, 1, 2)
-                    plt.ylabel("Net \n Loss")
-                    plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
-                    if DISPLAY_AV_LOSS is True:
-                        plt.figure(2)
-                        plt.clf()
+                                
+                        plt.figure(1)
                         plt.subplot(2, 1, 1)
-                        plt.ylabel("Action Loss")
-                        plt.scatter(range(len(agent.action_loss_history)), [l.numpy() for l in agent.action_loss_history], s=0.1)
+                        plt.title("Algorithm:%s \n\
+                                Activations: %s  Hdims: %s Outdims: %s\n\
+                                lr=%s betas=%s eps=%s min_eps=%s eps_decay=%s\n\
+                                gamma = %s"\
+                                %(TRAINER_TYPE, mlp_activations,
+                                mlp_hdims, mlp_outdim, 
+                                lr, ADAM_BETAS, EPS, EPS_MIN, EPS_DECAY, GAMMA))
+                        #graph.set_xdata(range(len(total_reward_history)))
+                        #graph.set_ydata([r for r in total_reward_history])
+                        #plt.scatter(range(len(total_reward_history)), [r.numpy()[0] for r in total_reward_history])
+                        plt.xlim(0, len(agent.net_reward_history))
+                        plt.ylim(0, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
+                        plt.ylabel("Net \n Reward")
+                        plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.5, c='b')
+                        if MA_LEN > 0 and len(agent.net_reward_history) > 0:
+                            MA += agent.net_reward_history[-1]
+                            val = MA #in order to divide
+                            if i >= MA_LEN - 1: 
+                                MA -= agent.net_reward_history[i - MA_LEN]
+                                val = val / MA_LEN
+                            else:
+                                val = val / (i + 1)
+                            averages.append(val)
+                            #plt.plot(np.convolve(np.ones((MA_LEN,)), agent.net_reward_history, mode=m)) #alternative modes: 'full', 'same', 'valid'
+                            plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
                         plt.subplot(2, 1, 2)
-                        plt.ylabel("Value Loss")
-                        plt.xlabel("Time")
-                        plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
-                        plt.draw()
-                    plt.pause(0.01)
+                        plt.ylabel("Net \n Loss")
+                        plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
+                        if DISPLAY_AV_LOSS is True:
+                            plt.figure(2)
+                            plt.clf()
+                            plt.subplot(2, 1, 1)
+                            plt.ylabel("Action Loss")
+                            plt.scatter(range(len(agent.action_loss_history)), [l.numpy() for l in agent.action_loss_history], s=0.1)
+                            plt.subplot(2, 1, 2)
+                            plt.ylabel("Value Loss")
+                            plt.xlabel("Time")
+                            plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
+                            plt.draw()
+                        plt.pause(0.01)
+                    except:
+                        pass
                 i += 1
         else:
             launch_viewer(env, agent)
