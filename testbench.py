@@ -287,7 +287,7 @@ DISPLAY_AV_LOSS = True
 
 FULL_EPISODE = True
 MAXIMUM_TRAJECTORY_LENGTH = MAX_TIMESTEPS
-SMALL_TRAJECTORY_LENGTH = 100
+SMALL_TRAJECTORY_LENGTH = 200
 
 if FULL_EPISODE:
     max_traj_len = MAXIMUM_TRAJECTORY_LENGTH
@@ -306,13 +306,16 @@ RUN_ANYWAYS = False
 
 LIB_TYPE = 'dm'
 #LIB_TYPE = 'gym'
-#LIB_TYPE = 'control'
 
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
 TRAINER_TYPE = 'AC'
 #TRAINER_TYPE = 'PPO'
+#EPISODES_BEFORE_TRAINING = 3
+#max_traj_len = SMALL_TRAJECTORY_LENGTH
+#replay_iterations = 6
+
 lr = 0.5e-3
 ADAM_BETAS = (0.9, 0.999)
 MOMENTUM = 1e-3
@@ -329,7 +332,7 @@ energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
 EPS = 1.0e-1
 EPS_MIN = 1e-2
 EPS_DECAY = 1e-8
-GAMMA = 0.98
+GAMMA = 0.999
 ENV_TYPE = 'humanoid'
 #TASK_NAME = 'run'
 #TASK_NAME = 'walk'
@@ -338,22 +341,29 @@ TASK_NAME = 'stand'
 EPS = 0.5e-1
 EPS_MIN = 2e-2
 EPS_DECAY = 1e-6
-GAMMA = 0.98
+GAMMA = 0.99
 ENV_TYPE = 'walker'
 #TASK_NAME = 'run'
 TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
 #EPS = 0.7e-1
-#EPS_MIN = 2e-2
+#EPS_MIN = 0.5e-2
 #EPS_DECAY = 1e-7
-#GAMMA = 0.98
+#GAMMA = 0.99
 #ENV_TYPE = 'cartpole'
 ##TASK_NAME = 'swingup'
 #TASK_NAME = 'balance'
 
+MAXMIN_NORMALIZATION = True
+TRAIN_AUTOENCODER = True
+
 ###CONTROL ENVIRONMENTS
 #LIB_TYPE = 'control'
+#PRETRAINED = True
+#RUN_ANYWAYS = True
+#MAXMIN_NORMALIZATION = False
+#TRAIN_AUTOENCODER = True
 #EPS = 0.5e-1
 #EPS_MIN = 2e-2
 #EPS_DECAY = 1e-6
@@ -361,14 +371,10 @@ TASK_NAME = 'stand'
 #ENV_TYPE = 'rossler'
 #ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.0001, 'interval' : 10}
 #TASK_NAME = 'point'
-#PRETRAINED = True
-#RUN_ANYWAYS = True
 
 MA_LEN = -1
-MA_LEN = 20
+MA_LEN = 10
 
-MAXMIN_NORMALIZATION = True
-TRAIN_AUTOENCODER = True
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
@@ -470,8 +476,8 @@ if __name__ == '__main__':
 
         elif AGENT_TYPE == 'policy':
             mlp_indim = obs_size
-            mlp_activations = [None, None, 'relu'] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [mlp_indim * WIDENING_CONST, mlp_indim * WIDENING_CONST,] 
+            mlp_activations = [None] #+1 for outdim activation, remember extra action/value modules
+            mlp_hdims = [] 
             mlp_outdim = mlp_indim * WIDENING_CONST #based on state size (approximation)
             print("MLP INDIM: %s HDIM: %s OUTDIM: %s " % (obs_size, mlp_hdims, mlp_outdim))
             print("MLP ACTIVATIONS: ", mlp_activations)
@@ -518,9 +524,9 @@ if __name__ == '__main__':
             TRAIN_ACTION = True
 
             mlp_outdim = None
-            DEPTH = 3
+            DEPTH = 2
             UNIFORM_LAYERS = True
-            REDUCTION_FACTOR = 0.8
+            REDUCTION_FACTOR = 0.7
             COUPLED_SA = False #have S/A feed into same encoded space or not
             PREAGENT = True
             PREAGENT_VALUE_FUNC = True #(True, None) or False
@@ -530,38 +536,38 @@ if __name__ == '__main__':
             AE_ACTIVATIONS = ['relu']
             ENCODED_ACTIVATIONS = []
 
-            ae_lr = 0.9e-3
+            ae_lr = 0.5e-3
             ae_ADAM_BETAS = (0.9, 0.999)
             ae_MOMENTUM = 1e-3
             ae_MOMENTUM = 0
 
             AE_BATCHES = 64
-            AE_REPLAYS = 20
-            DATASET_RECENT_PROB = 0.75
+            AE_REPLAYS = 10
+            DATASET_RECENT_PROB = 0.7
             if action_size > 1:
-                mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + math.floor(action_size * REDUCTION_FACTOR**DEPTH)
+                forward_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + math.floor(action_size * REDUCTION_FACTOR**DEPTH)
             else:
-                mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + 1
+                forward_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + 1
             #TODO: ^ this works...in both cases (coupled_sa or not)
-            mlp_outdim = obs_size * (REDUCTION_FACTOR**DEPTH)
-            mlp_hdims = [mlp_indim * WIDENING_CONST, mlp_indim * WIDENING_CONST,] 
-            mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
+            forward_outdim = obs_size * (REDUCTION_FACTOR**DEPTH)
+            forward_hdims = [mlp_indim * WIDENING_CONST] 
+            forward_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
             
             if LINEAR_FORWARD:
                 raise Exception("Reduce to the sum of TWO matrices representing \
                         Ax + Bu where x=state and u=action")
-                forward_mlp = PyTorchMLP(device, mlp_indim, mlp_outdim, 
-                        hdims = mlp_hdims, activations = mlp_activations, 
+                forward_mlp = PyTorchMLP(device, forward_indim, forward_outdim, 
+                        hdims = forward_hdims, activations = forward_activations, 
                         initializer = mlp_initializer).to(device)
             else:
-                forward_mlp = PyTorchMLP(device, mlp_indim, math.floor(mlp_outdim), 
-                        hdims = mlp_hdims, activations = mlp_activations, 
+                forward_mlp = PyTorchMLP(device, forward_indim, math.floor(forward_outdim), 
+                        hdims = forward_hdims, activations = forward_activations, 
                         initializer = mlp_initializer).to(device)   
 
             if TRAIN_AUTOENCODER == True:
 
-                AUTOENCODER_DATASET = Dataset(aggregate_examples = (LIB_TYPE is not 'control'), shuffle = True)
-                #AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
+                #AUTOENCODER_DATASET = Dataset(aggregate_examples = (LIB_TYPE is not 'control'), shuffle = True)
+                AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
                 autoencoder = LinearSAAutoencoder(autoencoder_base, 
                         obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
                         device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR,
@@ -689,7 +695,7 @@ if __name__ == '__main__':
                 #i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
                     try:
-                        if LIB_TYPE == 'control' and TRAIN_AUTOENCODER and i > 50:
+                        if LIB_TYPE == 'control' and TRAIN_AUTOENCODER and i > 100:
                             #TODO: encapsulate this AE testing...and all else
                             #we now display forward dynamics to compare with 
                             #control trajectory
@@ -737,6 +743,7 @@ if __name__ == '__main__':
                             averages.append(val)
                             #plt.plot(np.convolve(np.ones((MA_LEN,)), agent.net_reward_history, mode=m)) #alternative modes: 'full', 'same', 'valid'
                             plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
+                            print("MA Reward: ", MA)
                         plt.subplot(2, 1, 2)
                         plt.ylabel("Net \n Loss")
                         plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)

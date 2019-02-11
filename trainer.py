@@ -256,10 +256,11 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
             if self.scheduler is not None:
                 self.scheduler.step()
             loss.backward(retain_graph = True)
+            optimizer.step()
+            optimizer.zero_grad() #HAHAHAHA
             self.agent.net_loss_history.append(loss.cpu().detach())
             self.agent.action_loss_history.append(net_action_loss.detach().cpu())
             self.agent.value_loss_history.append(net_value_loss.detach().cpu())
-            optimizer.step()
 
 
 class PyTorchACTrainer(PyTorchPolicyGradientTrainer):
@@ -311,12 +312,6 @@ class PyTorchPPOTrainer(PyTorchPolicyGradientTrainer):
         value_score = self.agent.value_history[ind] 
         value_loss = self.value_coeff * value_criterion(value_score, R) 
         return value_loss
-
-    def __init__(self, device, optimizer, scheduler = None, *args, **kwargs):
-        self.device = device
-        self.opt = optimizer
-        self.scheduler = scheduler
-        super(PyTorchTrainer, self).__init__(*args, **kwargs)
 
 class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
     def __init__(self, autoencoder, dataset, batch_size = 64, train_forward = True, 
@@ -406,16 +401,17 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
                 #    net_autoencoder_loss += autoencoder_action_loss
                 net_forward_loss += forward_loss
             #torch.nn.utils.clip_grad_norm_(module.parameters(), 100)
-        optimizer.zero_grad() #HAHAHAHA
+            optimizer.zero_grad() #HAHAHAHA
+            loss.backward(retain_graph = True)
+            optimizer.step()
+            optimizer.zero_grad() 
         if self.scheduler is not None:
             self.scheduler.step()
-        loss.backward(retain_graph = True)
         self.net_loss_history.append(loss.cpu().detach())
         self.encoder_loss_history.append((net_autoencoder_loss / (self.replay * len(sample))).cpu().detach())
         self.forward_loss_history.append((net_forward_loss / (self.replay * len(sample))).cpu().detach())
         if self.train_action:
             self.action_loss_history.append((net_action_loss / (self.replay * len(sample))).cpu().detach())
-        optimizer.step()
 
     def plot_loss_histories(self):
         plt.figure(5)

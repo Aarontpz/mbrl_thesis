@@ -161,9 +161,11 @@ class RosslerEnvironment(ModelledEnvironment):
             self.state_fig = plt.figure()
         if history is None:
             history = self.state_history
-            fig = plt.figure()
+            fig = self.state_fig 
         else:
-            fig = self.state_fig
+            if not hasattr(self, 'secondary_state_fig'):
+                self.secondary_state_fig = plt.figure()
+            fig = self.secondary_state_fig
         x = [s[0] for s in history]
         y = [s[1] for s in history]
         z = [s[2] for s in history]
