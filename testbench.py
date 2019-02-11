@@ -170,7 +170,70 @@ def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwar
         return create_numpy_agent(agent_base, *args, **kwargs)
     return agent
 
-#class TFVisionCartpoleAgent(TFAgent): #but...would we WANT this??
+def initialize_dm_environment(env_type, task_name, *args, **kwargs):
+    env = suite.load(domain_name = env_type, task_name = task_name)  
+    tmp_env = suite.load(domain_name = env_type, task_name = task_name)  
+    action_space = env.action_spec()
+    obs_space = env.observation_spec()
+    if ENV_TYPE == 'walker':
+        obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0] + 1 #+1 for height
+    elif ENV_TYPE == 'cartpole':
+        obs_size = obs_space['position'].shape[0] + obs_space['velocity'].shape[0]
+    elif ENV_TYPE == 'humanoid':
+        obs_size = obs_space['joint_angles'].shape[0] + obs_space['extremities'].shape[0]
+        obs_size = obs_size + obs_space['velocity'].shape[0]#+1 for height
+
+    action_size = action_space.shape[0] 
+    #action_size = 2
+    action_constraints = [action_space.minimum, action_space.maximum]
+    obs_space = [1, obs_size]
+    return env, tmp_env, obs_space, obs_size, action_size, action_constraints
+
+def initialize_gym_environment(env_type, task_name, *args, **kwargs):
+    if env_type == 'walker':
+        env_string = 'Walker2d-v2'    
+    elif env_type == 'cartpole':
+        env_string = 'CartPole-v0'    
+    env = gym.make(env_string)
+    tmp_env = gym.make(env_string)
+    #print("Action space: ", env.action_space)
+    action_size = env.action_space.shape[0]
+    action_constraints = [env.action_space.low, env.action_space.high]
+    env.reset()
+    obs, reward, done, info = env.step(1)
+    obs_size = obs.size
+    obs_space = [1, obs_size]
+    return env, tmp_env, obs_space, obs_size, action_size, action_constraints
+
+def initialize_control_environment(env_type, task_name, *args, **kwargs):
+    env = retrieve_control_environment(ENV_TYPE, **kwargs)
+    tmp_env = retrieve_control_environment(ENV_TYPE, **kwargs)
+    action_size = env.get_action_size()
+    action_constraints = env.get_action_constraints()
+    obs_size = env.get_observation_size()
+    obs_space = [1, obs_size]
+    return env, tmp_env, obs_space, obs_size, action_size, action_constraints
+
+def initialize_environment(lib_type, env_type, task_name, *args, **kwargs):
+    ''' 
+        @args: 
+
+        @returns:
+            * env - Control environment
+            * tmp_env - Copy of control environment, if applicable (else None)
+            * obs_space - array representing shape of input space for RL environment
+            * obs_size - scalar representing total size (vector elements) of observation
+            * action_size - scalar representing # of actions for RL environment
+            * action_constraints - (optional, else None) constraints for action outputs.
+    '''
+    if lib_type == 'dm':
+        return initialize_dm_environment(env_type, task_name, *args, **kwargs)
+    elif LIB_TYPE == 'gym':
+        return initialize_gym_environment(env_type, task_name, *args, **kwargs)
+    elif LIB_TYPE == 'control':
+        return initialize_control_environment(env_type, task_name, *args, **kwargs)
+
+
 
 def launch_viewer(env, agent):
     try:
@@ -375,51 +438,20 @@ TRAIN_AUTOENCODER = True
 MA_LEN = -1
 MA_LEN = 10
 
+
+
+
+
+
 if __name__ == '__main__':
     #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
     #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
     #raise Exception("It is time...for...minibatches (vectorized) training. I think. INVESTIGATE?!")
-    if LIB_TYPE == 'dm':
-        env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
-        tmp_env = suite.load(domain_name = ENV_TYPE, task_name = TASK_NAME)  
-        action_space = env.action_spec()
-        obs_space = env.observation_spec()
-        if ENV_TYPE == 'walker':
-            obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0] + 1 #+1 for height
-        elif ENV_TYPE == 'cartpole':
-            obs_size = obs_space['position'].shape[0] + obs_space['velocity'].shape[0]
-        elif ENV_TYPE == 'humanoid':
-            obs_size = obs_space['joint_angles'].shape[0] + obs_space['extremities'].shape[0]
-            obs_size = obs_size + obs_space['velocity'].shape[0]#+1 for height
-
-        action_size = action_space.shape[0] 
-        #action_size = 2
-        action_constraints = [action_space.minimum, action_space.maximum]
-
-        print("Action Space: %s \n Observation Space: %s\n" % (action_size, obs_size))
-        print("Agent IS: Discrete: %s; Traj Length: %s; Replays: %s" % (DISCRETE_AGENT,
-            max_traj_len, replay_iterations))
-        print("Trainer Type: %s" % (TRAINER_TYPE))
-    elif LIB_TYPE == 'gym':
-        if ENV_TYPE == 'walker':
-            env_string = 'Walker2d-v2'    
-        elif ENV_TYPE == 'cartpole':
-            env_string = 'CartPole-v0'    
-        env = gym.make(env_string)
-        tmp_env = gym.make(env_string)
-        #print("Action space: ", env.action_space)
-        action_size = env.action_space.shape[0]
-        action_constraints = [env.action_space.low, env.action_space.high]
-        env.reset()
-        obs, reward, done, info = env.step(1)
-        obs_size = obs.size
-
-    elif LIB_TYPE == 'control':
-        env = retrieve_control_environment(ENV_TYPE, **ENV_KWARGS)
-        tmp_env = retrieve_control_environment(ENV_TYPE, **ENV_KWARGS)
-        action_size = env.get_action_size()
-        action_constraints = env.get_action_constraints()
-        obs_size = env.get_observation_size()
+    args = []
+    kwargs = {}
+    if LIB_TYPE == 'control':
+        kwargs = ENV_KWARGS
+    env, tmp_env, obs_space, obs_size, action_size, action_constraints = initialize_environment(LIB_TYPE, ENV_TYPE, TASK_NAME, *args, **kwargs)
     
     MA = 0
     averages = []
