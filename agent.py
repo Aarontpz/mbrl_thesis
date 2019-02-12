@@ -852,7 +852,7 @@ def LinearSAAutoencoder(encoder_base, state_size, action_size, forward_mlp,
             assert(self.coupled_sa)
             return d[:self.state_size], d[self.state_size:]
 
-        def forward_encode(self, s, a):
+        def forward_encode(self, s, a, detach = False):
             '''Maps ENCODED s / a to an ENCODED s_t+1.'''
             if self.coupled_sa:
                 inp = torch.cat((s, a), 0) 
@@ -861,6 +861,9 @@ def LinearSAAutoencoder(encoder_base, state_size, action_size, forward_mlp,
             else:
                 s_ = super().encode(s)
                 a_ = self.action_ae.encode(a)
+            if detach:
+                s_ = s_.detach()
+                a_ = a_.detach()
             inp = torch.cat((s_, a_), 0) 
             f = self.forward_mlp(inp) 
             if self.forward_dynamics:
@@ -868,9 +871,9 @@ def LinearSAAutoencoder(encoder_base, state_size, action_size, forward_mlp,
             else:
                 return f
 
-        def forward_predict(self, s, a):
+        def forward_predict(self, s, a, detach = True):
             '''Maps full s/a to s_t+1 (not encoded s_t+1)'''
-            f = self.forward_encode(s, a)      
+            f = self.forward_encode(s, a, detach)      
             if self.coupled_sa:
                 inp = torch.cat((f, a), 0) 
                 #print("Len: %s Encoded Space: %s" % (len(inp), self.encoded_space))

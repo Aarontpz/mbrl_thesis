@@ -331,13 +331,6 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-#mlp_outdim = 200 #based on state size (approximation)
-#mlp_hdims = [200] 
-#mlp_activations = ['relu', 'relu'] #+1 for outdim activation, remember extra action/value modules
-#mlp_activations = [None, 'relu'] #+1 for outdim activation, remember extra action/value modules
-#mlp_outdim = 200 #based on state size (approximation)
-#mlp_hdims = []
-#mlp_activations = ['relu'] #+1 for outdim activation, remember extra action/value modules
 WIDENING_CONST = 2 #indim * WIDENING_CONST = hidden layer size
 mlp_initializer = None
 DISCRETE_AGENT = False
@@ -422,18 +415,18 @@ MAXMIN_NORMALIZATION = True
 TRAIN_AUTOENCODER = True
 
 ###CONTROL ENVIRONMENTS
-#LIB_TYPE = 'control'
-#PRETRAINED = True
-#RUN_ANYWAYS = True
-#MAXMIN_NORMALIZATION = False
-#TRAIN_AUTOENCODER = True
-#EPS = 0.5e-1
-#EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.98
-#ENV_TYPE = 'rossler'
-#ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.0001, 'interval' : 10}
-#TASK_NAME = 'point'
+LIB_TYPE = 'control'
+PRETRAINED = True
+RUN_ANYWAYS = True
+MAXMIN_NORMALIZATION = False
+TRAIN_AUTOENCODER = True
+EPS = 0.5e-1
+EPS_MIN = 2e-2
+EPS_DECAY = 1e-6
+GAMMA = 0.98
+ENV_TYPE = 'rossler'
+ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.0001, 'interval' : 10}
+TASK_NAME = 'point'
 
 MA_LEN = -1
 MA_LEN = 10
@@ -508,8 +501,8 @@ if __name__ == '__main__':
 
         elif AGENT_TYPE == 'policy':
             mlp_indim = obs_size
-            mlp_activations = [None] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [] 
+            mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
+            mlp_hdims = [mlp_indim * WIDENING_CONST] 
             mlp_outdim = mlp_indim * WIDENING_CONST #based on state size (approximation)
             print("MLP INDIM: %s HDIM: %s OUTDIM: %s " % (obs_size, mlp_hdims, mlp_outdim))
             print("MLP ACTIVATIONS: ", mlp_activations)
@@ -598,8 +591,8 @@ if __name__ == '__main__':
 
             if TRAIN_AUTOENCODER == True:
 
-                #AUTOENCODER_DATASET = Dataset(aggregate_examples = (LIB_TYPE is not 'control'), shuffle = True)
-                AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
+                AUTOENCODER_DATASET = Dataset(aggregate_examples = False, shuffle = True)
+                #AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
                 autoencoder = LinearSAAutoencoder(autoencoder_base, 
                         obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
                         device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR,
@@ -727,7 +720,7 @@ if __name__ == '__main__':
                 #i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
                     try:
-                        if LIB_TYPE == 'control' and TRAIN_AUTOENCODER and i > 100:
+                        if LIB_TYPE == 'control' and TRAIN_AUTOENCODER and i > 5:
                             #TODO: encapsulate this AE testing...and all else
                             #we now display forward dynamics to compare with 
                             #control trajectory
@@ -775,7 +768,7 @@ if __name__ == '__main__':
                             averages.append(val)
                             #plt.plot(np.convolve(np.ones((MA_LEN,)), agent.net_reward_history, mode=m)) #alternative modes: 'full', 'same', 'valid'
                             plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
-                            print("MA Reward: ", MA)
+                            print("MA Reward: ", val)
                         plt.subplot(2, 1, 2)
                         plt.ylabel("Net \n Loss")
                         plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
