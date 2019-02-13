@@ -59,9 +59,9 @@ class ModelledEnvironment(Environment):
         return self.state
 
 class ControlEnvironment(ModelledEnvironment):
-    def __init__(self, mode = 'point', *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, mode = 'point', target = None, *args, **kwargs):
         self.mode = mode
+        self.set_target(target)
 
     @abc.abstractmethod
     def dx(self, x, u, *args) -> np.ndarray:
@@ -72,13 +72,23 @@ class ControlEnvironment(ModelledEnvironment):
             m: 'traj' or 'point' for the control objective'''
         self.mode = m
 
-    @abc.abstractmethod
-    def set_target_trajectory():
-        pass
+    def set_target(self, target):
+        if self.mode == 'point':
+            self.set_target_point(target)
+        elif self.mode == 'traj':
+            self.set_target_trajectory(target)
 
-    @abc.abstractmethod
-    def set_target_point():
-        pass
+    def set_target_trajectory(self, target):
+        self.target_traj = target
+
+    def set_target_point(self, target):
+        self.target_point = target
+    
+    def get_target(self) -> np.ndarray:
+        if self.mode == 'point':
+            return self.target_point
+        elif self.mode == 'traj':
+            return self.target_traj
 
 class RosslerEnvironment(ModelledEnvironment):
     '''Actions don't affect this system, it is purely to test
@@ -180,22 +190,123 @@ class RosslerEnvironment(ModelledEnvironment):
     def get_reward(self):
         return 0
 
+class InvertedPendulumEnvironment(ControlEnvironment):
+    def __init__(self, initial_state = None, ts = 0.0001, 
+            interval = 4.00, 
+            noisy_init = False, 
+            *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.noisy_init = noisy_init
+        self.ts = ts
+        self.interval = interval 
+        if initial_state:
+            self.state = initial_state
+        else:
+            self.state = self.get_initial_state(noise = self.noisy_init)
+        self.state_history = []
+        
+        self.steps = 0
+    
+    def reset(self):
+        self.state = self.get_initial_state(noise = self.noisy_init)
+        self.state_history = []
+        self.steps = 0
+
+    def step(self, action):
+        #if dx had an action, we would pass that into the spi.odeint args
+        #and/or call the function generator between passes, and make
+        #interval = sample frequency instead of transient-period
+        state = self.state.copy()
+        state += (self.dx(state, action) * self.interval*self.ts)
+        self.steps += self.interval * self.ts
+        self.state_history.append(state.copy())
+        self.state = state
+         
+    def dx(self, x, u, *args) -> np.ndarray:
+        '''x' = dx * x + du * u'''
+        if u is None:
+            u = 0.0
+        dx = np.array([x[1], 
+            -4*np.sin(x[0])])
+        du = np.array([0, 1]) * u
+        return dx + du
+
+    def get_initial_state(self, noise = False):
+        theta = 0 #OBJECTIVE is 180 degrees / pi / 2
+        theta_p = 0 
+        s = np.array([theta, theta_p], dtype = np.float32)
+        if noise:
+            s += np.random.uniform(low=0, high=0.1, size=2)
+        return s
+
+    def episode_is_done(self):
+        if self.steps >= self.interval:
+            return True
+        return False
+    
+    def get_observation_size(self):
+        return 2
+
+    def get_action_size(self):
+        return 2
+
+    def get_action_constraints(self):
+        return [np.ndarray([-2, -2]), np.ndarray([2, 2])]
+
+    def generate_plots(self):
+        self.generate_state_history_plot()
+
+    def generate_state_history_plot(self, history = None):
+        if not hasattr(self, 'state_fig'):
+            self.state_fig = plt.figure()
+        if history is None:
+            history = self.state_history
+            fig = self.state_fig 
+        else:
+            if not hasattr(self, 'secondary_state_fig'):
+                self.secondary_state_fig = plt.figure()
+            fig = self.secondary_state_fig
+        x = [s[0] for s in history]
+        y = [s[1] for s in history]
+        plt.plot(x,y, label='parametric curve')
+        plt.draw()
+        plt.pause(0.01)
+
+    def get_reward(self):
+        '''Reward = -Cost and vise-versa'''
+        return 0
+
 def retrieve_control_environment(env_type = 'rossler', *args, **kwargs):
     env = None
     if env_type == 'rossler':
         env = RosslerEnvironment(*args, **kwargs)
+    if env_type == 'inverted':
+        env = InvertedPendulumEnvironment(*args, **kwargs)
 
     if env is None:
         raise Exception("%s was not a recognized control environment type..." % (env_type))
     return env
 
 if __name__ == '__main__':
-    env = retrieve_control_environment('rossler')
+    #env = retrieve_control_environment('rossler')
+    #env.reset()
+    #while not env.episode_is_done():
+    #    env.step(None)
+    #env.generate_plots()
+    noisy_init = True
+    env = retrieve_control_environment('inverted', noisy_init = noisy_init, mode = 'point', 
+            target = np.array([0, np.pi/2], dtype = np.float32))
     env.reset()
     while not env.episode_is_done():
-        env.step(None)
+        x = env.state
+        target = env.get_target()
+        x_ = target - x
+        gamma = 0.7
+        wn = 2
+        w = np.array([2*gamma*wn, wn**2 + 4 * np.cos(x_[0])]) #linearizing feedback
+        env.step(w)
     env.generate_plots()
-
+    input()
 
 
 

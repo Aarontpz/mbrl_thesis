@@ -379,7 +379,7 @@ MOMENTUM = 1e-3
 entropy_coeff = 5e-3
 #entropy_coeff = 0 
 ENTROPY_BONUS = False
-value_coeff = 5e-2
+value_coeff = 9e-2
 
 #energy_penalty_coeff = 5e-2 #HIGH, if energy is a consideration
 energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
@@ -403,33 +403,33 @@ ENV_TYPE = 'walker'
 TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-#EPS = 0.7e-1
-#EPS_MIN = 0.5e-2
-#EPS_DECAY = 1e-7
-#GAMMA = 0.99
-#ENV_TYPE = 'cartpole'
-##TASK_NAME = 'swingup'
+EPS = 0.7e-1
+EPS_MIN = 0.5e-2
+EPS_DECAY = 1e-7
+GAMMA = 0.99
+ENV_TYPE = 'cartpole'
+TASK_NAME = 'swingup'
 #TASK_NAME = 'balance'
 
 MAXMIN_NORMALIZATION = True
 TRAIN_AUTOENCODER = True
 
 ###CONTROL ENVIRONMENTS
-LIB_TYPE = 'control'
-PRETRAINED = True
-RUN_ANYWAYS = True
-MAXMIN_NORMALIZATION = False
-TRAIN_AUTOENCODER = True
-EPS = 0.5e-1
-EPS_MIN = 2e-2
-EPS_DECAY = 1e-6
-GAMMA = 0.98
-ENV_TYPE = 'rossler'
-ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.0001, 'interval' : 10}
-TASK_NAME = 'point'
+#LIB_TYPE = 'control'
+#PRETRAINED = True
+#RUN_ANYWAYS = True
+#MAXMIN_NORMALIZATION = False
+#TRAIN_AUTOENCODER = True
+#EPS = 0.5e-1
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
+#GAMMA = 0.98
+#ENV_TYPE = 'rossler'
+#ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.0001, 'interval' : 10}
+#TASK_NAME = 'point'
 
 MA_LEN = -1
-MA_LEN = 10
+MA_LEN = 15
 
 
 
