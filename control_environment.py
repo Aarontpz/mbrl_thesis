@@ -60,11 +60,20 @@ class ModelledEnvironment(Environment):
 
 class ControlEnvironment(ModelledEnvironment):
     def __init__(self, mode = 'point', target = None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.mode = mode
+        if target is None:
+            self.set_target(np.zeros())
         self.set_target(target)
 
     @abc.abstractmethod
     def dx(self, x, u, *args) -> np.ndarray:
+        pass
+    @abc.abstractmethod
+    def d_dx(self, x, u=None, r=None, *args):
+        pass
+    @abc.abstractmethod
+    def d_du(self, x, u=None, r=None, *args):
         pass
 
     def set_control_mode(self, m):
@@ -213,23 +222,51 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         self.steps = 0
 
     def step(self, action):
-        #if dx had an action, we would pass that into the spi.odeint args
-        #and/or call the function generator between passes, and make
-        #interval = sample frequency instead of transient-period
+        '''Utilize Euler Integration to update system "discretely"'''
         state = self.state.copy()
+        target = self.get_target()
+        #state += (self.dx(state, action, target) * self.interval*self.ts)
         state += (self.dx(state, action) * self.interval*self.ts)
+        #state[0] = state[0] % np.pi
         self.steps += self.interval * self.ts
         self.state_history.append(state.copy())
         self.state = state
          
-    def dx(self, x, u, *args) -> np.ndarray:
+    def dx(self, x, u = None, r = None, *args) -> np.ndarray:
+    #def dx(self, x, u, *args) -> np.ndarray:
         '''x' = dx * x + du * u'''
+        #if u is None:
+        #    u = 0.0
+        #dx = np.array([x[1], 
+        #    -4*np.sin(x[0])])
+        #du = np.array([0, 1]) * u
+        #print("Dx: %s \n Du: %s" % (dx, du))
+        ##if r is not None:
+        ##    return (dx - u) + np.array([0, 1])*r
+        #return dx + du
         if u is None:
             u = 0.0
-        dx = np.array([x[1], 
-            -4*np.sin(x[0])])
+        dx = self.d_dx(x, u, r) 
+        #dx = np.array([x[1], 4*np.cos(x[0])])
+        if r is not None:
+            #print("Ref: ", r) 
+            #print("B*u: ", np.array([0, 1]) * u)
+            #print("B*u - dx: ", np.array([0, 1]) * u - dx)
+            #print("B*r: ", np.array([0, 1]) * r)
+            #d_dx = dx + np.array([0, 1]) * (u)
+            #d_dx = dx + np.array([0, 1]) * (u) - np.array([0, 1])*dx[1]
+            d_dx = dx + np.array([0, 1]) * (u)
+            return d_dx
         du = np.array([0, 1]) * u
+        #print("Dx: %s \n Du: %s" % (dx, du))
         return dx + du
+
+    def d_dx(self, x, u=None, r=None, *args):
+        dx = np.array([x[1], -4*np.sin(x[0])])
+        dx = np.array([x[1], 4*np.sin(x[0]) - 0.001*x[1]]) #additional friction term
+        return dx
+    def d_du(self, x, u, r=None, *args):
+        return np.array([0, 1])
 
     def get_initial_state(self, noise = False):
         theta = 0 #OBJECTIVE is 180 degrees / pi / 2
@@ -257,9 +294,9 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         self.generate_state_history_plot()
 
     def generate_state_history_plot(self, history = None):
-        if not hasattr(self, 'state_fig'):
-            self.state_fig = plt.figure()
         if history is None:
+            if not hasattr(self, 'state_fig'):
+                self.state_fig = plt.figure()
             history = self.state_history
             fig = self.state_fig 
         else:
@@ -269,6 +306,8 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         x = [s[0] for s in history]
         y = [s[1] for s in history]
         plt.plot(x,y, label='parametric curve')
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'g')
         plt.draw()
         plt.pause(0.01)
 
@@ -294,17 +333,29 @@ if __name__ == '__main__':
     #    env.step(None)
     #env.generate_plots()
     noisy_init = True
-    env = retrieve_control_environment('inverted', noisy_init = noisy_init, mode = 'point', 
-            target = np.array([0, np.pi/2], dtype = np.float32))
+    env = retrieve_control_environment('inverted', 
+            noisy_init = noisy_init, 
+            interval = 8.0, ts = 0.001,
+            mode = 'point', 
+            target = np.array([np.pi/4, 0], dtype = np.float32))
     env.reset()
+    gamma = 0.7
+    wn = 1
     while not env.episode_is_done():
+        print("STEP ", env.steps)
         x = env.state
         target = env.get_target()
         x_ = target - x
-        gamma = 0.7
-        wn = 2
-        w = np.array([2*gamma*wn, wn**2 + 4 * np.cos(x_[0])]) #linearizing feedback
-        env.step(w)
+        print("State: ", x)
+        print("Target: %s \n Error: %s"%(target, x_))
+        #w = np.array([wn**2 + 4 * np.cos(x[0]), 2*wn*gamma]) #linearizing feedback
+        #w = np.array([(4 * np.sin(x[0]) - wn**2 * x[0]) + (-1*2*wn*gamma*x[1])]) #linearizing feedback for OPEN-LOOP stability (reeeeee)
+        #dw = np.array([-4*np.cos(x[0]) - wn**2 * x[0] - 2*wn*gamma*x[1]]) 
+        dw = np.zeros(1)
+        print("W: ", dw)
+        #print("U: ", target - w)
+        #env.step(target - w)
+        env.step(dw)
     env.generate_plots()
     input()
 
