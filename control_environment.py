@@ -226,9 +226,10 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         state = self.state.copy()
         target = self.get_target()
         #state += (self.dx(state, action, target) * self.interval*self.ts)
-        state += (self.dx(state, action) * self.interval*self.ts)
+        state += (self.dx(state, action) * self.ts)
+        #state += (self.dx(state, action))
         #state[0] = state[0] % np.pi
-        self.steps += self.interval * self.ts
+        self.steps += self.ts
         self.state_history.append(state.copy())
         self.state = state
          
@@ -246,8 +247,9 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         #return dx + du
         if u is None:
             u = 0.0
-        dx = self.d_dx(x, u, r) 
-        #dx = np.array([x[1], 4*np.cos(x[0])])
+        #dx = self.d_dx(x, u, r) 
+        #dx = np.array([x[1], -4*np.sin(x[0]) - 0.01*x[1]])
+        dx = np.array([x[1], 4*np.cos(x[0]) - 0.1*x[1]])
         if r is not None:
             #print("Ref: ", r) 
             #print("B*u: ", np.array([0, 1]) * u)
@@ -262,10 +264,15 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         return dx + du
 
     def d_dx(self, x, u=None, r=None, *args):
-        dx = np.array([x[1], -4*np.sin(x[0])])
-        dx = np.array([x[1], 4*np.sin(x[0]) - 0.001*x[1]]) #additional friction term
+        #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
+        #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
+        dx = np.array([[0, 1], [-4*np.sin(x[0]), -0.1]])
+        #dx = np.array([[0, 1], [-4*np.sin(x[0]), 0]])
+        #dx = np.array([x[1], 4*np.sin(x[0]) - 0.001*x[1]]) #additional friction term
         return dx
+
     def d_du(self, x, u, r=None, *args):
+        #return np.array([0, 1]) * u
         return np.array([0, 1])
 
     def get_initial_state(self, noise = False):
@@ -340,7 +347,7 @@ if __name__ == '__main__':
             target = np.array([np.pi/4, 0], dtype = np.float32))
     env.reset()
     gamma = 0.7
-    wn = 1
+    wn = 2
     while not env.episode_is_done():
         print("STEP ", env.steps)
         x = env.state
@@ -349,13 +356,16 @@ if __name__ == '__main__':
         print("State: ", x)
         print("Target: %s \n Error: %s"%(target, x_))
         #w = np.array([wn**2 + 4 * np.cos(x[0]), 2*wn*gamma]) #linearizing feedback
-        #w = np.array([(4 * np.sin(x[0]) - wn**2 * x[0]) + (-1*2*wn*gamma*x[1])]) #linearizing feedback for OPEN-LOOP stability (reeeeee)
-        #dw = np.array([-4*np.cos(x[0]) - wn**2 * x[0] - 2*wn*gamma*x[1]]) 
-        dw = np.zeros(1)
-        print("W: ", dw)
+        w = np.array([(-4 * np.sin(x[0]) - wn**2 * x[0]) + (-1*2*wn*gamma*x[1])]) #linearizing feedback for OPEN-LOOP stability (reeeeee)
+        #w = np.array([(-4 * np.cos(x[0]) - wn**2 * x[0]) + (-1*2*wn*gamma*x[1])]) #linearizing feedback for OPEN-LOOP stability (reeeeee)
+        #w = np.array([(4 * np.sin(x[0])) + (-1*2*wn*gamma*x[1])]) #linearizing feedback for OPEN-LOOP stability (reeeeee)
+        print("W: ", w)
+        dw = np.array([-4*np.cos(x[0]) - wn**2 * x[0] - 2*wn*gamma*x[1]]) 
+        print("dW: ", dw)
+        #dw = np.zeros(1)
         #print("U: ", target - w)
-        #env.step(target - w)
-        env.step(dw)
+        env.step(target + dw)
+        #env.step(dw)
     env.generate_plots()
     input()
 

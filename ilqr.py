@@ -4,17 +4,18 @@ from control_environment import *
 
 import numpy as np
 
-import torch
-from torch.autograd import grad
-from torchviz import make_dot
-
-## PyTorch helper functions
-def dx(f, x, create_graph = True):
-    return grad(f, x, create_graph = create_graph)
-
-def dxx(f, x, create_graph = True):
-    pass
-##
+if True:
+    import torch
+    from torch.autograd import grad
+    from torchviz import make_dot
+    
+    ## PyTorch helper functions
+    def dx(f, x, create_graph = True):
+        return grad(f, x, create_graph = create_graph)
+    
+    def dxx(f, x, create_graph = True):
+        pass
+    ##
 
 class Model: 
     #TODO: Use LINEAR MODEL/Env to test iLQG / verify convergence
@@ -83,7 +84,7 @@ class LinearQuadraticModel(Model):
         #NOTE: xt is a ROW VECTOR   
         #print("QUADRATIC: X: %s Q: %s OUT: %s" % (xt, self.Q, 
         #    np.dot(xt.T, np.dot(self.Q,xt))))
-        return np.dot(xt.T, np.dot(self.Q,xt))
+        return np.dot(xt.T, np.dot(self.Q ,xt))
 
 class CostModel(Model):
     '''Calling the CostModel corresponds to getting the cost
@@ -98,7 +99,7 @@ class CostModel(Model):
 
 class LQC(CostModel):
     def __init__(self, Q : np.ndarray, R : np.ndarray,
-            Qf = None):
+            Qf = None, target = None):
         print("I sure hope Q and R are symmetric (and/or EYE)...")
         super().__init__()
         self.Q = LinearQuadraticModel(Q)
@@ -108,6 +109,7 @@ class LQC(CostModel):
         self.tmp_Q = None
         if Qf is not None:
             self.Qf = LinearQuadraticModel(Qf)
+        self.set_target(target)
 
     def terminal_mode(self):
         if not self.terminal:
@@ -119,18 +121,29 @@ class LQC(CostModel):
             super().normal_mode()
             self.Q = self.tmp_Q
 
+    def set_target(self, target):
+        self.target = target
+
+    def clear_target(self):
+        self.target = None
+
 
     def d_dx(self, xt=None, ut=None, dt=None, *args, **kwargs):
         '''Calculate df/dx, given timestep
         size dt'''
         assert(dt is not None)
-        print("Dx: ",self.Q.d_dx(xt, dt = dt) * dt)
+        #print("Dx: ",self.Q.d_dx(xt, dt = dt) * dt)
+        #print("MODE: ", self.terminal)
+        #if self.target is not None:
+        #    xt = self.target + xt
         return self.Q.d_dx(xt, dt = dt) * dt
     def d_dxx(self, xt=None, ut=None, dt=None, *args, **kwargs):
         '''Calculate df^2/(dxdx), given timestep
         size dt'''
         assert(dt is not None)
-        print("Dxx: ",self.Q.d_dxx(xt, dt = dt) * dt)
+        #print("Dxx: ",self.Q.d_dxx(xt, dt = dt) * dt)
+        #if self.target is not None:
+        #    xt = self.target + xt
         return self.Q.d_dxx(xt, dt = dt) * dt
     def d_du(self, xt=None, ut=None, dt=None, *args, **kwargs):
         '''Calculate df/du, given timestep
@@ -150,12 +163,23 @@ class LQC(CostModel):
         assert(dt is not None)
         #print("Dxu: ",np.zeros((self.R.Q[0].size, self.Q.Q[0].size)))
         return np.zeros((self.R.Q[0].size, self.Q.Q[0].size))
-    def __call__(self, xt, ut=None, dt=None, *args, **kwargs):
+    def __call__(self, xt, ut, dt=None, *args, **kwargs):
         if dt is None:
             dt = 1.0
+        if self.target is not None:
+            #xt = 0.5*(self.target - xt)**2
+            #xt = self.target - xt
+            xt = abs(self.target - xt)
+            print("ERROR (LQC Xt = xt - target): ", xt)
         if self.terminal:
-            return self.Qf(xt) * dt
-        return (self.Q(xt) + self.R(ut)) * dt
+            #if self.target is not None:
+            #    #xt = 0.5*(self.target - xt)**2
+            #    xt = self.target - xt
+            #    print("ERROR (LQC Xt = xt - target): ", xt)
+            return 0.5 * self.Qf(xt) 
+            #return self.Qf(xt) * dt
+        #return (self.Q(xt) + self.R(ut)) 
+        return 0.5 * (self.Q(xt) + self.R(ut)) * dt
 
 class LQC_Controlled(LQC):
     def __init__(self, target : np.ndarray, *args, **kwargs):
@@ -179,12 +203,15 @@ class ControlEnvironmentModel(Model):
         size dt'''
         assert(dt is not None)
         eye = np.eye(self.env.get_observation_size()) 
-        return eye + self.env.d_dx(xt) * dt
+        #return (eye + self.env.d_dx(xt)) * dt
+        #return eye + self.env.d_dx(xt) * dt
+        return self.env.d_dx(xt) * dt
     def d_du(self, xt = None, ut=None, dt=None, *args, **kwargs):
         '''Calculate df/dx, given timestep
         size dt'''
         assert(dt is not None)
         assert(ut is not None)
+        print("d_du: ", self.env.d_du(xt, u = ut) * dt)
         return self.env.d_du(xt, u = ut) * dt
     def __call__(self, xt, ut, dt=None, *args, **kwargs):
         return self.env.dx(xt, ut) 
@@ -235,8 +262,8 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
 
         Based on https://github.com/studywolf/control/blob/master/studywolf_control/controllers/ilqr.py and details in https://homes.cs.washington.edu/~todorov/papers/TassaICRA14.pdf.
         '''
+        sim_new_trajectory = True #I MISSED THIS IN THE ALGORITHM
         U = self.initialize_constant_control(xt, self.initial_ut)
-        X = self.forward(xt, U)
         #print('States: ', X)
         #input()
         #self.model.env.generate_state_history_plot(X)
@@ -244,39 +271,42 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
         #self.cost.terminal_mode()
         #cost = self.cost(X[-1], U[-1], self.dt) #dt = 1 for terminal?
         #self.cost.normal_mode()
-        cost = self.forward_cost(X, U) #dt = 1 for terminal?
 
         lamb = 1.0 # regularization parameter, for LM Heuristic(seepaper/ref)
         for ii in range(self.max_iterations): 
             print("STEP: ", ii)
-            prev_cost = cost.copy()
-            ## Forward Rollout
-            TRAJ = [t for t in zip(X, U)]
-            #print("TRAJ: ", [t for t in TRAJ])
-            #calculate local derivatives along trajectories
-            fx = [self.model.d_dx(t[0], t[1], self.dt) for t in TRAJ]
-            fu = [self.model.d_du(t[0], t[1], self.dt) for t in TRAJ]
-            #calculate first and 2nd derivatives for cost along traj
-            #TODO TODO: should the LAST element be cost.d_dx in TERMINAL mode?
-            #NOTE: ANSWER THIS pls it may be important ^
-            lx = [self.cost.d_dx(t[0], t[1], self.dt) for t in TRAJ]
-            lu = [self.cost.d_du(t[0], t[1], self.dt) for t in TRAJ]
-            lxx = [self.cost.d_dxx(t[0], t[1], self.dt) for t in TRAJ]
-            luu = [self.cost.d_duu(t[0], t[1], self.dt) for t in TRAJ]
-            lxu = [self.cost.d_dxu(t[0], t[1], self.dt) for t in TRAJ]
-             
-            l = np.zeros((self.horizon, 1)) 
-            self.cost.terminal_mode()
-            print("FINAL: X: %s U: %s" % (X[-1], U[-1]))
-            l[-1] = self.cost(X[-1], U[-1]) #get terminal cost
-            lx[-1] = self.cost.d_dx(X[-1], U[-1], self.dt) #terminal dl/dx
-            lxx[-1] = self.cost.d_dxx(X[-1], U[-1], self.dt) #ya get it
-            lu[-1] = self.cost.d_du(X[-1], U[-1], self.dt) # EQUALS 0
-            luu[-1] = self.cost.d_duu(X[-1], U[-1], self.dt) # EQUALS 0
-            lxu[-1] = self.cost.d_dxu(X[-1], U[-1], self.dt) # EQUALS 0
-            print("Final Cost: ", l[-1])
-            print("Final dl/dx: ", lx[-1])
-            self.cost.normal_mode() #this is...sorta grossth
+            if sim_new_trajectory:
+                X = self.forward(xt, U)
+                cost = self.forward_cost(X, U) #dt = 1 for terminal?
+                prev_cost = cost.copy()
+                ## Forward Rollout
+                TRAJ = [t for t in zip(X, U)]
+                #print("TRAJ: ", [t for t in TRAJ])
+                #calculate local derivatives along trajectories
+                fx = [self.model.d_dx(t[0], t[1], self.dt) for t in TRAJ]
+                fu = [self.model.d_du(t[0], t[1], self.dt) for t in TRAJ]
+                #calculate first and 2nd derivatives for cost along traj
+                #TODO TODO: should the LAST element be cost.d_dx in TERMINAL mode?
+                #NOTE: ANSWER THIS pls it may be important ^
+                lx = [self.cost.d_dx(t[0], t[1], self.dt) for t in TRAJ]
+                lu = [self.cost.d_du(t[0], t[1], self.dt) for t in TRAJ]
+                lxx = [self.cost.d_dxx(t[0], t[1], self.dt) for t in TRAJ]
+                luu = [self.cost.d_duu(t[0], t[1], self.dt) for t in TRAJ]
+                lxu = [self.cost.d_dxu(t[0], t[1], self.dt) for t in TRAJ]
+                 
+                l = np.zeros((self.horizon, 1)) 
+                self.cost.terminal_mode()
+                print("FINAL: X: %s U: %s" % (X[-1], U[-1]))
+                l[-1] = self.cost(X[-1], U[-1]) #get terminal cost
+                lx[-1] = self.cost.d_dx(X[-1], U[-1], self.dt) #terminal dl/dx
+                lxx[-1] = self.cost.d_dxx(X[-1], U[-1], self.dt) #ya get it
+                lu[-1] = self.cost.d_du(X[-1], U[-1], self.dt) # EQUALS 0
+                luu[-1] = self.cost.d_duu(X[-1], U[-1], self.dt) # EQUALS 0
+                lxu[-1] = self.cost.d_dxu(X[-1], U[-1], self.dt) # EQUALS 0
+                print("Final Cost: ", l[-1])
+                print("Final dl/dx: ", lx[-1])
+                self.cost.normal_mode() #this is...sorta grossth
+                sim_new_trajectory = False
 
             V = l[-1].copy() #initialize cost-to-go at TERMINAL state
             Vx = lx[-1].copy()
@@ -318,7 +348,7 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 #SET TO ZERO (heuristic serves to ensure descent is
                 #performed across all dimensions, or no steps at all)
                 Quu_eval, Quu_evec = np.linalg.eig(Quu) 
-                #print("Quu Eigenvals: ", Quu_eval)
+                print("Quu Eigenvals: ", Quu_eval)
                 Quu_eval[Quu_eval < 0] = 0.0 #remove negative eigenvals
                 Quu_eval += lamb
                 print("MODIFIED Quu Eigenvals: ", Quu_eval)
@@ -343,8 +373,12 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
             Unew = np.zeros((self.horizon, self.action_size)) #"new" control sequence
             for i in range(self.horizon - 1):
                 deltax = xnew - X[i]
+                print("Dot: ", np.dot(K[i], deltax))
                 Unew[i] = U[i] + k[i] + np.dot(K[i], deltax)
+                dx = self.model(xnew, Unew[i]) * self.dt
+                print("Unew: ", Unew[i])
                 xnew += self.model(xnew, Unew[i]) * self.dt #get next state
+                print("Xnew: %s dx: %s" % (xnew, dx))
             
             Xnew = self.forward(xt, Unew) #use updated control sequence
             costnew = self.forward_cost(Xnew, Unew) #dt = 1 for terminal?
@@ -360,7 +394,8 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 U = Unew.copy()
                 prev_cost = np.copy(cost) #for stopping conditions
                 cost = np.copy(costnew)
-
+                sim_new_trajectory = True
+                print("Delta-Cost: %s, Threshold: %s" % ((abs(prev_cost - cost)/cost),  self.eps))
                 if ii > 0 and ((abs(prev_cost - cost)/cost) < self.eps):
                     print("CONVERGED at Iteration %s, Cost: %s" % (ii, 
                         cost)) 
@@ -370,13 +405,17 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 lamb *= self.lamb_factor
                 if lamb > self.lamb_max:
                     print("We're not converging: %s vs %s" % (costnew, cost))
+                    if False:
+                        X = Xnew.copy()
+                        U = Unew.copy()
                     break
         return X, U
 
 
 
     def initialize_constant_control(self, xt, initial=0.0) -> np.ndarray:
-        return np.ones((self.horizon - 1, self.action_size))  * self.initial_ut
+        #return np.ones((int((self.horizon)/self.dt), self.action_size))  * self.initial_ut 
+        return np.ones((self.horizon - 1, self.action_size))  * self.initial_ut 
 
     def initialize_random_control(self, xt) -> np.ndarray:
         pass
@@ -391,6 +430,7 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
         for u in control:
             dx = self.model(xt_, u)
             xt_ += dx * self.dt
+            #xt_ += dx
             #xt_[0] = xt_[0] % np.pi
             states.append(xt_.copy())
         return states
@@ -400,9 +440,11 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
         for i in range(len(X)):
             if i == len(X) - 1: #terminal
                 self.cost.terminal_mode()
-                cost += self.cost(X[i], None, dt = self.dt)
+                #cost += self.cost(X[i], None, dt = self.dt) * self.dt
+                cost += self.cost(X[i], None, dt = self.dt) 
                 self.cost.normal_mode()
             else:
+                assert(self.cost.terminal is False)
                 cost += self.cost(X[i], U[i], dt = self.dt)
         return cost
 
@@ -418,34 +460,42 @@ def MPCController(control_base, *args, **kwargs):
 if __name__ == '__main__':
     lamb_factor = 10
     lamb_max = 1000
-    horizon = 5
+    horizon = 10
     initialization = 0.0
-    dt = 0.001
-    max_iterations = 5
-    eps = 0.001
+    #initialization = 1.0
+    dt = 5e-3
+    max_iterations = 30
+    eps = 0.0001
     
     #
     state_shape = [1, 2]
     state_size = 2
     action_shape = [1]
     action_size = 1
-    Q = np.eye(state_size) * 0 
+    Q = np.eye(state_size) * 1e-0
     #Qf = Q
-    Qf = np.eye(state_size)
+    Qf = np.eye(state_size) * 10
     R = np.eye(action_size) * 1e-5
-    cost = LQC(Q, R, Qf = Qf)
+    #R[0][0] = 0.0 #only concerned with force applied to controllable var
+    #target = None
+    #target = np.array([np.pi, 0], dtype = np.float64)
+    target = np.array([np.pi/2, 0], dtype = np.float64)
+    cost = LQC(Q, R, Qf = Qf, target = target)
     noisy_init = True
-    target = np.array([np.pi/2, 0], dtype = np.float32)
     env = retrieve_control_environment('inverted', 
             noisy_init = noisy_init, 
             interval = horizon, ts = dt, #THESE DON'T MATTER FOR THIS
             mode = None, 
-            target = target) #unnecess
+            target = (target if target is not None else np.zeros((state_size)))) #unnecess
 
     model = ControlEnvironmentModel(env)
     action_constraints = None
-    x0 = np.array([0, np.pi/2],dtype=np.float32)
-
+    #x0 = np.array([0, np.pi/2],dtype=np.float64)
+    #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
+    x0 = np.array([0.1, -0.0],dtype=np.float64)
+    
+    env.reset()
+    env.state = x0.copy()
     #
 
     ilqg = ILQG(state_shape, state_size, action_shape, action_size,
@@ -458,16 +508,17 @@ if __name__ == '__main__':
             max_iterations = max_iterations, eps = eps)
 
 
-    #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
     X, U = ilqg.step(x0)
-    print('X: %s \n U: %s' % (X, U))
-    env.state = x0
+    #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
+    print("FINAL U: ", U)
+    env.state = x0.copy()
     for u in U:
         env.step(u)
     #env.state_history = [np.array([s[0] % np.pi, s[1]]) for s in env.state_history]
-    env.generate_plots()
+    #env.state_history = X
     print("Final State: ", env.state_history[-1])
     print("Target: ", target)
+    env.generate_plots()
     input()
 
     ### Simple differentiation test
