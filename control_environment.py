@@ -200,7 +200,7 @@ class RosslerEnvironment(ModelledEnvironment):
         return 0
 
 class InvertedPendulumEnvironment(ControlEnvironment):
-    def __init__(self, initial_state = None, ts = 0.0001, 
+    def __init__(self, friction = 0.1, initial_state = None, ts = 0.0001, 
             interval = 4.00, 
             noisy_init = False, 
             *args, **kwargs):
@@ -208,11 +208,14 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         self.noisy_init = noisy_init
         self.ts = ts
         self.interval = interval 
+        
         if initial_state:
             self.state = initial_state
         else:
             self.state = self.get_initial_state(noise = self.noisy_init)
         self.state_history = []
+
+        self.friction = friction
         
         self.steps = 0
     
@@ -249,7 +252,9 @@ class InvertedPendulumEnvironment(ControlEnvironment):
             u = 0.0
         #dx = self.d_dx(x, u, r) 
         #dx = np.array([x[1], -4*np.sin(x[0]) - 0.01*x[1]])
-        dx = np.array([x[1], 4*np.cos(x[0]) - 0.1*x[1]])
+        #input("Self.friction: %s" % (self.friction))
+        dx = np.array([x[1], -4*np.sin(x[0]) - self.friction*x[1]])
+        #dx = np.array([x[1], -4*np.sin(x[0])])
         if r is not None:
             #print("Ref: ", r) 
             #print("B*u: ", np.array([0, 1]) * u)
@@ -266,7 +271,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
     def d_dx(self, x, u=None, r=None, *args):
         #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
         #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
-        dx = np.array([[0, 1], [-4*np.sin(x[0]), -0.1]])
+        dx = np.array([[0, 1], [-4*np.cos(x[0]), -self.friction]])
         #dx = np.array([[0, 1], [-4*np.sin(x[0]), 0]])
         #dx = np.array([x[1], 4*np.sin(x[0]) - 0.001*x[1]]) #additional friction term
         return dx
@@ -340,32 +345,35 @@ if __name__ == '__main__':
     #    env.step(None)
     #env.generate_plots()
     noisy_init = True
+    target = np.array([0, 0])
+    horizon = 8
     env = retrieve_control_environment('inverted', 
+            friction = 0.1,  
             noisy_init = noisy_init, 
-            interval = 8.0, ts = 0.001,
+            interval = 8, ts = 0.001,
             mode = 'point', 
-            target = np.array([np.pi/4, 0], dtype = np.float32))
+            target = target)
     env.reset()
+    env.state = np.array([0.0001, 0])
     gamma = 0.7
-    wn = 2
+    wn = 20
     while not env.episode_is_done():
         print("STEP ", env.steps)
         x = env.state
-        target = env.get_target()
         x_ = target - x
         print("State: ", x)
         print("Target: %s \n Error: %s"%(target, x_))
-        #w = np.array([wn**2 + 4 * np.cos(x[0]), 2*wn*gamma]) #linearizing feedback
-        w = np.array([(-4 * np.sin(x[0]) - wn**2 * x[0]) + (-1*2*wn*gamma*x[1])]) #linearizing feedback for OPEN-LOOP stability (reeeeee)
-        #w = np.array([(-4 * np.cos(x[0]) - wn**2 * x[0]) + (-1*2*wn*gamma*x[1])]) #linearizing feedback for OPEN-LOOP stability (reeeeee)
-        #w = np.array([(4 * np.sin(x[0])) + (-1*2*wn*gamma*x[1])]) #linearizing feedback for OPEN-LOOP stability (reeeeee)
-        print("W: ", w)
-        dw = np.array([-4*np.cos(x[0]) - wn**2 * x[0] - 2*wn*gamma*x[1]]) 
-        print("dW: ", dw)
-        #dw = np.zeros(1)
+        w = np.array([4*np.sin(x[0]) - wn**2 * x[0] + 0.1*x[1] - 2*gamma*wn*x[1]])
+        dw = np.array([[0,0],[4*np.cos(x[0]) - wn**2, 0.1 - 2*gamma*wn]])
+        dw = np.array([4*np.cos(x[0]) - wn**2, 0.1 - 2*gamma*wn])
+        dw = np.zeros(1)
+        #dw = np.ones(1)
+        #print("dW: ", dw)
         #print("U: ", target - w)
-        env.step(target + dw)
-        #env.step(dw)
+        #env.step(target + dw)
+        #env.step(target + w)
+        env.step(dw)
+        #env.step(w)
     env.generate_plots()
     input()
 
