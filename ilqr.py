@@ -482,8 +482,18 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
         return cost
 
 
-def MPCController(control_base, *args, **kwargs):
-    pass
+def create_MPCController(control_base, *args, **kwargs):
+    class iLQR_MPC(control_base):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def step(self, xt) -> (np.ndarray, np.ndarray):
+            X, U = super().step(xt)
+            assert(True)
+            return X, U
+        #TODO: allow for reusing of U given "similar" X (multiarmed)
+    return iLQR_MPC(*args, **kwargs)        
+
 
 #class Controller:
 #    def __init__():
@@ -491,8 +501,8 @@ def MPCController(control_base, *args, **kwargs):
 
 
 if __name__ == '__main__':
-    LINEARIZED_PENDULUM_TEST = True
-    NONLINEAR_PENDULUM_TEST = False
+    LINEARIZED_PENDULUM_TEST = False
+    NONLINEAR_PENDULUM_TEST = True
     ##Nonlinear (inverted pendulum) controls test
     if NONLINEAR_PENDULUM_TEST:
         lamb_factor = 10
@@ -503,17 +513,30 @@ if __name__ == '__main__':
         dt = 1e-2
         max_iterations = 20
         eps = 0.001
+
+        SECONDARY_STEP = False
+        
+        MPC_COMPARISON = True
+        MPC_HORIZON = 0.1e0
+        MPC_DT = dt
+        MPC_MAX_STEPS = int(horizon / dt)
+        
+
         
         #
         state_shape = [1, 2]
         state_size = 2
         action_shape = [1]
         action_size = 1
-
-        Q = np.eye(state_size) * 1e4
+        
+        cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
+        #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
+        #cost_func = lambda h,dt:1e4
+        Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
-        Qf = np.eye(state_size) * 1e3 
-        R = np.eye(action_size) * 1e0
+        Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
+        R = np.eye(action_size) * 1e0 * 0
+
         Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Qf[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Qf[1][1] = Qf[0][0] / 4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
@@ -521,7 +544,7 @@ if __name__ == '__main__':
         #R[0][0] = 0.0 #only concerned with force applied to controllable var
         #target = None
         target = np.array([0, 0], dtype = np.float64)
-        target = np.array([0.5, 0], dtype = np.float64)
+        #target = np.array([0.5, 0], dtype = np.float64)
         #target = np.array([np.pi, 0], dtype = np.float64)
         #target = np.array([np.pi/2, 0], dtype = np.float64)
         #target = np.array([np.pi/4, 0], dtype = np.float64)
@@ -533,12 +556,12 @@ if __name__ == '__main__':
         cost = LQC(Q, R, Qf = Qf, target = target, 
                 diff_func = diff_func)
         noisy_init = True
-        friction = 0.0
+        friction = 0.000
         env = retrieve_control_environment('inverted', 
                 friction = friction,
                 noisy_init = noisy_init, 
                 interval = horizon, ts = dt, #THESE DON'T MATTER FOR THIS
-                mode = None, 
+                mode = 'point', 
                 target = (target if target is not None else np.zeros((state_size)))) #unnecess
 
         model = ControlEnvironmentModel(env)
@@ -546,7 +569,7 @@ if __name__ == '__main__':
         #x0 = np.array([0, np.pi/2],dtype=np.float64)
         #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
         ##x0 = np.array([np.pi, 0.0],dtype=np.float64) #NOTE: don't do 
-        x0 = np.array([0.0, 0],dtype=np.float64)
+        x0 = np.array([0.05, 0.00],dtype=np.float64)
         
         env.reset()
         env.state = x0.copy()
@@ -560,10 +583,10 @@ if __name__ == '__main__':
                 initialization = initialization,
                 dt = dt,
                 max_iterations = max_iterations, eps = eps)
+        
 
-
-        X, U = ilqg.step(x0)
-        #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
+        #X, U = ilqg.step(x0)
+        U = [np.zeros(action_size) for i in range(int(horizon/dt))]
         print("FINAL U: ", U)
         env.state = x0.copy()
         for u in U:
@@ -571,27 +594,65 @@ if __name__ == '__main__':
         print("Final State: ", env.state_history[-1])
         print("Target: ", target)
         env.generate_plots()
-        print("Next: the return trip to initial position")
         input()
-        xt = env.state_history[-1].copy()
-        target = x0.copy()
-        #target = np.array([0, np.pi])
-        #target = np.array([0, 0])
-        target = np.array([np.pi/2, 0])
-        env.reset()
-        env.set_target_point(target)
-        cost.set_target(target)
-        print("Initial state: %s Target: %s" % (xt, target))
-        input()
-        X, U = ilqg.step(xt) #MOVE BACK TO INITIAL POSITION
-        print("FINAL U: ", U)
-        env.state = xt.copy()
-        for u in U:
-            env.step(u)
-        print("Final State: ", env.state_history[-1])
-        print("Target: ", target)
-        env.generate_plots()
-        input()
+        if SECONDARY_STEP:
+            print("Next: the return trip to initial position")
+            xt = env.state_history[-1].copy()
+            target = x0.copy()
+            #target = np.array([0, 0])
+            #target = np.array([np.pi, 0])
+            target = np.array([np.pi/2, 0])
+            env.reset()
+            env.set_target_point(target)
+            cost.set_target(target)
+            print("Initial state: %s Target: %s" % (xt, target))
+            input()
+            X, U = ilqg.step(xt) #MOVE BACK TO INITIAL POSITION
+            print("FINAL U: ", U)
+            env.state = xt.copy()
+            for u in U:
+                env.step(u)
+            print("Final State: ", env.state_history[-1])
+            print("Target: ", target)
+            env.generate_plots()
+            input()
+        
+        if MPC_COMPARISON:
+            cost_func = lambda h,dt:1e8
+            #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
+            #cost_func = lambda h,dt:1e4
+            Q = np.eye(state_size) * cost_func(horizon, dt) * 1
+            #Qf = Q
+            Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
+            R = np.eye(action_size) * 1e0 * 0
+            Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+            cost = LQC(Q, R, Qf = Qf, target = target, 
+                    diff_func = diff_func)
+
+            mpc_ilqg = ILQG(state_shape, state_size, action_shape, action_size,
+                model, cost, None, action_constraints, #no noise model, iLQR
+                lamb_factor = lamb_factor,
+                lamb_max = lamb_max,
+                horizon = int(MPC_HORIZON*1/MPC_DT),
+                initialization = initialization,
+                dt = MPC_DT,
+                max_iterations = max_iterations, eps = eps)
+            env.reset()
+            env.state = x0.copy()
+            xt = x0.copy()
+            for i in range(MPC_MAX_STEPS):
+                X, U = mpc_ilqg.step(xt)
+                u = U[0]
+                #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
+                print("Next u: ", u)
+                env.step(u)
+                xt = env.state.copy()
+                #input("NEXT STEP!")
+            print("Final State: ", env.state_history[-1])
+            print("Target: ", target)
+            env.generate_plots()
+            input()
+
 
         
     
@@ -599,12 +660,17 @@ if __name__ == '__main__':
     if LINEARIZED_PENDULUM_TEST: #TODO: wrap this shit in Unittest eventually
         lamb_factor = 5
         lamb_max = 1000
-        horizon = 2
+        horizon = 2.5
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
         max_iterations = 50
         eps = 0.001
+        
+        MPC_COMPARISON = True
+        MPC_HORIZON = 0.1e0
+        MPC_DT = dt
+        MPC_MAX_STEPS = int(horizon / dt) * 1
         
         #
         state_shape = [1, 2]
@@ -612,17 +678,20 @@ if __name__ == '__main__':
         action_shape = [1]
         action_size = 1
         
-        cost_func = lambda h,dt:1e4 * (horizon * dt) / (5 * 1e-2)
-        #cost_func = lambda h,dt:1e3
-        Q = np.eye(state_size) * cost_func(horizon, dt) 
+        cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
+        cost_func = lambda h,dt:1e4
+        #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
+        #cost_func = lambda h,dt:1e4
+        Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
-        Qf = np.eye(state_size) * cost_func(horizon, dt)
-        R = np.eye(action_size) * 0e0
+        Qf = np.eye(state_size) * cost_func(horizon, dt) * 1
+        R = np.eye(action_size) * 1e0 * 0
         #Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Q[1][1] = Q[0][0]/4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #R[0][0] = 0.0 #only concerned with force applied to controllable var
         #target = None
         target = np.array([0, 0], dtype = np.float64)
+        #target = np.array([0.05, 0], dtype = np.float64)
         #target = np.array([np.pi, 0], dtype = np.float64)
         #target = np.array([np.pi/2, 0], dtype = np.float64)
         diff_func = lambda t,x : x - t
@@ -633,14 +702,15 @@ if __name__ == '__main__':
         cost = LQC(Q, R, Qf = Qf, target = target, 
                 diff_func = diff_func)
         noisy_init = True
-        friction = 0.05
+        friction = 0.00
         A = np.array([[0, 1],[1, -friction]])
         B = np.array([0, 1]) 
         model = LinearSystemModel(A, B)
         action_constraints = None
         #x0 = np.array([0, np.pi/2],dtype=np.float64)
         #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
-        x0 = np.array([0.05, 0.00],dtype=np.float64)
+        x0 = np.array([0.03, 0.00],dtype=np.float64)
+        #x0 = np.array([0.00, 0.00],dtype=np.float64)
         #
 
         ilqg = ILQG(state_shape, state_size, action_shape, action_size,
@@ -662,10 +732,54 @@ if __name__ == '__main__':
         y = [s[1] for s in X]
         plt.plot(x,y, label='parametric curve')
         plt.plot(x[0], y[0], 'ro')
-        plt.plot(x[-1], y[-1], 'g')
+        plt.plot(x[-1], y[-1], 'gx')
+        plt.plot(target[0], target[0], 'b^')
+        plt.title('Phase plot of Linearized Inverted Pendulum')
+        plt.ylabel("Velocity")
+        plt.xlabel("Position")
         plt.draw()
         plt.pause(0.01) 
         input()
+        if MPC_COMPARISON:
+            #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
+            cost_func = lambda h,dt:1e8
+            #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
+            #cost_func = lambda h,dt:1e4
+            Q = np.eye(state_size) * cost_func(horizon, dt) * 1
+            #Qf = Q
+            Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
+            R = np.eye(action_size) * 1e0 * 0
+            Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+            cost = LQC(Q, R, Qf = Qf, target = target, 
+                    diff_func = diff_func)
+            mpc_ilqg = ILQG(state_shape, state_size, action_shape, action_size,
+                model, cost, None, action_constraints, #no noise model, iLQR
+                lamb_factor = lamb_factor,
+                lamb_max = lamb_max,
+                horizon = int(MPC_HORIZON*1/MPC_DT),
+                initialization = initialization,
+                dt = MPC_DT,
+                max_iterations = max_iterations, eps = eps)
+            xt = x0.copy()
+            x_hist = [xt.copy(),]
+            for i in range(MPC_MAX_STEPS):
+                X, U = mpc_ilqg.step(xt)
+                u = U[0]
+                print("Next u: ", u)
+                dx = model(xt, u)
+                xt += dx * MPC_DT
+                x_hist.append(xt.copy())
+                #input("NEXT STEP!")
+            print("Final State: ", xt)
+            print("Target: ", target)
+            x = [s[0] for s in x_hist]
+            y = [s[1] for s in x_hist]
+            plt.plot(x,y, label='parametric curve')
+            plt.plot(x[0], y[0], 'ro')
+            plt.plot(x[-1], y[-1], 'g')
+            plt.draw()
+            plt.pause(0.01) 
+            input()
 
 
 

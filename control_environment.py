@@ -208,6 +208,129 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         self.noisy_init = noisy_init
         self.ts = ts
         self.interval = interval 
+        if initial_state:
+            self.state = initial_state
+        else:
+            self.state = self.get_initial_state(noise = self.noisy_init)
+        self.state_history = []
+
+        self.friction = friction
+        
+        self.steps = 0
+    
+    def reset(self):
+        self.state = self.get_initial_state(noise = self.noisy_init)
+        self.state_history = []
+        self.steps = 0
+
+    def step(self, action):
+        '''Utilize Euler Integration to update system "discretely"'''
+        state = self.state.copy()
+        target = self.get_target()
+        #state += (self.dx(state, action, target) * self.interval*self.ts)
+        state += (self.dx(state, action) * self.ts)
+        #state += (self.dx(state, action))
+        #state[0] = state[0] % np.pi
+        self.steps += self.ts
+        self.state_history.append(state.copy())
+        self.state = state
+         
+    def dx(self, x, u = None, r = None, *args) -> np.ndarray:
+    #def dx(self, x, u, *args) -> np.ndarray:
+        '''x' = dx * x + du * u'''
+        if u is None:
+            u = 0.0
+        #dx = self.d_dx(x, u, r) 
+        #dx = np.array([x[1], -4*np.sin(x[0]) - 0.01*x[1]])
+        #input("Self.friction: %s" % (self.friction))
+        dx = np.array([x[1], 1*np.cos(x[0]) - self.friction*x[1]])
+        #dx = np.array([x[1], -4*np.sin(x[0])])
+        if r is not None:
+            #print("Ref: ", r) 
+            #print("B*u: ", np.array([0, 1]) * u)
+            #print("B*u - dx: ", np.array([0, 1]) * u - dx)
+            #print("B*r: ", np.array([0, 1]) * r)
+            #d_dx = dx + np.array([0, 1]) * (u)
+            #d_dx = dx + np.array([0, 1]) * (u) - np.array([0, 1])*dx[1]
+            d_dx = dx + np.array([0, 1]) * (u)
+            return d_dx
+        du = np.array([0, 1]) * u
+        #print("Dx: %s \n Du: %s" % (dx, du))
+        return dx + du
+
+    def d_dx(self, x, u=None, r=None, *args):
+        #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
+        #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
+        dx = np.array([[0, 1], [-1*np.sin(x[0]), -self.friction]])
+        #dx = np.array([[0, 1], [-4*np.sin(x[0]), 0]])
+        #dx = np.array([x[1], 4*np.sin(x[0]) - 0.001*x[1]]) #additional friction term
+        return dx
+
+    def d_du(self, x, u, r=None, *args):
+        #return np.array([0, 1]) * u
+        return np.array([0, 1])
+
+    def get_initial_state(self, noise = False):
+        theta = 0 #OBJECTIVE is 180 degrees / pi / 2
+        theta_p = 0 
+        s = np.array([theta, theta_p], dtype = np.float32)
+        if noise:
+            s += np.random.uniform(low=0, high=0.1, size=2)
+        return s
+
+    def episode_is_done(self):
+        if self.steps >= self.interval:
+            return True
+        return False
+    
+    def get_observation_size(self):
+        return 2
+
+    def get_action_size(self):
+        return 1
+
+    def get_action_constraints(self):
+        return [np.ndarray([-2]), np.ndarray([2])]
+
+    def generate_plots(self):
+        self.generate_state_history_plot()
+
+    def generate_state_history_plot(self, history = None):
+        if history is None:
+            if not hasattr(self, 'state_fig'):
+                self.state_fig = plt.figure()
+            history = self.state_history
+            fig = self.state_fig 
+        else:
+            if not hasattr(self, 'secondary_state_fig'):
+                self.secondary_state_fig = plt.figure()
+            fig = self.secondary_state_fig
+        x = [s[0] for s in history]
+        y = [s[1] for s in history]
+        plt.plot(x,y, label='parametric curve')
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'go')
+        if hasattr(self, 'target_point'):
+            target = self.target_point
+            plt.plot(target[0], target[0], 'b^')
+        plt.draw()
+        plt.pause(0.01)
+
+    def get_reward(self):
+        '''Reward = -Cost and vise-versa'''
+        return 0
+
+
+
+class CartpoleEnvironment(ControlEnvironment):
+    def __init__(self, friction = 0.1, initial_state = None, ts = 0.0001, 
+            interval = 4.00, 
+            noisy_init = False, 
+            *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.noisy_init = noisy_init
+        self.ts = ts
+        self.interval = interval 
         
         if initial_state:
             self.state = initial_state
@@ -239,27 +362,11 @@ class InvertedPendulumEnvironment(ControlEnvironment):
     def dx(self, x, u = None, r = None, *args) -> np.ndarray:
     #def dx(self, x, u, *args) -> np.ndarray:
         '''x' = dx * x + du * u'''
-        #if u is None:
-        #    u = 0.0
-        #dx = np.array([x[1], 
-        #    -4*np.sin(x[0])])
-        #du = np.array([0, 1]) * u
-        #print("Dx: %s \n Du: %s" % (dx, du))
-        ##if r is not None:
-        ##    return (dx - u) + np.array([0, 1])*r
-        #return dx + du
         if u is None:
             u = 0.0
-        #dx = self.d_dx(x, u, r) 
-        #dx = np.array([x[1], -4*np.sin(x[0]) - 0.01*x[1]])
-        #input("Self.friction: %s" % (self.friction))
         dx = np.array([x[1], -4*np.sin(x[0]) - self.friction*x[1]])
         #dx = np.array([x[1], -4*np.sin(x[0])])
         if r is not None:
-            #print("Ref: ", r) 
-            #print("B*u: ", np.array([0, 1]) * u)
-            #print("B*u - dx: ", np.array([0, 1]) * u - dx)
-            #print("B*r: ", np.array([0, 1]) * r)
             #d_dx = dx + np.array([0, 1]) * (u)
             #d_dx = dx + np.array([0, 1]) * (u) - np.array([0, 1])*dx[1]
             d_dx = dx + np.array([0, 1]) * (u)
@@ -269,15 +376,10 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         return dx + du
 
     def d_dx(self, x, u=None, r=None, *args):
-        #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
-        #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
         dx = np.array([[0, 1], [-4*np.cos(x[0]), -self.friction]])
-        #dx = np.array([[0, 1], [-4*np.sin(x[0]), 0]])
-        #dx = np.array([x[1], 4*np.sin(x[0]) - 0.001*x[1]]) #additional friction term
         return dx
 
     def d_du(self, x, u, r=None, *args):
-        #return np.array([0, 1]) * u
         return np.array([0, 1])
 
     def get_initial_state(self, noise = False):
@@ -333,7 +435,8 @@ def retrieve_control_environment(env_type = 'rossler', *args, **kwargs):
         env = RosslerEnvironment(*args, **kwargs)
     if env_type == 'inverted':
         env = InvertedPendulumEnvironment(*args, **kwargs)
-
+    if env_type == 'cartpole':
+        env = CartpoleEnvironment(*args, **kwargs)
     if env is None:
         raise Exception("%s was not a recognized control environment type..." % (env_type))
     return env
@@ -346,11 +449,12 @@ if __name__ == '__main__':
     #env.generate_plots()
     noisy_init = True
     target = np.array([0, 0])
-    horizon = 8
+    horizon = 30
+    friction = 0.0
     env = retrieve_control_environment('inverted', 
-            friction = 0.1,  
+            friction = friction,  
             noisy_init = noisy_init, 
-            interval = 8, ts = 0.001,
+            interval = horizon, ts = 0.001,
             mode = 'point', 
             target = target)
     env.reset()
@@ -363,9 +467,9 @@ if __name__ == '__main__':
         x_ = target - x
         print("State: ", x)
         print("Target: %s \n Error: %s"%(target, x_))
-        w = np.array([4*np.sin(x[0]) - wn**2 * x[0] + 0.1*x[1] - 2*gamma*wn*x[1]])
-        dw = np.array([[0,0],[4*np.cos(x[0]) - wn**2, 0.1 - 2*gamma*wn]])
-        dw = np.array([4*np.cos(x[0]) - wn**2, 0.1 - 2*gamma*wn])
+        w = np.array([4*np.sin(x[0]) - wn**2 * x[0] + friction*x[1] - 2*gamma*wn*x[1]])
+        dw = np.array([[0,0],[4*np.cos(x[0]) - wn**2, friction - 2*gamma*wn]])
+        #dw = np.array([4*np.cos(x[0]) - wn**2, 0.1 - 2*gamma*wn])
         dw = np.zeros(1)
         #dw = np.ones(1)
         #print("dW: ", dw)
