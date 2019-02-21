@@ -491,8 +491,8 @@ def MPCController(control_base, *args, **kwargs):
 
 
 if __name__ == '__main__':
-    LINEARIZED_PENDULUM_TEST = False
-    NONLINEAR_PENDULUM_TEST = True
+    LINEARIZED_PENDULUM_TEST = True
+    NONLINEAR_PENDULUM_TEST = False
     ##Nonlinear (inverted pendulum) controls test
     if NONLINEAR_PENDULUM_TEST:
         lamb_factor = 10
@@ -501,7 +501,7 @@ if __name__ == '__main__':
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
-        max_iterations = 50
+        max_iterations = 20
         eps = 0.001
         
         #
@@ -513,7 +513,7 @@ if __name__ == '__main__':
         Q = np.eye(state_size) * 1e4
         #Qf = Q
         Qf = np.eye(state_size) * 1e3 
-        R = np.eye(action_size) * 0e0
+        R = np.eye(action_size) * 1e0
         Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Qf[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Qf[1][1] = Qf[0][0] / 4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
@@ -521,10 +521,10 @@ if __name__ == '__main__':
         #R[0][0] = 0.0 #only concerned with force applied to controllable var
         #target = None
         target = np.array([0, 0], dtype = np.float64)
-        #target = np.array([0.5, 0], dtype = np.float64)
-        target = np.array([np.pi, 0], dtype = np.float64)
-        target = np.array([np.pi/2, 0], dtype = np.float64)
-        target = np.array([np.pi/4, 0], dtype = np.float64)
+        target = np.array([0.5, 0], dtype = np.float64)
+        #target = np.array([np.pi, 0], dtype = np.float64)
+        #target = np.array([np.pi/2, 0], dtype = np.float64)
+        #target = np.array([np.pi/4, 0], dtype = np.float64)
         diff_func = lambda t,x : x - t
         #diff_func = lambda t,x : x + t
         #diff_func = lambda t,x : (t - x)**2
@@ -546,7 +546,7 @@ if __name__ == '__main__':
         #x0 = np.array([0, np.pi/2],dtype=np.float64)
         #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
         ##x0 = np.array([np.pi, 0.0],dtype=np.float64) #NOTE: don't do 
-        x0 = np.array([0.0, 1.1],dtype=np.float64)
+        x0 = np.array([0.0, 0],dtype=np.float64)
         
         env.reset()
         env.state = x0.copy()
@@ -568,18 +568,38 @@ if __name__ == '__main__':
         env.state = x0.copy()
         for u in U:
             env.step(u)
-        #env.state_history = [np.array([s[0] % np.pi, s[1]]) for s in env.state_history]
-        #env.state_history = X
+        print("Final State: ", env.state_history[-1])
+        print("Target: ", target)
+        env.generate_plots()
+        print("Next: the return trip to initial position")
+        input()
+        xt = env.state_history[-1].copy()
+        target = x0.copy()
+        #target = np.array([0, np.pi])
+        #target = np.array([0, 0])
+        target = np.array([np.pi/2, 0])
+        env.reset()
+        env.set_target_point(target)
+        cost.set_target(target)
+        print("Initial state: %s Target: %s" % (xt, target))
+        input()
+        X, U = ilqg.step(xt) #MOVE BACK TO INITIAL POSITION
+        print("FINAL U: ", U)
+        env.state = xt.copy()
+        for u in U:
+            env.step(u)
         print("Final State: ", env.state_history[-1])
         print("Target: ", target)
         env.generate_plots()
         input()
+
+        
     
     ##Linear System test (linearized inverted pendulum)
     if LINEARIZED_PENDULUM_TEST: #TODO: wrap this shit in Unittest eventually
         lamb_factor = 5
         lamb_max = 1000
-        horizon = 5
+        horizon = 2
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -591,28 +611,36 @@ if __name__ == '__main__':
         state_size = 2
         action_shape = [1]
         action_size = 1
-
-        Q = np.eye(state_size) * 1e2
+        
+        cost_func = lambda h,dt:1e4 * (horizon * dt) / (5 * 1e-2)
+        #cost_func = lambda h,dt:1e3
+        Q = np.eye(state_size) * cost_func(horizon, dt) 
         #Qf = Q
-        Qf = np.eye(state_size) * 1e2
+        Qf = np.eye(state_size) * cost_func(horizon, dt)
         R = np.eye(action_size) * 0e0
-        Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+        #Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Q[1][1] = Q[0][0]/4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #R[0][0] = 0.0 #only concerned with force applied to controllable var
         #target = None
         target = np.array([0, 0], dtype = np.float64)
         #target = np.array([np.pi, 0], dtype = np.float64)
         #target = np.array([np.pi/2, 0], dtype = np.float64)
-        cost = LQC(Q, R, Qf = Qf, target = target)
+        diff_func = lambda t,x : x - t
+        #diff_func = lambda t,x : x + t
+        #diff_func = lambda t,x : (t - x)**2
+        #diff_func = lambda t,x : abs(t - x)
+        #diff_func = lambda t,x:x #returns x, not a funciton of t
+        cost = LQC(Q, R, Qf = Qf, target = target, 
+                diff_func = diff_func)
         noisy_init = True
-
-        A = np.array([[0, 1],[0, -0.1]])
+        friction = 0.05
+        A = np.array([[0, 1],[1, -friction]])
         B = np.array([0, 1]) 
         model = LinearSystemModel(A, B)
         action_constraints = None
         #x0 = np.array([0, np.pi/2],dtype=np.float64)
         #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
-        x0 = np.array([0.00, 0.1],dtype=np.float64)
+        x0 = np.array([0.05, 0.00],dtype=np.float64)
         #
 
         ilqg = ILQG(state_shape, state_size, action_shape, action_size,
@@ -626,7 +654,7 @@ if __name__ == '__main__':
 
 
         X, U = ilqg.step(x0)
-        U = [np.zeros(action_size) for i in range(int(horizon/dt))]
+        #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
         X = ilqg.forward(x0, U)
         print("FINAL U: ", U)
         fig = plt.figure()
