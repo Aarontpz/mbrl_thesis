@@ -295,6 +295,7 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
         #self.cost.normal_mode()
 
         lamb = 1.0 # regularization parameter, for LM Heuristic(seepaper/ref)
+        ii = 0
         for ii in range(self.max_iterations): 
             print("STEP: ", ii)
             if sim_new_trajectory:
@@ -440,6 +441,7 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                         X = Xnew.copy()
                         U = Unew.copy()
                     break
+        #input("Converged after %s steps!" % (ii))
         return X, U
 
 
@@ -503,15 +505,17 @@ def create_MPCController(control_base, *args, **kwargs):
 if __name__ == '__main__':
     LINEARIZED_PENDULUM_TEST = False
     NONLINEAR_PENDULUM_TEST = True
+
+
     ##Nonlinear (inverted pendulum) controls test
     if NONLINEAR_PENDULUM_TEST:
         lamb_factor = 10
         lamb_max = 1000
-        horizon = 10
+        horizon = 1
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
-        max_iterations = 20
+        max_iterations = 40
         eps = 0.001
 
         SECONDARY_STEP = False
@@ -519,7 +523,10 @@ if __name__ == '__main__':
         MPC_COMPARISON = True
         MPC_HORIZON = 0.1e0
         MPC_DT = dt
-        MPC_MAX_STEPS = int(horizon / dt)
+        MPC_STEPS = 1
+        #MPC_STEPS = int(MPC_HORIZON / MPC_DT) - 1
+        MPC_MAX_STEPS = int(horizon / dt / 2)
+        MPC_THRESHOLD = 0.25
         
 
         
@@ -529,24 +536,24 @@ if __name__ == '__main__':
         action_shape = [1]
         action_size = 1
         
-        cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
+        #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
+        cost_func = lambda h,dt:1e4
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
-        Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
+        Qf = np.eye(state_size) * cost_func(horizon, dt) * 0.5
         R = np.eye(action_size) * 1e0 * 0
 
         Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Qf[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Qf[1][1] = Qf[0][0] / 4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Q[1][1] = Q[0][0]/4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-        #R[0][0] = 0.0 #only concerned with force applied to controllable var
         #target = None
-        target = np.array([0, 0], dtype = np.float64)
+        #target = np.array([0, 0], dtype = np.float64)
         #target = np.array([0.5, 0], dtype = np.float64)
         #target = np.array([np.pi, 0], dtype = np.float64)
-        #target = np.array([np.pi/2, 0], dtype = np.float64)
+        target = np.array([np.pi/2, 0], dtype = np.float64)
         #target = np.array([np.pi/4, 0], dtype = np.float64)
         diff_func = lambda t,x : x - t
         #diff_func = lambda t,x : x + t
@@ -585,8 +592,8 @@ if __name__ == '__main__':
                 max_iterations = max_iterations, eps = eps)
         
 
-        #X, U = ilqg.step(x0)
-        U = [np.zeros(action_size) for i in range(int(horizon/dt))]
+        X, U = ilqg.step(x0)
+        #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
         print("FINAL U: ", U)
         env.state = x0.copy()
         for u in U:
@@ -624,7 +631,8 @@ if __name__ == '__main__':
             Q = np.eye(state_size) * cost_func(horizon, dt) * 1
             #Qf = Q
             Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
-            R = np.eye(action_size) * 1e0 * 0
+            #R = np.eye(action_size) * cost_func(horizon, dt) * 0 #NO controls applied
+            R = np.eye(action_size) * 1e1
             Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
@@ -639,14 +647,19 @@ if __name__ == '__main__':
                 max_iterations = max_iterations, eps = eps)
             env.reset()
             env.state = x0.copy()
+            env.state_history.append(env.state.copy())
             xt = x0.copy()
             for i in range(MPC_MAX_STEPS):
                 X, U = mpc_ilqg.step(xt)
-                u = U[0]
-                #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
-                print("Next u: ", u)
-                env.step(u)
+                for j in range(MPC_STEPS):
+                    u = U[j]
+                    #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
+                    env.step(u)
                 xt = env.state.copy()
+                if abs(sum(diff_func(xt, target))) < MPC_THRESHOLD:
+                    print("Early stopping condition met after %ss"% (i * dt))
+                    print("Error: ", abs(sum(diff_func(xt, target))))
+                    break
                 #input("NEXT STEP!")
             print("Final State: ", env.state_history[-1])
             print("Target: ", target)
@@ -660,7 +673,7 @@ if __name__ == '__main__':
     if LINEARIZED_PENDULUM_TEST: #TODO: wrap this shit in Unittest eventually
         lamb_factor = 5
         lamb_max = 1000
-        horizon = 2.5
+        horizon = 3
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -679,7 +692,7 @@ if __name__ == '__main__':
         action_size = 1
         
         cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
-        cost_func = lambda h,dt:1e4
+        cost_func = lambda h,dt:1e5
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1

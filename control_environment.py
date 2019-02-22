@@ -308,6 +308,9 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         x = [s[0] for s in history]
         y = [s[1] for s in history]
         plt.plot(x,y, label='parametric curve')
+        plt.ylabel("Velocity")
+        plt.xlabel("Position")
+        plt.title("Nonlinear Pendulum Phase Plot")
         plt.plot(x[0], y[0], 'ro')
         plt.plot(x[-1], y[-1], 'go')
         if hasattr(self, 'target_point'):
