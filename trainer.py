@@ -433,6 +433,19 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
         plt.scatter(range(len(self.forward_loss_history)), [r.numpy()[0] for r in self.forward_loss_history], s=1.0)
         plt.pause(0.01)
 
+
+class PyTorchAgnosticMBRLTrainer(PyTorchTrainer):
+    '''Implementation of 'DAgger for Agnostic MBRL' algorithm from 1203.1007 Arxiv.
+    
+    Leverages an iterative (online) system modelling algorithm (referred to as "model"),
+    an optimal-control solving algorithm (iterative, in the case of nonlinear systems) 
+    (iLQR / iLQR_MPC) and a parameterized policy to compute an optimal policy.'''
+    def __init__(self):
+        pass
+
+
+
+
 class PyTorchPreTrainer(PyTorchTrainer):
     def __init__(self, trainer, *args, **kwargs):
         super(PyTorchPreTrainer).__init__(*args, **kwargs)

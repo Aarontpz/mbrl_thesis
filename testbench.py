@@ -235,6 +235,87 @@ def initialize_environment(lib_type, env_type, task_name, *args, **kwargs):
 
 
 
+def create_pytorch_mpc_agent(env_type, lib_type, 
+             
+    env, obs_size, action_size, action_constraints,
+    mlp_hdims, mlp_activations, 
+    num_processes = 1,
+    horizon = 40, 
+    k_shoots = 20,
+    discrete_actions = False, 
+    has_value_function = False) -> (Agent, Trainer): 
+    agent = create_agent(PyTorchMPCAgent, LIB_TYPE, ENV_TYPE, 
+                NUM_PROCESSES, HORIZON, K_SHOOTS,  #num_processes, #horizon, k_shoots
+                device, 
+                [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
+                action_constraints = action_constraints, has_value_function = False)
+    if ENV_TYPE == 'walker':
+        random_agent = RandomWalkerAgent([1, obs_size], action_size, 
+                discrete_actions = DISCRETE_AGENT, 
+                action_constraints = action_constraints, has_value_function = False)
+    elif ENV_TYPE == 'cartpole':
+        random_agent = RandomCartpoleAgent([1, obs_size], action_size, 
+                discrete_actions = DISCRETE_AGENT, 
+                action_constraints = action_constraints, has_value_function = False)
+
+    print("This reward is only valid for walk / run tasks!")
+    agent.module = PyTorchMLP(device, obs_size + action_size, obs_size, 
+            hdims = mlp_hdims, activations = mlp_activations, 
+            initializer = mlp_initializer).to(device)    
+    lr = 1.0e-3
+    ADAM_BETAS = (0.9, 0.999)
+    optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+    trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, optimizer,
+            512, 1.0, 0.05, 0.5, 700, 700, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
+            device, value_coeff, entropy_coeff,
+            agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+            num_episodes = EPISODES_BEFORE_TRAINING) 
+    return agent, trainer
+
+def create_pytorch_policy_agent(env, obs_size, 
+        action_size, action_constraints,
+        mlp_hdims, mlp_activations, mlp_base,
+        lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+        discrete_actions = False, 
+        has_value_function = False) -> (Agent, Trainer): 
+    mlp_indim = obs_size
+    mlp_outdim = mlp_indim * WIDENING_CONST #based on state size (approximation)
+    print("MLP INDIM: %s HDIM: %s OUTDIM: %s " % (obs_size, mlp_hdims, mlp_outdim))
+    print("MLP ACTIVATIONS: ", mlp_activations)
+    agent = create_agent(PyTorchAgent, LIB_TYPE, ENV_TYPE, device, [1, obs_size], 
+                action_size, discrete_actions = DISCRETE_AGENT, 
+                action_constraints = action_constraints, has_value_function = True,
+                terminal_penalty = 0.0, 
+                policy_entropy_history = True, energy_penalty_history = True)
+    agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
+            action_size, 
+            seperate_value_module = None, seperate_value_module_input = False,
+            value_head = True,
+            action_bias = True, value_bias = True, sigma_head = True, 
+            device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
+            activations = mlp_activations, initializer = mlp_initializer).to(device)
+    
+    optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+    #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
+    scheduler = None
+    #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
+    if TRAINER_TYPE == 'AC':
+        trainer = PyTorchACTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, energy_penalty_coeff,
+                device, optimizer, scheduler,   
+                agent, env, 
+                replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+                num_episodes = EPISODES_BEFORE_TRAINING) 
+    elif TRAINER_TYPE == 'PPO':
+        trainer = PyTorchPPOTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, energy_penalty_coeff,
+                device, optimizer, scheduler, 
+                agent, env, 
+                replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+                num_episodes = EPISODES_BEFORE_TRAINING) 
+    return agent, trainer
+
+
+
+
 def launch_viewer(env, agent):
     try:
         viewer.launch(env, policy = agent)
@@ -458,38 +539,14 @@ if __name__ == '__main__':
         #device = torch.device("cpu") 
          
         if AGENT_TYPE == 'mpc': 
-            NUM_PROCESSES = 2
-            HORIZON = 40
-            K_SHOOTS = 20
-            #mlp_outdim = 500 #based on state size (approximation)
-            mlp_hdims = [500, 500] 
-            mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
-            agent = create_agent(PyTorchMPCAgent, LIB_TYPE, ENV_TYPE, 
-                        NUM_PROCESSES, HORIZON, K_SHOOTS,  #num_processes, #horizon, k_shoots
-                        device, 
-                        [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
-                        action_constraints = action_constraints, has_value_function = False)
-            if ENV_TYPE == 'walker':
-                random_agent = RandomWalkerAgent([1, obs_size], action_size, 
-                        discrete_actions = DISCRETE_AGENT, 
-                        action_constraints = action_constraints, has_value_function = False)
-            elif ENV_TYPE == 'cartpole':
-                random_agent = RandomCartpoleAgent([1, obs_size], action_size, 
-                        discrete_actions = DISCRETE_AGENT, 
-                        action_constraints = action_constraints, has_value_function = False)
-
-            print("This reward is only valid for walk / run tasks!")
-            agent.module = PyTorchMLP(device, obs_size + action_size, obs_size, 
-                    hdims = mlp_hdims, activations = mlp_activations, 
-                    initializer = mlp_initializer).to(device)    
-            lr = 1.0e-3
-            ADAM_BETAS = (0.9, 0.999)
-            optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
-            trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, optimizer,
-                    512, 1.0, 0.05, 0.5, 700, 700, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
-                    device, value_coeff, entropy_coeff,
-                    agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
-                    num_episodes = EPISODES_BEFORE_TRAINING) 
+            agent, trainer = create_pytorch_mpc_agent(env_type, lib_type, 
+                    env, obs_size, action_size, action_constraints,
+                    mlp_hdims, mlp_activations, 
+                    num_processes = 1,
+                    horizon = 40, 
+                    k_shoots = 20,
+                    discrete_actions = DISCRETE_AGENT, 
+                    has_value_function = False) 
             trainer.step() #RUN PRETRAINING STEP
             PRETRAINED = True
 
@@ -500,45 +557,19 @@ if __name__ == '__main__':
         # to benefit from MPC AND model-free agent sampling, since value functions are ubiquitous
 
         elif AGENT_TYPE == 'policy':
-            mlp_indim = obs_size
             mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [mlp_indim * WIDENING_CONST] 
-            mlp_outdim = mlp_indim * WIDENING_CONST #based on state size (approximation)
-            print("MLP INDIM: %s HDIM: %s OUTDIM: %s " % (obs_size, mlp_hdims, mlp_outdim))
-            print("MLP ACTIVATIONS: ", mlp_activations)
-            agent = create_agent(PyTorchAgent, LIB_TYPE, ENV_TYPE, device, [1, obs_size], 
-                        action_size, discrete_actions = DISCRETE_AGENT, 
-                        action_constraints = action_constraints, has_value_function = True,
-                        terminal_penalty = 0.0, 
-                        policy_entropy_history = True, energy_penalty_history = True)
+            mlp_hdims = [obs_size * WIDENING_CONST] 
             if DISCRETE_AGENT:
                 mlp_base = PyTorchDiscreteACMLP
             else:
                 mlp_base = PyTorchContinuousGaussACMLP
-            agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
-                    action_size, 
-                    seperate_value_module = None, seperate_value_module_input = False,
-                    value_head = True,
-                    action_bias = True, value_bias = True, sigma_head = True, 
-                    device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
-                    activations = mlp_activations, initializer = mlp_initializer).to(device)
-            
-            optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
-            #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
-            scheduler = None
-            #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
-            if TRAINER_TYPE == 'AC':
-                trainer = PyTorchACTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, energy_penalty_coeff,
-                        device, optimizer, scheduler,   
-                        agent, env, 
-                        replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
-                        num_episodes = EPISODES_BEFORE_TRAINING) 
-            elif TRAINER_TYPE == 'PPO':
-                trainer = PyTorchPPOTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, energy_penalty_coeff,
-                        device, optimizer, scheduler, 
-                        agent, env, 
-                        replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
-                        num_episodes = EPISODES_BEFORE_TRAINING) 
+            agent, trainer = create_pytorch_policy_agent(env, obs_size, 
+                action_size, action_constraints,
+                mlp_hdims, mlp_activations, mlp_base,
+                lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+                discrete_actions = False, 
+                has_value_function = False) 
+
             print("AGENT MODULE (pre-autoencoder?)", agent.module)
             ## Autoencoder addition
             autoencoder_base = PyTorchLinearAutoencoder
@@ -575,7 +606,7 @@ if __name__ == '__main__':
                 forward_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + 1
             #TODO: ^ this works...in both cases (coupled_sa or not)
             forward_outdim = obs_size * (REDUCTION_FACTOR**DEPTH)
-            forward_hdims = [mlp_indim * WIDENING_CONST] 
+            forward_hdims = [obs_size * WIDENING_CONST] 
             forward_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
             
             if LINEAR_FORWARD:

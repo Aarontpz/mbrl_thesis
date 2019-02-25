@@ -13,6 +13,8 @@ import torch.multiprocessing as mp
 
 import math
 
+from ilqr import ILQG
+
 class Agent:
     __metaclass__ = abc.ABCMeta
     '''Convention: Call step, store_reward, and if applicable, terminate_episode'''
@@ -625,7 +627,68 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
             pass            
         return action
 
+class ILQRMPCAgent(MPCAgent):
+    def __init__(self, mpc_ilqg : ILQG,
+             *args, **kwargs): 
+        super().__init__(*args, **kwargs)
+        self.ilqg = mpc_ilqg
+         
+    def shoot(self, st) -> ([], [], []):
+        rewards = [0 for i in range(self.horizon)]
+        st = st #wow
+        states, actions = self.ilqg.step(st)
+        rewards[-1] = -1 * self.ilqg.forward_cost(states, actions)
+        #we seek to MAX rewards = MIN cost (-1 * COST)
+        return states, actions, rewards
+    def reward(self, X, U, *args, **kwargs):
+        return self.ilqg.forward_cost(X, U)
 
+class MPCAgent(Agent): 
+    def __init__(self, horizon = 50, k_shoots = 1, *args, **kwargs): 
+        super().__init__(*args, **kwargs)
+        self.horizon = horizon
+        self.k_shoots = k_shoots
+        self.mpc = True
+    
+    def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
+        #print("MPC EVALUATE")
+        traj = ()
+        max_r = -float('inf')
+        for k in range(self.k_shoots):
+            states, actions, rewards = self.shoot(obs)
+            if sum(rewards) > max_r:
+                max_r = sum(rewards)
+                traj = (states, actions, rewards)
+        states, actions, rewards = traj
+        #print("ACTIONS: ", actions[0])
+        return actions[0], None, None #TODO: ACTION SCORES TOO?!
+
+    def shoot(self, st) -> ([], [], []):
+        states = []
+        actions = []
+        rewards = []
+        st = st #wow
+        for t in range(self.horizon): 
+            at = self.sample_action(st)
+            rt = self.reward(st, at)
+            states.append(st)
+            actions.append(at)
+            if rt is None:
+                rt = 0.0
+            rewards.append(rt)
+            st = self.predict_state(st, at)
+        return states, actions, rewards
+
+    @abc.abstractmethod
+    def predict_state(self, st, at, *args, **kwargs) -> np.ndarray:
+        '''Predict the next state based on (st, at) and additional arguments.'''
+        pass
+
+    @abc.abstractmethod
+    def reward(self, st, at, *args, **kwargs):
+        '''Compute reward function based on (st, at) and additional arguments
+        Left entirely abstract because I'm confused.'''
+        pass
 
 ##  Pytorch helper functions /classes
 
