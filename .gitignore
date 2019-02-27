@@ -2,6 +2,7 @@
 *.py.*
 *.gv
 *.pdf
+ilqr_tests.py
 __pycache__
 
 
