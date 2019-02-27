@@ -1,6 +1,6 @@
 # Author: Aaron Parisi
 # 11/20/18
-from agent import Agent
+from agent import Agent, PyTorchModel
 import abc
 
 import torch
@@ -140,7 +140,6 @@ class DAgger(Dataset):
         self.aggregate.extend(self.samples) #add PREVIOUS self.samples to aggregate
         print("Aggregate Size: ", len(self.aggregate))
         super().trainer_step(trainer)
-
 
 
 class PyTorchTrainer(Trainer):
@@ -372,6 +371,7 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
         #    input()
         dataset.trainer_step(self) 
         loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+        net_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) # accumulate loss after each training step
         net_autoencoder_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         net_forward_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
@@ -379,6 +379,8 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
         forward_criterion = torch.nn.MSELoss()
         for r in range(self.replay):
             sample = dataset.sample(self.batch_size) 
+            raise Exception("The following line was missing; test this again you DINGUS <3")
+            loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory #idiot
             for i in range(len(sample)):
                 s = self.get_sample_s(sample[i])
                 a = self.get_sample_a(sample[i])
@@ -405,9 +407,11 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
             loss.backward(retain_graph = True)
             optimizer.step()
             optimizer.zero_grad() 
+            
+            net_loss += loss #accumulate loss before resetting it
         if self.scheduler is not None:
             self.scheduler.step()
-        self.net_loss_history.append(loss.cpu().detach())
+        self.net_loss_history.append(net_loss.cpu().detach()) 
         self.encoder_loss_history.append((net_autoencoder_loss / (self.replay * len(sample))).cpu().detach())
         self.forward_loss_history.append((net_forward_loss / (self.replay * len(sample))).cpu().detach())
         if self.train_action:
@@ -420,30 +424,134 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
         plt.xlim(0, len(self.encoder_loss_history))
         plt.ylim(0, max(self.encoder_loss_history)+1)
         plt.ylabel("Net \n State AE Loss")
+        plt.xlabel("Timestep")
         plt.scatter(range(len(self.encoder_loss_history)), [r.numpy()[0] for r in self.encoder_loss_history], s=1.0)
         plt.subplot(3, 1, 2)
         plt.xlim(0, len(self.encoder_loss_history))
         plt.ylim(0, max(self.encoder_loss_history)+1)
         plt.ylabel("Net \n Action AE Loss")
+        plt.xlabel("Timestep")
         plt.scatter(range(len(self.encoder_loss_history)), [r.numpy()[0] for r in self.encoder_loss_history], s=1.0)
         plt.subplot(3, 1, 3)
         plt.ylabel("Net \n Forward Loss")
+        plt.xlabel("Timestep")
         plt.xlim(0, len(self.forward_loss_history))
         plt.ylim(0, max(self.forward_loss_history)+1)
         plt.scatter(range(len(self.forward_loss_history)), [r.numpy()[0] for r in self.forward_loss_history], s=1.0)
         plt.pause(0.01)
 
 
-class PyTorchAgnosticMBRLTrainer(PyTorchTrainer):
-    '''Implementation of 'DAgger for Agnostic MBRL' algorithm from 1203.1007 Arxiv.
+class PyTorchDynamicsTrainer(PyTorchTrainer):
+    '''Generic Dynamics Trainer abstract class. Kinda jank, considering
+    its initialization from a class that should really be called
+    "RLTrainer" but just keep those fields None for now and 
+    figure it out later. 
     
-    Leverages an iterative (online) system modelling algorithm (referred to as "model"),
-    an optimal-control solving algorithm (iterative, in the case of nonlinear systems) 
-    (iLQR / iLQR_MPC) and a parameterized policy to compute an optimal policy.'''
-    def __init__(self):
-        pass
+    Available args ('*' denotes
+    use in default step() and thus required): [<agent>, <*env>, <*replay>,
+    <max_traj_len>, <gamma>, <num_episodes>] why am I doing this
+    
+    "model" is the PyTorchMLP, "relation" is the means by which
+    the inputs (assumed to be some function of ()) get interpreted
+    as the next state, to compare to the actual one and/or finite
+    differences
+
+    Intended use case: 
+    **LinearSystenDynamicsModel
+    model = PyTorchMLP subclass with outdim = 2, output denoted f()
+    f() : xt, ut -> A, B for xt+1
+    relation: xt+1 = xt + dt(np.dot(A*xt) + np.dot(B*ut))
+    
+    **ForwardDynamicsModel
+    model = PyTorchMLP subclass with outdim = 1, output denoted f()
+    relation: xt+1 = xt + dt * f(xt, ut)
+    
+    "Have a nice day ;) "'''
+    #TODO TODO TODO TODO TODO finite-differences for additional info.
+    #Merge/fuse results <3 <3
+
+    #TODO (OOP): Make "Estimator" class encompass / abstract this functionality
+    #to more generic task of model-fitting in this framework, 
+    #use inheritance to incrementally update functionality(OOP) 
+    #^DEFINITELY overengineering for the task-at-hand
+    def __init__(self, model : PyTorchModel, 
+            dataset,
+            criterion,
+            batch_size = 64, collect_forward_loss = False, 
+            *args, **kwargs):
+        super(PyTorchDynamicsTrainer, self).__init__(*args, **kwargs)
+        self.criterion = criterion
+        self.dataset = dataset
+        self.model = model
+        self.batch_size = batch_size
+        
+        self.collect_forward_loss = collect_forward_loss
+
+        self.net_loss_history = [] #net loss history
+        self.forward_loss_history = [] #loss for MOST RECENT iteration 
+        #independent of dataset
+
+    def compute_model_loss(s, a, r, s_, *args, **kwargs):
+        estimate = self.system_model.forward_predict(s, a, self.system_model.dt, *args, **kwargs)
+        return self.criterion(s_, estimate)
+
+    def step(self):
+        #YAY REFERENCES
+        device = self.device
+        optimizer = self.opt
+        dataset = self.dataset
+
+        loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+        net_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+        net_forward_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        for r in range(self.replay):
+            loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+            sample = dataset.sample(self.batch_size) 
+            for i in range(len(sample)):
+                s = self.get_sample_s(sample[i])
+                a = self.get_sample_a(sample[i])
+                r = self.get_sample_r(sample[i])
+                s_ = self.get_sample_s_(sample[i])
+                loss += compute_model_loss(s, a, r, s_)
+            optimizer.zero_grad() #HAHAHAHA
+            loss.backward(retain_graph = True)
+            optimizer.step()
+            optimizer.zero_grad() 
+            net_loss += loss #accumulate loss before resetting it
+        #if self.collect_forward_loss:
+        #    net_forward_loss.append(sum([compute_model_loss(*sample)]))
+    
+    def plot_loss_histories(self):
+        if self.collect_forward_loss:
+            raise Exception("Do it now, I'm busy ;)")
+        else:
+            plt.figure(5)
+            plt.title("Dynamics Model Loss History")
+            plt.xlim(0, len(self.net_loss_history))
+            plt.ylim(0, max(self.net_loss_history)+1)
+            plt.ylabel("Net \n State AE Loss")
+            plt.xlabel("Timestep")
+            plt.scatter(range(len(self.net_loss_history)), [r.numpy()[0] for r in self.net_loss_history], s=1.0)
 
 
+#class PyTorchSystemDynamicsModelTrainer(PyTorchDynamicsTrainer):
+#    '''Updates parameterized (PyTorch) module to approximate
+#    system dynamics (via approximation f(s,a) = A^(t) and B^(t)
+#    and xt+1 = xt + dt(). That last part could be inherited from
+#    a more generic "Esitmator" class)'''
+#    #NOTE the doctest I'm sorry
+#    def compute_model_loss(s, a, r, s_, *args, **kwargs):
+#        pass
+#
+#
+#class PyTorchForwardDynamicsModelTrainer(PyTorchDynamicsModelTrainer):
+#    '''Updates parameterized (PyTorch) module to approximate
+#    system dynamics (via xt+1 = xt + dt*f(). This could be abstracted
+#    from a more generic "Estimator" class, or a child of "Estimator" 
+#    specifically for system dynamics.)'''
+#    #NOTE the doctest
+#    def compute_model_loss(s, a, r, s_, *args, **kwargs):
+#        pass
 
 
 class PyTorchPreTrainer(PyTorchTrainer):
@@ -575,26 +683,6 @@ class PyTorchNeuralDynamicsMPCTrainer(PyTorchTrainer):
                 break
         print("Final Avg Step Loss: ")
         print("Final Avg Horizon-Loss: ")
-        
-class PyTorchMB_MFPreTrainer(PyTorchPreTrainer):
-    def __init__(self, dynamics_mlp, mpc_agent, horizon = 50, *args, **kwargs):
-        super(PyTorchMB_MFPreTrainer, self).__init__(*args, **kwargs)
-        self.horizon = horizon
-        self.dynamics_mlp = dynamics_mlp
-        self.mpc_agent = mpc_agent
-    
-    def behavioral_cloning_loss(self) -> torch.tensor:
-        #TODO: Currently this doesn't clone any VALUE FUNCTION?!
-        #TODO: implement DAGGER as well?!
-        criterion = torch.nn.MSELoss()
-        mpc_actions = self.mpc_agent.action_history
-        agent_actions = [(action, normal) for action, _, normal in [self.agent.evaluate(obs) for obs in 
-            self.mpc_agent.state_history]] 
-        agent_scores = [normal.log_prob(action) for normal, action in agent_actions]
-        return 0.5 * torch.sum(criterion(mpc_actions, agent_scores))
-   
-    def step(self): #TODO: Implement DAGGER as well??
-        pass
 
 
 class TFTrainer(Trainer):

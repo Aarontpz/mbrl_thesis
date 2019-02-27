@@ -326,11 +326,19 @@ class InvertedPendulumEnvironment(ControlEnvironment):
 
 
 class CartpoleEnvironment(ControlEnvironment):
-    def __init__(self, friction = 0.1, initial_state = None, ts = 0.0001, 
+    def __init__(self, mc = 1, mp = 0.5, L = 1, g=9.8,
+            simplified_derivatives = False, 
+            initial_state = None, ts = 0.0001, 
             interval = 4.00, 
             noisy_init = False, 
             *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.mc = mc
+        self.mp = mp
+        self.L = L
+        self.g = g
+        self.simplified = simplified_derivatives
+
         self.noisy_init = noisy_init
         self.ts = ts
         self.interval = interval 
@@ -340,8 +348,6 @@ class CartpoleEnvironment(ControlEnvironment):
         else:
             self.state = self.get_initial_state(noise = self.noisy_init)
         self.state_history = []
-
-        self.friction = friction
         
         self.steps = 0
     
@@ -363,27 +369,49 @@ class CartpoleEnvironment(ControlEnvironment):
         self.state = state
          
     def dx(self, x, u = None, r = None, *args) -> np.ndarray:
-    #def dx(self, x, u, *args) -> np.ndarray:
-        '''x' = dx * x + du * u'''
+        '''x' = dx * x + du * u
+        This is really ugly. And I feel bad for writing it down. '''
         if u is None:
             u = 0.0
-        dx = np.array([x[1], -4*np.sin(x[0]) - self.friction*x[1]])
-        #dx = np.array([x[1], -4*np.sin(x[0])])
-        if r is not None:
-            #d_dx = dx + np.array([0, 1]) * (u)
-            #d_dx = dx + np.array([0, 1]) * (u) - np.array([0, 1])*dx[1]
-            d_dx = dx + np.array([0, 1]) * (u)
-            return d_dx
-        du = np.array([0, 1]) * u
-        #print("Dx: %s \n Du: %s" % (dx, du))
-        return dx + du
+        x_denom = (self.mc + self.mp * (np.sin(x[2]))**2)
+        theta_denom = self.L * (self.mc + self.mp * (np.sin(x[2]))**2)
+        ddx = self.mp * np.sin(x[2]) * (self.L * (x[3])**2 - self.g*np.cos(x[2]))
+        ddtheta = -self.mp * self.L * (x[3])**2 * np.sin(x[2])*np.cos(x[2])
+        ddtheta += (self.mc + self.mp) * self.g * np.sin(x[2])
+        ux = u 
+        utheta = -u*np.cos(x[2]) 
+        dx = np.array([x[1], (ddx + ux) / x_denom, 
+            x[3], (ddtheta + utheta) / theta_denom])
+        return dx
 
     def d_dx(self, x, u=None, r=None, *args):
-        dx = np.array([[0, 1], [-4*np.cos(x[0]), -self.friction]])
+        '''This is really ugly. And I feel bad for writing it down. '''
+        if self.simplified:
+            raise Exception('REEEEEEEEEEEEEEEE')
+            return np.array([[0, 1, 0, 0],
+                [0, 0, -self.mp * self.g / self.mc],
+                [0, 0, 0, 1],
+                [0, 0, (self.mc + self.mp)*self.g / (self.L * self.mc)]])
+        d2x3 = 0
+        d2x4 = 0
+        d4x3 = 0
+        d4x4 = 0
+        dx = np.array([0, 1, 0, 0],
+                [0, 0, d2x3, d2x4],
+                [0, 0, 0, 1],
+                [0, 0, d4x3, d4x4])
         return dx
 
     def d_du(self, x, u, r=None, *args):
-        return np.array([0, 1])
+        '''This is really ugly. And I feel bad for writing it down. '''
+        if self.simplified: #simplified derivative ignores higher order 
+            raise Exception('REEEEEEEEEEEEEEEE')
+            return np.array([0, 
+                1/(self.mc), 
+                0, 
+                -1/(self.L*(self.mc))])
+        return np.array([0, 1/(self.mc + self.mp * np.sin(x[2])**2), 0, 
+            -np.cos(x[2])/(self.L*(self.mc + self.mp * np.sin(x[2])**2))])
 
     def get_initial_state(self, noise = False):
         theta = 0 #OBJECTIVE is 180 degrees / pi / 2
@@ -399,13 +427,13 @@ class CartpoleEnvironment(ControlEnvironment):
         return False
     
     def get_observation_size(self):
-        return 2
+        return 4
 
     def get_action_size(self):
-        return 2
+        return 1
 
     def get_action_constraints(self):
-        return [np.ndarray([-2, -2]), np.ndarray([2, 2])]
+        return [np.ndarray([-2]), np.ndarray([2])]
 
     def generate_plots(self):
         self.generate_state_history_plot()

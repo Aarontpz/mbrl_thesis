@@ -31,6 +31,9 @@ class Model:
     #    self.state_size = state_size
     #    self.action_shape = action_shape
     #    self.action_size = action_size
+    def update(self, xt, ut):
+        pass
+
     @abc.abstractmethod
     def d_dx(self, xt, ut, dt, *args, **kwargs):
         '''Calculate df/dx, given timestep
@@ -186,10 +189,6 @@ class LQC_Controlled(LQC):
     def __init__(self, target : np.ndarray, *args, **kwargs):
         pass
 
-class PyTorchModel(Model):
-    '''Wraps a Pytorch Module in a Model so it can be painlessly
-    integrated with iLQG.'''
-    pass
 
 class FiniteDifferencesModel(Model):
     '''Just...for comparison's sake, if it's EVEN possible with
@@ -212,11 +211,13 @@ class LinearSystemModel(Model):
         assert(dt is not None)
         assert(ut is not None)
         return self.B * dt
-    def __call__(self, xt, ut, dt=None, *args, **kwargs):
+    def __call__(self, xt, ut, dt=None, A = None, B = None, *args, **kwargs):
         print("A*xt: ",np.dot(self.A, xt))
         print("B*ut: ",self.B * ut)
-        return np.dot(self.A, xt) + self.B * ut
-
+        A = A if A is not None else self.A
+        B = B if B is not None else self.A
+        return np.dot(A, xt) + B * ut
+    
 class ControlEnvironmentModel(Model):
     def __init__(self, env : ControlEnvironment):
         self.env = env
@@ -238,9 +239,10 @@ class ControlEnvironmentModel(Model):
     def __call__(self, xt, ut, dt=None, *args, **kwargs):
         return self.env.dx(xt, ut) 
 
-class LQG:
-    def __init__():
-        pass
+#class LQG:
+#    def __init__():
+#        pass
+#NAAAAAAH 
 
 class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
     '''Reference papers: https://homes.cs.washington.edu/~todorov/papers/LiICINCO04.pdf
@@ -256,8 +258,10 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
             action_constraints = None, 
             lamb_factor = 10, lamb_max = 1000,
             horizon = 10, initialization = 0.0, dt = 0.001,
-            max_iterations = 1000, eps = 0.1):
+            max_iterations = 1000, eps = 0.1,
+            update_model = True):
         self.model = model
+        self.update_model = update_model #determine if call model.forward to update internal state
         self.cost = cost
 
         self.noise = noise
@@ -306,8 +310,16 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 TRAJ = [t for t in zip(X, U)]
                 #print("TRAJ: ", [t for t in TRAJ])
                 #calculate local derivatives along trajectories
-                fx = [self.model.d_dx(t[0], t[1], self.dt) for t in TRAJ]
-                fu = [self.model.d_du(t[0], t[1], self.dt) for t in TRAJ]
+                if self.update_model:
+                    fx = []
+                    fu = []
+                    for t in TRAJ:
+                        self.model.update(*t)
+                        fx.append(self.model.d_dx(t[0], t[1], self.dt))
+                        fu.append(self.model.d_du(t[0], t[1], self.dt))
+                else:
+                    fx = [self.model.d_dx(t[0], t[1], self.dt) for t in TRAJ]
+                    fu = [self.model.d_du(t[0], t[1], self.dt) for t in TRAJ]
                 #calculate first and 2nd derivatives for cost along traj
                 #TODO TODO: should the LAST element be cost.d_dx in TERMINAL mode?
                 #NOTE: ANSWER THIS pls it may be important ^
@@ -406,6 +418,9 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 deltax = xnew - X[i]
                 print("Dot: ", np.dot(K[i], deltax))
                 Unew[i] = U[i] + k[i] + np.dot(K[i], deltax)
+                if self.update_model:
+                    traj = (xnew, Unew[i])
+                    self.model.update(*traj)
                 dx = self.model(xnew, Unew[i]) * self.dt
                 print("Unew: ", Unew[i])
                 xnew += self.model(xnew, Unew[i]) * self.dt #get next state
@@ -461,6 +476,9 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
         xt_ = xt.copy()
         states = [xt_.copy(),]
         for u in control:
+            if self.update_model:
+                traj = (xt_, u)
+                self.model.update(*traj)
             dx = self.model(xt_, u)
             xt_ += dx * self.dt
             #xt_ += dx
@@ -505,8 +523,8 @@ def create_MPCController(control_base, *args, **kwargs):
 if __name__ == '__main__':
     LINEARIZED_PENDULUM_TEST = False
     NONLINEAR_PENDULUM_TEST = True
-
-
+    
+    NONLINEAR_CARTPOLE_TEST = True
     ##Nonlinear (inverted pendulum) controls test
     if NONLINEAR_PENDULUM_TEST:
         lamb_factor = 10
@@ -827,6 +845,37 @@ if __name__ == '__main__':
     #print('Loss d/dW: ', loss_dW)
     ##make_dot(grads).view()
     ##input()
+    
+    ### differentiation w.r.t single LINEAR / AFFINE torch.nn weights
+    #NOTE: With CONCATTED INPUTS!!! (forward dynamics - relevant)
+    #linA_size = 5
+    #linB_size = 3
+    #indim = linA_size + linB_size
+    #outdim = 1
+    #inpA = torch.arange(linA_size, dtype = torch.float, requires_grad = True)
+    #inpB = torch.arange(linB_size, dtype = torch.float, requires_grad = True)
+    #W = torch.ones([1, indim], dtype = torch.float, requires_grad = True)
+    #inp = torch.cat([inpA, inpB])
+    #linear = torch.nn.Linear(indim, outdim, bias = False)
+    #linear.weight.data = W
+    #print("Linear weights: ", linear.weight)
+    #out = linear(inp)
+    #jac = dx(out, inp, create_graph = True)
+    #print("OUT: ", out)
+    #print('"Jacobian" : ', jac)
+    #expected = torch.ones([outdim], dtype = torch.float)
+    #loss = torch.nn.MSELoss()(out, expected)
+    #lossA_dx = dx(loss, inpA)
+    #lossB_dx = dx(loss, inpB)
+    #loss_dx = dx(loss, inp)
+    #loss_dW = dx(loss, linear.weight)
+    #print('Loss : ', loss)
+    #print('Loss d/dx (inpA): ', lossA_dx)
+    #print('Loss d/dx (inpB): ', lossB_dx)
+    #print('Loss d/dx: ', loss_dx)
+    #print('Loss d/dW: ', loss_dW)
+    ##make_dot(grads).view()
+    ##input()
 
     ### differentiation w.r.t two (sequential) LINEAR torch.nn weights
     #lin_size = 5
@@ -843,6 +892,8 @@ if __name__ == '__main__':
     #print("Linear weights: ", l1.weight)
     #h = l1(inp)
     #out = l2(h)
+    #print("Inp: ", inp)
+    #print("Hidden: ", h)
     #print("OUT: ", out)
     #jac = dx(out, inp, create_graph = True)
     #print('"Jacobian" : ', jac)

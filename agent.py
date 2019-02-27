@@ -13,7 +13,7 @@ import torch.multiprocessing as mp
 
 import math
 
-from ilqr import ILQG
+from ilqr import *
 
 class Agent:
     __metaclass__ = abc.ABCMeta
@@ -627,21 +627,21 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
             pass            
         return action
 
-class ILQRMPCAgent(MPCAgent):
+class DDPMPCAgent(MPCAgent):
     def __init__(self, mpc_ilqg : ILQG,
              *args, **kwargs): 
         super().__init__(*args, **kwargs)
-        self.ilqg = mpc_ilqg
+        self.DDP = mpc_ddp
          
     def shoot(self, st) -> ([], [], []):
         rewards = [0 for i in range(self.horizon)]
         st = st #wow
-        states, actions = self.ilqg.step(st)
-        rewards[-1] = -1 * self.ilqg.forward_cost(states, actions)
+        states, actions = self.mpc_ddp.step(st)
+        rewards[-1] = -1 * self.mpc_ddp.forward_cost(states, actions)
         #we seek to MAX rewards = MIN cost (-1 * COST)
         return states, actions, rewards
     def reward(self, X, U, *args, **kwargs):
-        return self.ilqg.forward_cost(X, U)
+        return self.mpc_ddp.forward_cost(X, U)
 
 class MPCAgent(Agent): 
     def __init__(self, horizon = 50, k_shoots = 1, *args, **kwargs): 
@@ -736,6 +736,29 @@ class PyTorchMLP(torch.nn.Module):
             x = self.layers[l](x)
         return x
 
+class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
+    '''My god what a nightmarish class name.'''
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def forward(self, x, u, *args, **kwargs):
+        inp = torch.cat((s, a), 0) 
+        return super().forward(inp)
+        
+class PyTorchLinearSystemDynamicsLinearModule(torch.nn.Module):
+    '''My god what a nightmarish class name.'''
+    def __init__(self, A_size, B_size, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.a_module = torch.nn.Linear(self.outdim, A_size, bias = True)
+        self.b_module = torch.nn.Linear(self.outdim, B_size, bias = True)
+
+    def forward(self, x, u, *args, **kwargs):
+        inp = torch.cat((s, a), 0) 
+        out = super().forward(inp)
+        a_ = self.a_module(out)
+        b_ = self.b_module(out)
+        return a_, b_ #NOTE: flattened version
+    
 
 class PyTorchLinearAutoencoder(torch.nn.Module):
     def __init__(self, indim, device, depth, activations : [] = [], encoded_activations = [], 
@@ -832,22 +855,22 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
             
 
 
-class PyTorchLinearUnetEncoder(torch.nn.Module):
-    def __init__(self, indim, device, depth, activations : [] = [], encoded_activations = [], 
-            reduction_factor = 0.75):
-        '''Arguments:
-            @activations: Determines the activations at each layer (?except the first and last layer?).
-            @Depth: Determines the number of layers in the encoder / decoder layer.
-            @Reduction_factor: Determines how much smaller / larger each layer is from the last. This
-            also informs the size of the encoded space, which equals indim * floor((factor)^depth)'''
-        self.activations = activations
-        self.encoded_activations = encoded_activations
-        self.encoded_space = indim * math.floor(reduction ** depth)
-        self.depth = depth
-        self.reduction = reduction_factor
-        self.device = device
-        self.indim = indim
-        #assert(len(activations) == len(encoder_layers + decoder_layers) + 1)
+#class PyTorchLinearUnetEncoder(torch.nn.Module):
+#    def __init__(self, indim, device, depth, activations : [] = [], encoded_activations = [], 
+#            reduction_factor = 0.75):
+#        '''Arguments:
+#            @activations: Determines the activations at each layer (?except the first and last layer?).
+#            @Depth: Determines the number of layers in the encoder / decoder layer.
+#            @Reduction_factor: Determines how much smaller / larger each layer is from the last. This
+#            also informs the size of the encoded space, which equals indim * floor((factor)^depth)'''
+#        self.activations = activations
+#        self.encoded_activations = encoded_activations
+#        self.encoded_space = indim * math.floor(reduction ** depth)
+#        self.depth = depth
+#        self.reduction = reduction_factor
+#        self.device = device
+#        self.indim = indim
+#        #assert(len(activations) == len(encoder_layers + decoder_layers) + 1)
 
 def LinearSAAutoencoder(encoder_base, state_size, action_size, forward_mlp,
         coupled_sa = False,
@@ -1184,3 +1207,36 @@ def create_mlp(self, batch_inp, indim, outdim, hdim : [] = [], activations : [] 
 
 
 ##
+
+
+## PyTorch-specific Model elements (from ilqg.py)
+class PyTorchModel(Model):
+    '''Wraps a Pytorch Module in a Model so it can be painlessly
+    integrated with iLQG.'''
+    def __init__(self, module : PyTorchMLP, dt, *args, **kwargs):
+        self.module = module
+        self.dt = dt
+
+    @abc.abstractmethod
+    def forward(self, xt, ut, dt, *args, **kwargs):
+        pass
+
+    def forward_predict(self, xt, ut, dt):
+        return xt + dt * self.forward(xt, ut, *self.module(xt, ut)) 
+    #resnet style <3
+
+class PyTorchForwardDynamicsModel(PyTorchModel):
+    def forward(self, xt, ut, f):
+        return f #s.t. xt+1 = xt + dt * f, f = self.module(x, u, dt)
+
+class PyTorchLinearSystemModel(LinearSystemModel, PyTorchModel):
+    '''Note: Output of PyTorchModel is FLATTENED A/B'''
+    def forward(self, xt, ut, a_, b_):
+        self.update(xt, ut, a_, b_)
+        return super().__call__(xt, ut)
+
+    def update(self, xt, ut):
+        a_, b_ = self.module(xt, ut)
+        self.A = a_.numpy().resize(xt.shape)
+        self.B = b_
+

@@ -313,7 +313,43 @@ def create_pytorch_policy_agent(env, obs_size,
                 num_episodes = EPISODES_BEFORE_TRAINING) 
     return agent, trainer
 
+def create_pytorch_agnostic_mbrl(cost, 
+        ddp, dataset, 
+        #system_model, system_model_args, system_model_kwargs, 
+        pytorch_class,
+        pytorch_model, 
+        replays, criterion,
+        env, obs_size, action_size, action_constraints,
+        mlp_hdims, mlp_activations, 
+        lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+        discrete_actions = False, 
+        has_value_function = False, ) -> (Agent, Trainer): 
+    #NOTE: I'm going insane with this pseudoOOP it's compulsive right now D:
+    if pytorch_class == PyTorchForwardDynamicsLinearModule:
+        pytorch_module = pytorch_class(device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
+            activations = mlp_activations, initializer = mlp_initializer).to(device)
+    elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
+        pytorch_module = pytorch_class((obs_size, obs_size), (1, action-size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
+            activations = mlp_activations, initializer = mlp_initializer).to(device)
 
+    system_model = pytorch_model(pytorch_module, ddp.dt) 
+    agent = DDPMPCAgent(ddp, horizon, k_shoots, 
+            [1, obs_size], 
+            action_size, discrete_actions = DISCRETE_AGENT, 
+            action_constraints = action_constraints, has_value_function = True,
+            terminal_penalty = 0.0, 
+            policy_entropy_history = True, energy_penalty_history = True)
+
+    criterion = torch.nn.MSELoss() 
+    trainer = PyTorchDynamicsTrainer(system_model, 
+            dataset, 
+            criterion,
+            batch_size, collect_forward_loss, device,
+            optimizer, scheduler = None, agent = agent, env = env,
+            replay = replay, max_traj_len = None, gamma=0.98, 
+            num_episodes = 1) 
+    return agent, trainer
+        
 
 
 def launch_viewer(env, agent):
@@ -447,6 +483,11 @@ LIB_TYPE = 'dm'
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
+AGENT_TYPE = 'agnostic_MBRL'
+REPLAYS = 20
+horizon = 50
+
+
 TRAINER_TYPE = 'AC'
 #TRAINER_TYPE = 'PPO'
 #EPISODES_BEFORE_TRAINING = 3
@@ -508,6 +549,7 @@ TRAIN_AUTOENCODER = True
 #ENV_TYPE = 'rossler'
 #ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.0001, 'interval' : 10}
 #TASK_NAME = 'point'
+
 
 MA_LEN = -1
 MA_LEN = 15
@@ -667,6 +709,33 @@ if __name__ == '__main__':
                     trainer.scheduler = scheduler
                 else:
                     agent.encode_inputs = False
+        elif AGENT_TYPE == 'agnostic_MBRL':
+            cost = None
+            ddp = None
+            dataset = None
+            mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
+            mlp_hdims = [obs_size * WIDENING_CONST] 
+            mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
+            pytorch_class = PyTorchForwardDynamicsLinearModule
+            pytorch_model = PyTorchLinearSystemModel 
+            agent, trainer =  create_pytorch_agnostic_mbrl(cost, 
+                ddp, dataset,
+                pytorch_class,
+                pytorch_model, 
+                replay_iterations, None,
+                env, obs_size, action_size, action_constraints,
+                mlp_hdims, mlp_activations, 
+                lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+                discrete_actions = False, 
+                has_value_function = False) 
+            #agent, trainer = create_pytorch_policy_agent(env, obs_size, 
+            #    action_size, action_constraints,
+            #    mlp_hdims, mlp_activations, mlp_base,
+            #    lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+            #    discrete_actions = False, 
+            #    has_value_function = False) 
+
+
 
         if MAXMIN_NORMALIZATION: 
             print(get_max_min_path(LIB_TYPE, ENV_TYPE))
