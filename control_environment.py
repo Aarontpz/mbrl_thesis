@@ -343,7 +343,7 @@ class CartpoleEnvironment(ControlEnvironment):
         self.ts = ts
         self.interval = interval 
         
-        if initial_state:
+        if initial_state is not None:
             self.state = initial_state
         else:
             self.state = self.get_initial_state(noise = self.noisy_init)
@@ -366,7 +366,7 @@ class CartpoleEnvironment(ControlEnvironment):
         #state[0] = state[0] % np.pi
         self.steps += self.ts
         self.state_history.append(state.copy())
-        self.state = state
+        self.state = state.copy()
          
     def dx(self, x, u = None, r = None, *args) -> np.ndarray:
         '''x' = dx * x + du * u
@@ -387,29 +387,48 @@ class CartpoleEnvironment(ControlEnvironment):
     def d_dx(self, x, u=None, r=None, *args):
         '''This is really ugly. And I feel bad for writing it down. '''
         if self.simplified:
-            raise Exception('REEEEEEEEEEEEEEEE')
+            #raise Exception('REEEEEEEEEEEEEEEE linearize WHERE')
             return np.array([[0, 1, 0, 0],
-                [0, 0, -self.mp * self.g / self.mc],
+                [0, 0, -self.mp * self.g / self.mc, 0],
                 [0, 0, 0, 1],
-                [0, 0, (self.mc + self.mp)*self.g / (self.L * self.mc)]])
-        d2x3 = 0
-        d2x4 = 0
-        d4x3 = 0
-        d4x4 = 0
-        dx = np.array([0, 1, 0, 0],
+                [0, 0, (self.mc + self.mp)*self.g / (self.L * self.mc), 0]])
+        sx = np.sin(x[3])
+        cx = np.cos(x[3])
+        mp_denom = self.mp * sx ** 2
+        mp_denom_dx = self.mp * 2 * sx * cx 
+        mp_denom_2 = (self.mc + mp_denom) ** 2
+        mpL = self.L * self.mp
+        #d2x3 = 0
+        d2x3 = ((mpL*cx*x[3]**2 * mp_denom) - (mpL*cx*x[3]**2 * mp_denom_dx))
+        d2x3 += (-(self.mp*(cx**2 - sx**2) * mp_denom) - (-2*self.mp*cx*sx * mp_denom_dx)) #TODO: verify signs, validity of mp_denom and derivatives
+        d2x3 = d2x3 / mp_denom_2
+        d2x4 = mpL * sx * 2 * x[3] / (self.mc + mp_denom)
+            
+        mp_denom = self.mp * sx ** 2
+        mp_denom_dx = self.mp * 2 * sx * cx 
+        mp_denom_2 = (self.L*(self.mc + mp_denom)) ** 2
+        #d4x3 = 0
+        #d4x4 = 0
+        d4x3 = (((-mpL * x[3]**2 * (cx**2 - sx**2)) * mp_denom_dx) - ((-mpL*x[3]**2*sx*cx) * mp_denom_dx)) 
+        d4x3 += (-(self.mc + self.mp)*self.g*cx)*(self.L*(self.mc + mp_denom)) - (((self.mc + self.mp)*self.g*cx) * mp_denom_dx)  #TODO: verify mp_denom is valid
+        d4x3 = d4x3 / mp_denom_2
+        d4x4 = -mpL * sx * cx/(self.L * (self.mc + mp_denom))
+        dx = np.array([[0, 1, 0, 0],
                 [0, 0, d2x3, d2x4],
                 [0, 0, 0, 1],
-                [0, 0, d4x3, d4x4])
+                [0, 0, d4x3, d4x4]])
+        #return np.zeros([4, 4])
         return dx
 
     def d_du(self, x, u, r=None, *args):
         '''This is really ugly. And I feel bad for writing it down. '''
         if self.simplified: #simplified derivative ignores higher order 
-            raise Exception('REEEEEEEEEEEEEEEE')
+            #raise Exception('REEEEEEEEEEEEEEEE linearize WHERE')
             return np.array([0, 
                 1/(self.mc), 
                 0, 
                 -1/(self.L*(self.mc))])
+        #return np.zeros([4,])
         return np.array([0, 1/(self.mc + self.mp * np.sin(x[2])**2), 0, 
             -np.cos(x[2])/(self.L*(self.mc + self.mp * np.sin(x[2])**2))])
 
@@ -436,23 +455,60 @@ class CartpoleEnvironment(ControlEnvironment):
         return [np.ndarray([-2]), np.ndarray([2])]
 
     def generate_plots(self):
-        self.generate_state_history_plot()
+        self.generate_theta_phase_plot()
+        self.generate_cart_phase_plot()
 
-    def generate_state_history_plot(self, history = None):
+    def generate_theta_phase_plot(self, history = None):
         if history is None:
-            if not hasattr(self, 'state_fig'):
-                self.state_fig = plt.figure()
+            if not hasattr(self, 'theta_fig'):
+                self.theta_fig = plt.figure()
+            fig = self.theta_fig 
             history = self.state_history
-            fig = self.state_fig 
         else:
-            if not hasattr(self, 'secondary_state_fig'):
-                self.secondary_state_fig = plt.figure()
-            fig = self.secondary_state_fig
+            if not hasattr(self, 'secondary_theta_fig'):
+                self.secondary_theta_fig = plt.figure()
+            fig = self.secondary_theta_fig
+        x = [s[2] for s in history]
+        y = [s[3] for s in history]
+        plt.figure(fig.number)
+        plt.plot(x,y, label='parametric curve')
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'g')
+        plt.title("Cartpole Theta Phase Plot")
+        plt.xlabel("Theta")
+        plt.ylabel("dTheta/dt")
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'go')
+        if hasattr(self, 'target_point'):
+            target = self.target_point
+            plt.plot(target[2], target[3], 'b^')
+        plt.draw()
+        plt.pause(0.01)
+    
+    def generate_cart_phase_plot(self, history = None):
+        if history is None:
+            if not hasattr(self, 'cart_fig'):
+                self.cart_fig = plt.figure()
+            fig = self.cart_fig 
+            history = self.state_history
+        else:
+            if not hasattr(self, 'secondary_cart_fig'):
+                self.secondary_cart_fig = plt.figure()
+            fig = self.secondary_cart_fig
+        plt.figure(fig.number)
         x = [s[0] for s in history]
         y = [s[1] for s in history]
         plt.plot(x,y, label='parametric curve')
         plt.plot(x[0], y[0], 'ro')
         plt.plot(x[-1], y[-1], 'g')
+        plt.title("Cartpole Position Phase Plot")
+        plt.xlabel("Position")
+        plt.ylabel("dX/dt")
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'go')
+        if hasattr(self, 'target_point'):
+            target = self.target_point
+            plt.plot(target[0], target[1], 'b^')
         plt.draw()
         plt.pause(0.01)
 
