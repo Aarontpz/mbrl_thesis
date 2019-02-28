@@ -480,6 +480,7 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 traj = (xt_, u)
                 self.model.update(*traj)
             dx = self.model(xt_, u)
+            #print("Xt: %s \ndx: %s " % (xt_, dx))
             xt_ += dx * self.dt
             #xt_ += dx
             #xt_[0] = xt_[0] % np.pi
@@ -522,14 +523,14 @@ def create_MPCController(control_base, *args, **kwargs):
 
 if __name__ == '__main__':
     LINEARIZED_PENDULUM_TEST = False
-    NONLINEAR_PENDULUM_TEST = False
+    NONLINEAR_PENDULUM_TEST = True
     
     NONLINEAR_CARTPOLE_TEST = True
     ##NONLINEAR CARTPOLE TEST
     if NONLINEAR_CARTPOLE_TEST:
         lamb_factor = 10
         lamb_max = 1000
-        horizon = 2
+        horizon = 7
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -544,7 +545,8 @@ if __name__ == '__main__':
         MPC_STEPS = 1
         #MPC_STEPS = int(MPC_HORIZON / MPC_DT) - 1
         MPC_MAX_STEPS = int(horizon / dt / 2)
-        MPC_THRESHOLD = 1e-2
+        MPC_THRESHOLD = 1e-3
+        #MPC_THRESHOLD = 0e-2
         
 
         
@@ -555,23 +557,41 @@ if __name__ == '__main__':
         action_size = 1
         
         #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
-        cost_func = lambda h,dt:1e4
+        cost_func = lambda h,dt:1e7
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
-        Qf = np.eye(state_size) * cost_func(horizon, dt) * 0.5
+        Qf = np.eye(state_size) * cost_func(horizon, dt) * 1.0
         R = np.eye(action_size) * 0e0 * 1
 
-        Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
-        Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-        Q[3][3] = 0 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+        priority_cost = True
+        if priority_cost:
+            Q[0][0] /= 1e4 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
+            Q[1][1] /= 1e4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+            Q[2][2] /= 1 #set theta Q term to 0 REEEEEE HAHAHAHAHHAA
+            Q[3][3] /= 1e4 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+        else:
+            Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
+            Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+            Q[3][3] = 0 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+        #    Q[0][0] /= 1e2 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
+        #    Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
+        #    #Q[2][2] = 0 #set theta Q term to 0 REEEEEE HAHAHAHAHHAA
+        #    Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+        #    Q[3][3] = 0 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+        #Q[0][0] /= 1e1 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
+        #Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
+        #Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+        #Q[3][3] = 0 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+        #Q[2][2] = 0
         #Qf[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Qf[1][1] = Qf[0][0] / 4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #target = None
         #target = np.array([0, 0, 0, 0], dtype = np.float64)
-        target = np.array([0, 0, 0.5, 0], dtype = np.float64)
-        x0 = np.array([0, 0, 2.00, 0.00],dtype=np.float64)
+        target = np.array([1.0, 0, 0.7, 0], dtype = np.float64)
+        #target = np.array([-1.0, 0, 0.0, 0], dtype = np.float64)
+        x0 = np.array([0, 0, 0.50, 0.00],dtype=np.float64)
         #x0 = np.array([0, 1, 0.0, 1.00],dtype=np.float64)
         #x0 = np.array([0, 1, 0, 5.00],dtype=np.float64)
         diff_func = lambda t,x : x - t
@@ -580,8 +600,8 @@ if __name__ == '__main__':
         noisy_init = False
         friction = 0.000
         mc = 1
-        mp = 1
-        L = 1
+        mp = 0.1
+        L = 0.5
         g = 9.8
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
@@ -650,10 +670,18 @@ if __name__ == '__main__':
             #Qf = Q
             Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
             #R = np.eye(action_size) * cost_func(horizon, dt) * 0 #NO controls applied
-            R = np.eye(action_size) * 1e0
-            Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
-            Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-            Q[3][3] = 0 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+            R = np.eye(action_size) * 0e1
+            if priority_cost:
+                Q[0][0] /= 1e2 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[1][1] /= 1e4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[2][2] /= 1 #set theta Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[3][3] /= 1e4 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+            else:
+                Q[0][0] /= 1e2 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
+                #Q[2][2] = 0 #set theta Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[3][3] = 0 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
 
@@ -691,7 +719,7 @@ if __name__ == '__main__':
     if NONLINEAR_PENDULUM_TEST:
         lamb_factor = 10
         lamb_max = 1000
-        horizon = 1
+        horizon = 2
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -701,12 +729,12 @@ if __name__ == '__main__':
         SECONDARY_STEP = False
         
         MPC_COMPARISON = True
-        MPC_HORIZON = 0.1e0
+        MPC_HORIZON = 0.2e0
         MPC_DT = dt
         MPC_STEPS = 1
         #MPC_STEPS = int(MPC_HORIZON / MPC_DT) - 1
         MPC_MAX_STEPS = int(horizon / dt / 2)
-        MPC_THRESHOLD = 0.25
+        MPC_THRESHOLD = 1e-2
         
 
         
@@ -717,13 +745,13 @@ if __name__ == '__main__':
         action_size = 1
         
         #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
-        cost_func = lambda h,dt:1e4
+        cost_func = lambda h,dt:1e5
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
-        Qf = np.eye(state_size) * cost_func(horizon, dt) * 0.5
-        R = np.eye(action_size) * 1e0 * 0
+        Qf = np.eye(state_size) * cost_func(horizon, dt) * 1
+        R = np.eye(action_size) * cost_func(horizon, dt) * 0
 
         #Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Qf[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
@@ -733,8 +761,8 @@ if __name__ == '__main__':
         #target = np.array([0, 0], dtype = np.float64)
         #target = np.array([0.5, 0], dtype = np.float64)
         #target = np.array([np.pi, 0], dtype = np.float64)
-        target = np.array([np.pi/2, 0], dtype = np.float64)
-        #target = np.array([np.pi/4, 0], dtype = np.float64)
+        #target = np.array([np.pi/2, 0], dtype = np.float64)
+        target = np.array([np.pi/4, 0], dtype = np.float64)
         diff_func = lambda t,x : x - t
         #diff_func = lambda t,x : x + t
         #diff_func = lambda t,x : (t - x)**2
@@ -812,8 +840,9 @@ if __name__ == '__main__':
             #Qf = Q
             Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
             #R = np.eye(action_size) * cost_func(horizon, dt) * 0 #NO controls applied
-            R = np.eye(action_size) * 1e1
-            Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+            R = np.eye(action_size) * 0e1
+            Q[1][1] /= 1e2 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+            #Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
 
