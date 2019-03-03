@@ -496,6 +496,7 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
         return self.criterion(s_, estimate)
 
     def step(self):
+        requires_grad = True
         #YAY REFERENCES
         device = self.device
         optimizer = self.opt
@@ -518,8 +519,11 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
             optimizer.step()
             optimizer.zero_grad() 
             net_loss += loss #accumulate loss before resetting it
+        self.agent.net_loss_history.append(net_loss.cpu().detach())
+        #self.net_loss_history.append(net_loss)
         #if self.collect_forward_loss:
         #    net_forward_loss.append(sum([compute_model_loss(*sample)]))
+        #input()
     
     def plot_loss_histories(self):
         if self.collect_forward_loss:

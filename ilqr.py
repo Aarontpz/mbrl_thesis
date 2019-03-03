@@ -72,7 +72,6 @@ class LinearQuadraticModel(Model):
         self.Q = Q
         self.shape = Q.shape
         self.size = Q.size
-        print("NEW LQM: ", Q)
     def d_dx(self, xt, ut=None, dt=None, *args, **kwargs):
         '''Calculate df/dx, given timestep
         size dt'''
@@ -85,8 +84,6 @@ class LinearQuadraticModel(Model):
         '''Returns dx, the change in state xt given control ut
         and timestep size dt.'''
         #NOTE: xt is a ROW VECTOR   
-        #print("QUADRATIC: X: %s Q: %s OUT: %s" % (xt, self.Q, 
-        #    np.dot(xt.T, np.dot(self.Q,xt))))
         return np.dot(xt.T, np.dot(self.Q ,xt))
 
 class CostModel(Model):
@@ -102,7 +99,7 @@ class CostModel(Model):
 
 class LQC(CostModel):
     def __init__(self, Q : np.ndarray, R : np.ndarray,
-            Qf = None, target = None, diff_func =(lambda t,x:t-x)):
+            Qf = None, target = None, diff_func =(lambda t,x:x - t)):
         print("I sure hope Q and R are symmetric (and/or EYE)...")
         super().__init__()
         self.Q = LinearQuadraticModel(Q)
@@ -183,6 +180,8 @@ class LQC(CostModel):
             #return self.Qf(xt) * dt
         #return (self.Q(xt) + self.R(ut)) 
         #print("Q(xt): %s \n R(ut): %s" % (self.Q(xt), self.R(ut)))
+        #print(self.Q(xt))
+        #print(self.R(ut))
         return 0.5 * (self.Q(xt) + self.R(ut)) * dt
 
 class LQC_Controlled(LQC):
@@ -212,11 +211,16 @@ class LinearSystemModel(Model):
         assert(ut is not None)
         return self.B * dt
     def __call__(self, xt, ut, dt=None, A = None, B = None, *args, **kwargs):
-        print("A*xt: ",np.dot(self.A, xt))
-        print("B*ut: ",self.B * ut)
         A = A if A is not None else self.A
-        B = B if B is not None else self.A
-        return np.dot(A, xt) + B * ut
+        B = B if B is not None else self.B
+        #print("A: ", A)
+        #print("X: ", xt)
+        #print("Ax: ", np.dot(A, xt))
+        ax = np.dot(A, xt)
+        bu = B * ut
+        #print("A*xt: ",ax)
+        #print("B*ut: ",bu)
+        return ax + bu
     
 class ControlEnvironmentModel(Model):
     def __init__(self, env : ControlEnvironment):
@@ -301,7 +305,7 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
         lamb = 1.0 # regularization parameter, for LM Heuristic(seepaper/ref)
         ii = 0
         for ii in range(self.max_iterations): 
-            print("STEP: ", ii)
+            #print("STEP: ", ii)
             if sim_new_trajectory:
                 X = self.forward(xt, U)
                 cost = self.forward_cost(X, U) #dt = 1 for terminal?
@@ -332,16 +336,16 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 l = np.zeros((self.horizon, 1)) 
                 l[-1] = self.forward_cost(X, U)
                 self.cost.terminal_mode()
-                print("FINAL: X: %s U: %s" % (X[-1], U[-1]))
+                #print("FINAL: X: %s U: %s" % (X[-1], U[-1]))
                 #l[-1] = self.cost(X[-1], U[-1]) #get terminal cost
                 lx[-1] = self.cost.d_dx(X[-1], U[-1], self.dt) #terminal dl/dx
                 lu[-1] = self.cost.d_du(X[-1], U[-1], self.dt) # EQUALS 0
                 lxx[-1] = self.cost.d_dxx(X[-1], U[-1], self.dt) #ya get it
                 luu[-1] = self.cost.d_duu(X[-1], U[-1], self.dt) # EQUALS 0
                 lxu[-1] = self.cost.d_dxu(X[-1], U[-1], self.dt) # EQUALS 0
-                print("Final Cost: ", l[-1])
-                print("Final dl/dx: ", lx[-1])
-                print("Final dl/du: ", lu[-1])
+                #print("Final Cost: ", l[-1])
+                #print("Final dl/dx: ", lx[-1])
+                #print("Final dl/du: ", lu[-1])
                 #print("Len X: %s Len U: %s Len l: %s" % (len(X), len(U),len(l)))
                 #input()
                 self.cost.normal_mode() #this is...sorta grossth
@@ -365,20 +369,20 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 #We start from after terminal state, V(x,u) = cost(Xterm)
                 #and perform backwards recursion to get seq. of approx.
                 #cost terms.
-                print("V: %s Vx: %s Vxx: %s \nFu: %s Fx: %s" % (V, Vx, 
-                    Vxx, fu[i], fx[i]))
-                print("lxx: %s lxu: %s luu: %s" % (lxx[i], 
-                    lxu[i], luu[i]))
+                #print("V: %s Vx: %s Vxx: %s \nFu: %s Fx: %s" % (V, Vx, 
+                #    Vxx, fu[i], fx[i]))
+                #print("lxx: %s lxu: %s luu: %s" % (lxx[i], 
+                #    lxu[i], luu[i]))
 
                 Qx = lx[i] + np.dot(Vx, fx[i]) 
                 Qu = lu[i] + np.dot(Vx, fu[i]) #lu[term] = 0]
-                print("Qx: %s Qu: %s" % (Qx, Qu))
+                #print("Qx: %s Qu: %s" % (Qx, Qu))
                 #input()
                 Qxx = lxx[i] + np.dot(fx[i].T, np.dot(Vxx, fx[i]))
-                print("DOT: ",  np.dot(fx[i].T, np.dot(Vxx, fu[i])))
+                #print("DOT: ",  np.dot(fx[i].T, np.dot(Vxx, fu[i])))
                 Qxu = lxu[i] + np.dot(fx[i].T, np.dot(Vxx, fu[i]))
                 Quu = luu[i] + np.dot(fu[i].T, np.dot(Vxx, fu[i]))
-                print("Qxx: %s Qxu: %s Quu: %s" % (Qxx, Qxu, Quu))
+                #print("Qxx: %s Qxu: %s Quu: %s" % (Qxx, Qxu, Quu))
                 #input() 
                 #apparently it's not recommended to calculate the
                 #'raw' inverse of Quu, so instead we perform
@@ -389,20 +393,20 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 #performed across all dimensions, or no steps at all)
                 
                 Quu_eval, Quu_evec = np.linalg.eig(Quu) 
-                print("Quu Eigenvals: ", Quu_eval)
-                print("Quu Eigenvecs: ", Quu_evec)
+                #print("Quu Eigenvals: ", Quu_eval)
+                #print("Quu Eigenvecs: ", Quu_evec)
                 Quu_eval[Quu_eval < 0] = 0.0 #remove negative eigenvals
                 Quu_eval += lamb
-                print("MODIFIED Quu Eigenvals: ", Quu_eval)
+                #print("MODIFIED Quu Eigenvals: ", Quu_eval)
                 Quu_inv = np.dot(Quu_evec, np.dot(np.diag(1.0/Quu_eval),
                     Quu_evec.T)) #quadratic function with reciproc-eigvals
                 #Quu_inv = np.linalg.pinv(Quu_inv)
-                print("Quu Inv: ", Quu_inv) 
+                #print("Quu Inv: ", Quu_inv) 
                 #update gain matrices, to be used to get delta-u
                 #as a linear function of delta-x
                 k[i] = -np.dot(Quu_inv, Qu)
                 K[i] = -np.dot(Quu_inv, Qxu)
-                print("ki: %s \n Ki: %s " % (k[i], K[i]))
+                #print("ki: %s \n Ki: %s " % (k[i], K[i]))
 
                 #update necessary values to go back one timestep
                 #these updates are based on the Bellman equations,
@@ -416,21 +420,21 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
             Unew = np.zeros((self.horizon, self.action_size)) #"new" control sequence
             for i in range(self.horizon - 1):
                 deltax = xnew - X[i]
-                print("Dot: ", np.dot(K[i], deltax))
+                #print("Dot: ", np.dot(K[i], deltax))
                 Unew[i] = U[i] + k[i] + np.dot(K[i], deltax)
                 if self.update_model:
                     traj = (xnew, Unew[i])
                     self.model.update(*traj)
                 dx = self.model(xnew, Unew[i]) * self.dt
-                print("Unew: ", Unew[i])
+                #print("Unew: ", Unew[i])
                 xnew += self.model(xnew, Unew[i]) * self.dt #get next state
                 #xnew += self.model(xnew, Unew[i]) #get next state
-                print("Xnew: %s dx: %s" % (xnew, dx))
+                #print("Xnew: %s dx: %s" % (xnew, dx))
             
             Xnew = self.forward(xt, Unew) #use updated control sequence
             costnew = self.forward_cost(Xnew, Unew) #dt = 1 for terminal?
-            print("NEWCOST: ", costnew)
-            print("Original: ", cost)
+            #print("NEWCOST: ", costnew)
+            #print("Original: ", cost)
             #LM Heuristic:
             # Based on change in cost, update lambda to move optimization
             # toward 2nd (Newton's) or 1st (Gradient Descent) order method
@@ -442,16 +446,16 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 prev_cost = np.copy(cost) #for stopping conditions
                 cost = np.copy(costnew)
                 sim_new_trajectory = True
-                print("Delta-Cost: %s, Threshold: %s" % ((abs(prev_cost - cost)/cost),  self.eps))
+                #print("Delta-Cost: %s, Threshold: %s" % ((abs(prev_cost - cost)/cost),  self.eps))
                 if ii > 0 and ((abs(prev_cost - cost)/cost) < self.eps):
-                    print("CONVERGED at Iteration %s, Cost: %s" % (ii, 
-                        cost)) 
-                    print("Prev Cost: ", prev_cost)
+                    #print("CONVERGED at Iteration %s, Cost: %s" % (ii, 
+                        #cost)) 
+                    #print("Prev Cost: ", prev_cost)
                     break
             else: #move towards gradient descent
                 lamb *= self.lamb_factor
                 if lamb > self.lamb_max:
-                    print("We're not converging (lamb = %s): %s vs %s" % (lamb, costnew, cost))
+                    #print("We're not converging (lamb = %s): %s vs %s" % (lamb, costnew, cost))
                     if False:
                         X = Xnew.copy()
                         U = Unew.copy()
@@ -523,14 +527,14 @@ def create_MPCController(control_base, *args, **kwargs):
 
 if __name__ == '__main__':
     LINEARIZED_PENDULUM_TEST = False
-    NONLINEAR_PENDULUM_TEST = True
+    NONLINEAR_PENDULUM_TEST = False
     
     NONLINEAR_CARTPOLE_TEST = True
     ##NONLINEAR CARTPOLE TEST
     if NONLINEAR_CARTPOLE_TEST:
         lamb_factor = 10
         lamb_max = 1000
-        horizon = 7
+        horizon = 5
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -545,7 +549,7 @@ if __name__ == '__main__':
         MPC_STEPS = 1
         #MPC_STEPS = int(MPC_HORIZON / MPC_DT) - 1
         MPC_MAX_STEPS = int(horizon / dt / 2)
-        MPC_THRESHOLD = 1e-3
+        MPC_THRESHOLD = 1e-2
         #MPC_THRESHOLD = 0e-2
         
 
@@ -556,6 +560,14 @@ if __name__ == '__main__':
         action_shape = [1]
         action_size = 1
         
+        #target = None
+        #target = np.array([0, 0, 0, 0], dtype = np.float64)
+        target = np.array([-1.0, 0, 0.7, 0], dtype = np.float64)
+        #target = np.array([-1.0, 0, 0.0, 0], dtype = np.float64)
+        x0 = np.array([0, 0, 0.50, 0.00],dtype=np.float64)
+        #x0 = np.array([0, 1, 0.0, 1.00],dtype=np.float64)
+        #x0 = np.array([0, 1, 0, 5.00],dtype=np.float64)
+        diff_func = lambda t,x : x - t
         #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
         cost_func = lambda h,dt:1e7
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
@@ -587,14 +599,6 @@ if __name__ == '__main__':
         #Q[2][2] = 0
         #Qf[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Qf[1][1] = Qf[0][0] / 4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-        #target = None
-        #target = np.array([0, 0, 0, 0], dtype = np.float64)
-        target = np.array([1.0, 0, 0.7, 0], dtype = np.float64)
-        #target = np.array([-1.0, 0, 0.0, 0], dtype = np.float64)
-        x0 = np.array([0, 0, 0.50, 0.00],dtype=np.float64)
-        #x0 = np.array([0, 1, 0.0, 1.00],dtype=np.float64)
-        #x0 = np.array([0, 1, 0, 5.00],dtype=np.float64)
-        diff_func = lambda t,x : x - t
         cost = LQC(Q, R, Qf = Qf, target = target, 
                 diff_func = diff_func)
         noisy_init = False
@@ -663,7 +667,7 @@ if __name__ == '__main__':
             input()
         
         if MPC_COMPARISON:
-            cost_func = lambda h,dt:1e8
+            cost_func = lambda h,dt:1e4
             #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
             #cost_func = lambda h,dt:1e4
             Q = np.eye(state_size) * cost_func(horizon, dt) * 1
@@ -672,10 +676,10 @@ if __name__ == '__main__':
             #R = np.eye(action_size) * cost_func(horizon, dt) * 0 #NO controls applied
             R = np.eye(action_size) * 0e1
             if priority_cost:
-                Q[0][0] /= 1e2 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
-                Q[1][1] /= 1e4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-                Q[2][2] /= 1 #set theta Q term to 0 REEEEEE HAHAHAHAHHAA
-                Q[3][3] /= 1e4 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[0][0] *= 1e1 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[1][1] *= 1e0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[2][2] *= 1e4 #set theta Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[3][3] *= 1e0 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
             else:
                 Q[0][0] /= 1e2 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
                 Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
@@ -719,7 +723,7 @@ if __name__ == '__main__':
     if NONLINEAR_PENDULUM_TEST:
         lamb_factor = 10
         lamb_max = 1000
-        horizon = 2
+        horizon = 3
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -729,13 +733,16 @@ if __name__ == '__main__':
         SECONDARY_STEP = False
         
         MPC_COMPARISON = True
-        MPC_HORIZON = 0.2e0
+        MPC_HORIZON = 0.15e0
         MPC_DT = dt
         MPC_STEPS = 1
         #MPC_STEPS = int(MPC_HORIZON / MPC_DT) - 1
         MPC_MAX_STEPS = int(horizon / dt / 2)
-        MPC_THRESHOLD = 1e-2
+        MPC_THRESHOLD = 0e-2
         
+        MPC_NOISY_OBS = True
+        MPC_NOISY_MU = np.array([0, 0])
+        MPC_NOISY_SIG = np.eye(2) * 5
 
         
         #
@@ -758,11 +765,11 @@ if __name__ == '__main__':
         #Qf[1][1] = Qf[0][0] / 4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #Q[1][1] = Q[0][0]/4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
         #target = None
-        #target = np.array([0, 0], dtype = np.float64)
+        target = np.array([0, 0], dtype = np.float64)
         #target = np.array([0.5, 0], dtype = np.float64)
         #target = np.array([np.pi, 0], dtype = np.float64)
         #target = np.array([np.pi/2, 0], dtype = np.float64)
-        target = np.array([np.pi/4, 0], dtype = np.float64)
+        #target = np.array([np.pi/4, 0], dtype = np.float64)
         diff_func = lambda t,x : x - t
         #diff_func = lambda t,x : x + t
         #diff_func = lambda t,x : (t - x)**2
@@ -784,7 +791,7 @@ if __name__ == '__main__':
         #x0 = np.array([0, np.pi/2],dtype=np.float64)
         #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
         ##x0 = np.array([np.pi, 0.0],dtype=np.float64) #NOTE: don't do 
-        x0 = np.array([0.05, 0.00],dtype=np.float64)
+        x0 = np.array([0.1, 0.00],dtype=np.float64)
         
         env.reset()
         env.state = x0.copy()
@@ -841,7 +848,7 @@ if __name__ == '__main__':
             Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
             #R = np.eye(action_size) * cost_func(horizon, dt) * 0 #NO controls applied
             R = np.eye(action_size) * 0e1
-            Q[1][1] /= 1e2 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+            Q[1][1] = np.sqrt(Q[1][1]) #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
             #Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
@@ -859,6 +866,10 @@ if __name__ == '__main__':
             env.state_history.append(env.state.copy())
             xt = x0.copy()
             for i in range(MPC_MAX_STEPS):
+                if MPC_NOISY_OBS:
+                    x_ob = xt + np.random.multivariate_normal(MPC_NOISY_MU, MPC_NOISY_SIG) * MPC_DT
+                else:
+                    x_ob = xt
                 X, U = mpc_ilqg.step(xt)
                 for j in range(MPC_STEPS):
                     u = U[j]
@@ -882,7 +893,7 @@ if __name__ == '__main__':
     if LINEARIZED_PENDULUM_TEST: #TODO: wrap this shit in Unittest eventually
         lamb_factor = 5
         lamb_max = 1000
-        horizon = 3
+        horizon = 4
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -893,7 +904,11 @@ if __name__ == '__main__':
         MPC_HORIZON = 0.1e0
         MPC_DT = dt
         MPC_MAX_STEPS = int(horizon / dt) * 1
-        MPC_THRESHOLD = 0.25
+        MPC_THRESHOLD = 0e-3
+
+        MPC_NOISY_OBS = True
+        MPC_NOISY_MU = np.array([0, 0])
+        MPC_NOISY_SIG = np.eye(2) / 8
         
         #
         state_shape = [1, 2]
@@ -932,7 +947,7 @@ if __name__ == '__main__':
         action_constraints = None
         #x0 = np.array([0, np.pi/2],dtype=np.float64)
         #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
-        x0 = np.array([0.03, 0.00],dtype=np.float64)
+        x0 = np.array([0.1, 0.00],dtype=np.float64)
         #x0 = np.array([0.00, 0.00],dtype=np.float64)
         #
 
@@ -955,8 +970,8 @@ if __name__ == '__main__':
         y = [s[1] for s in X]
         plt.plot(x,y, label='parametric curve')
         plt.plot(x[0], y[0], 'ro')
-        plt.plot(x[-1], y[-1], 'gx')
-        plt.plot(target[0], target[0], 'b^')
+        plt.plot(x[-1], y[-1], 'go')
+        plt.plot(target[0], target[1], 'b^')
         plt.title('Phase plot of Linearized Inverted Pendulum')
         plt.ylabel("Velocity")
         plt.xlabel("Position")
@@ -971,8 +986,9 @@ if __name__ == '__main__':
             Q = np.eye(state_size) * cost_func(horizon, dt) * 1
             #Qf = Q
             Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
-            R = np.eye(action_size) * 1e0 * 0
-            Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+            R = np.eye(action_size) * 1e1 
+            Q[1][1] = np.sqrt(Q[1][1]) #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+            #Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
             mpc_ilqg = ILQG(state_shape, state_size, action_shape, action_size,
@@ -986,7 +1002,11 @@ if __name__ == '__main__':
             xt = x0.copy()
             x_hist = [xt.copy(),]
             for i in range(MPC_MAX_STEPS):
-                X, U = mpc_ilqg.step(xt)
+                if MPC_NOISY_OBS:
+                    x_ob = xt + np.random.multivariate_normal(MPC_NOISY_MU, MPC_NOISY_SIG) * MPC_DT
+                else:
+                    x_ob = xt
+                X, U = mpc_ilqg.step(x_ob)
                 u = U[0]
                 print("Next u: ", u)
                 dx = model(xt, u)
@@ -1003,9 +1023,8 @@ if __name__ == '__main__':
             y = [s[1] for s in x_hist]
             plt.plot(x,y, label='parametric curve')
             plt.plot(x[0], y[0], 'ro')
-            plt.plot(x[-1], y[-1], 'g')
+            plt.plot(x[-1], y[-1], 'go')
             plt.draw()
-            plt.pause(0.01) 
             input()
 
 

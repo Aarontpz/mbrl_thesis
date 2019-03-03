@@ -628,15 +628,16 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
         return action
 
 class DDPMPCAgent(MPCAgent):
-    def __init__(self, mpc_ilqg : ILQG,
+    def __init__(self, mpc_ddp : ILQG,
              *args, **kwargs): 
         super().__init__(*args, **kwargs)
-        self.DDP = mpc_ddp
+        self.mpc_ddp = mpc_ddp
          
     def shoot(self, st) -> ([], [], []):
-        rewards = [0 for i in range(self.horizon)]
+        rewards = [0 for i in range(int(self.horizon/self.mpc_ddp.dt))]
         st = st #wow
         states, actions = self.mpc_ddp.step(st)
+        #input("We step!")
         rewards[-1] = -1 * self.mpc_ddp.forward_cost(states, actions)
         #we seek to MAX rewards = MIN cost (-1 * COST)
         return states, actions, rewards
@@ -742,18 +743,29 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
         super().__init__(*args, **kwargs)
 
     def forward(self, x, u, *args, **kwargs):
-        inp = torch.cat((s, a), 0) 
+        if type(x) == np.ndarray:
+            x = torch.tensor(x, requires_grad = True, device = self.device)
+        if type(u) == np.ndarray:
+            u = torch.tensor(u, requires_grad = True, device = self.device)
+        #print("type(x): %s type(u): %s" % (type(x), type(u)))
+        inp = torch.cat((x, u), 0).float()
         return super().forward(inp)
         
-class PyTorchLinearSystemDynamicsLinearModule(torch.nn.Module):
+class PyTorchLinearSystemDynamicsLinearModule(PyTorchMLP):
     '''My god what a nightmarish class name.'''
     def __init__(self, A_size, B_size, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.a_size = A_size
+        self.b_size = B_size
         self.a_module = torch.nn.Linear(self.outdim, A_size, bias = True)
         self.b_module = torch.nn.Linear(self.outdim, B_size, bias = True)
 
     def forward(self, x, u, *args, **kwargs):
-        inp = torch.cat((s, a), 0) 
+        if type(x) == np.ndarray:
+            x = torch.tensor(x, requires_grad = True, device = self.device)
+        if type(u) == np.ndarray:
+            u = torch.tensor(u, requires_grad = True, device = self.device)
+        inp = torch.cat((x, u), 0).float()
         out = super().forward(inp)
         a_ = self.a_module(out)
         b_ = self.b_module(out)
@@ -1229,7 +1241,7 @@ class PyTorchForwardDynamicsModel(PyTorchModel):
     def forward(self, xt, ut, f):
         return f #s.t. xt+1 = xt + dt * f, f = self.module(x, u, dt)
 
-class PyTorchLinearSystemModel(LinearSystemModel, PyTorchModel):
+class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
     '''Note: Output of PyTorchModel is FLATTENED A/B'''
     def forward(self, xt, ut, a_, b_):
         self.update(xt, ut, a_, b_)
@@ -1237,6 +1249,9 @@ class PyTorchLinearSystemModel(LinearSystemModel, PyTorchModel):
 
     def update(self, xt, ut):
         a_, b_ = self.module(xt, ut)
-        self.A = a_.numpy().resize(xt.shape)
-        self.B = b_
+        a_size = (int(np.sqrt(self.module.a_size)),
+                int(np.sqrt(self.module.a_size)))
+        self.A = a_.cpu().detach().numpy()
+        self.A.resize(a_size)
+        self.B = b_.cpu().detach().numpy()
 

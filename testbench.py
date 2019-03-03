@@ -100,6 +100,8 @@ def create_dm_walker_agent(agent_base, *args, **kwargs):
     
     return DMWalkerAgent(*args, **kwargs)
 
+
+
 def create_gym_walker_agent(agent_base, *args, **kwargs):
     '''Helper function to implement "transform_observation", and, in the case of MPC agents,
     a reward function, for the walker2d environment.'''
@@ -152,6 +154,74 @@ def create_numpy_agent(agent_base, *args, **kwargs):
     return NumpyAgent(*args, **kwargs)
 
 
+def create_ddp_dm_humanoid_agent(agent_base, *args, **kwargs):
+    '''Transform_observation transforms observation into Numpy array. '''
+    class DDPHumanoidAgent(agent_base):
+        def transform_observation(self, obs, extra_info = False) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            if type(obs) == type(collections.OrderedDict()):
+                angles = obs['joint_angles']
+                extremities = obs['extremities']
+                velocity = obs['velocity']
+                state = np.concatenate((angles, extremities, velocity))
+                if extra_info:
+                    com_velocity = obs['com_velocity']
+                    head_height = obs['head_height']
+                    torso_vertical = obs['torso_vertical']
+                    state = np.concatenate((state, com_velocity, head_height, torso_vertical))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
+            #return Variable(torch.tensor(state).float(), requires_grad = True)
+            return state
+    return DDPHumanoidAgent(*args, **kwargs)
+def create_ddp_dm_walker_agent(agent_base, *args, **kwargs):
+    '''Transform_observation transforms observation into Numpy array. '''
+    class DDP_DMWalkerAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            if type(obs) == type(collections.OrderedDict()):
+                orientation = obs['orientations']
+                vel = obs['velocity']
+                height = np.asarray([obs['height'],])
+                state = np.concatenate((orientation, vel, height))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
+            #return Variable(torch.tensor(state).float(), requires_grad = True)
+            return state
+    
+        def reward(self, st, at, *args, **kwargs):
+            global TASK_NAME #GROOOOOOSSSSSSSTHH
+            if TASK_NAME in ['walk', 'run']:
+                return env.physics.horizontal_velocity() #TODO: this is only valid for walk / run tasks
+            else: 
+                return 0.0
+    
+    return DDP_DMWalkerAgent(*args, **kwargs)
+def create_ddp_dm_cartpole_agent(agent_base, *args, **kwargs):
+    '''Transform_observation transforms observation into Numpy array. '''
+    class DDP_DMCartpoleAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            if type(obs) == type(collections.OrderedDict()):
+                pos = obs['position']
+                vel = obs['velocity']
+                state = np.concatenate((pos, vel))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
+            #return Variable(torch.tensor(state).float(), requires_grad = False)
+            return state
+    
+        def reward(self, st, at, *args, **kwargs):
+            upright = (self.env.physics.pole_angle_cosine() + 1) / 2
+            return upright
+
+    return DDP_DMCartpoleAgent(*args, **kwargs) 
+
+
+
 def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwargs):
     agent = None
     if lib_type == 'gym':
@@ -188,6 +258,7 @@ def initialize_dm_environment(env_type, task_name, *args, **kwargs):
     action_constraints = [action_space.minimum, action_space.maximum]
     obs_space = [1, obs_size]
     return env, tmp_env, obs_space, obs_size, action_size, action_constraints
+
 
 def initialize_gym_environment(env_type, task_name, *args, **kwargs):
     if env_type == 'walker':
@@ -316,37 +387,61 @@ def create_pytorch_policy_agent(env, obs_size,
 def create_pytorch_agnostic_mbrl(cost, 
         ddp, dataset, 
         #system_model, system_model_args, system_model_kwargs, 
-        pytorch_class,
-        pytorch_model, 
+        dt, horizon, k_shoots,
+        batch_size, collect_forward_loss,
         replays, criterion,
+        lib_type, env_type, 
         env, obs_size, action_size, action_constraints,
         mlp_hdims, mlp_activations, 
         lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
         discrete_actions = False, 
         has_value_function = False, ) -> (Agent, Trainer): 
     #NOTE: I'm going insane with this pseudoOOP it's compulsive right now D:
-    if pytorch_class == PyTorchForwardDynamicsLinearModule:
-        pytorch_module = pytorch_class(device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
-            activations = mlp_activations, initializer = mlp_initializer).to(device)
-    elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
-        pytorch_module = pytorch_class((obs_size, obs_size), (1, action-size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
-            activations = mlp_activations, initializer = mlp_initializer).to(device)
-
-    system_model = pytorch_model(pytorch_module, ddp.dt) 
-    agent = DDPMPCAgent(ddp, horizon, k_shoots, 
-            [1, obs_size], 
-            action_size, discrete_actions = DISCRETE_AGENT, 
-            action_constraints = action_constraints, has_value_function = True,
-            terminal_penalty = 0.0, 
-            policy_entropy_history = True, energy_penalty_history = True)
-
+    #NOTE: I really need to clean this initialization code up :(
+    if lib_type == 'dm':
+        if env_type == 'humanoid':
+            agent = create_ddp_dm_humanoid_agent(DDPMPCAgent, ddp, 
+                    horizon, k_shoots, 
+                    [1, obs_size], 
+                    action_size, discrete_actions = DISCRETE_AGENT, 
+                    action_constraints = action_constraints, 
+                    has_value_function = True,
+                    terminal_penalty = 0.0, 
+                    policy_entropy_history = True, 
+                    energy_penalty_history = True)
+        elif env_type == 'walker':
+            agent = create_ddp_dm_walker_agent(DDPMPCAgent, ddp, 
+                    horizon, k_shoots, 
+                    [1, obs_size], 
+                    action_size, discrete_actions = DISCRETE_AGENT, 
+                    action_constraints = action_constraints, 
+                    has_value_function = True,
+                    terminal_penalty = 0.0, 
+                    policy_entropy_history = True, 
+                    energy_penalty_history = True)
+        elif env_type == 'cartpole':
+            agent = create_ddp_dm_cartpole_agent(DDPMPCAgent, ddp, 
+                    horizon, k_shoots, 
+                    [1, obs_size], 
+                    action_size, discrete_actions = DISCRETE_AGENT, 
+                    action_constraints = action_constraints, 
+                    has_value_function = True,
+                    terminal_penalty = 0.0, 
+                    policy_entropy_history = True, 
+                    energy_penalty_history = True)
     criterion = torch.nn.MSELoss() 
+    module = agent.mpc_ddp.model.module
+    optimizer = optim.Adam(module.parameters(), lr = lr, betas = ADAM_BETAS)
+    #optimizer = optim.SGD(module.parameters(), lr = lr, momentum = MOMENTUM)
+    scheduler = None
+    #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
+
     trainer = PyTorchDynamicsTrainer(system_model, 
             dataset, 
             criterion,
             batch_size, collect_forward_loss, device,
             optimizer, scheduler = None, agent = agent, env = env,
-            replay = replay, max_traj_len = None, gamma=0.98, 
+            replay = replays, max_traj_len = None, gamma=0.98, 
             num_episodes = 1) 
     return agent, trainer
         
@@ -483,7 +578,7 @@ LIB_TYPE = 'dm'
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
-AGENT_TYPE = 'agnostic_MBRL'
+#AGENT_TYPE = 'agnostic_MBRL'
 REPLAYS = 20
 horizon = 50
 
@@ -534,7 +629,7 @@ TASK_NAME = 'swingup'
 #TASK_NAME = 'balance'
 
 MAXMIN_NORMALIZATION = True
-TRAIN_AUTOENCODER = True
+TRAIN_AUTOENCODER = False
 
 ###CONTROL ENVIRONMENTS
 #LIB_TYPE = 'control'
@@ -709,31 +804,68 @@ if __name__ == '__main__':
                     trainer.scheduler = scheduler
                 else:
                     agent.encode_inputs = False
+        
         elif AGENT_TYPE == 'agnostic_MBRL':
-            cost = None
-            ddp = None
-            dataset = None
+            BATCH_SIZE = 64 
+            COLLECT_FORWARD_LOSS = False
+            DT = 1e-2 
+            HORIZON = 1e-1
+            MAX_ITER = 2e0
+            K_SHOOTS = 1
             mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
             mlp_hdims = [obs_size * WIDENING_CONST] 
             mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
-            pytorch_class = PyTorchForwardDynamicsLinearModule
+            pytorch_class = PyTorchLinearSystemDynamicsLinearModule
             pytorch_model = PyTorchLinearSystemModel 
+            if pytorch_class == PyTorchForwardDynamicsLinearModule:
+                pytorch_module = pytorch_class(device = device, indim = obs_size + action_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                    activations = mlp_activations, initializer = mlp_initializer).to(device)
+            elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
+                pytorch_module = pytorch_class((obs_size * obs_size), (1 * obs_size), device = device, indim = obs_size + action_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                    activations = mlp_activations, initializer = mlp_initializer).to(device)
+            system_model = pytorch_model(pytorch_module, DT) 
+
+
+            cost = None
+            if LIB_TYPE == 'dm':
+                if ENV_TYPE == 'walker':
+                    pass
+                if ENV_TYPE == 'cartpole':
+                    print("ENV TYPE IS CARTPOLE")
+                    target = np.zeros(obs_size)
+                    theta_ind = 1 #based on pole-angle cosine, rep theta
+                    Q = np.eye(obs_size) * 1e8
+                    for i in range(obs_size):
+                        if i != theta_ind:
+                            Q[i][i] = np.sqrt(Q[i][i])
+                    Qf = Q
+                    R = np.eye(action_size) * 0
+                    diff_func = lambda t,x:x - t 
+                    print("Q: ", Q)
+                    cost = LQC(Q, R, Qf, target = target, 
+                            diff_func = diff_func)
+
+
+            ddp = ILQG(obs_space, obs_size,
+                    [1, action_size], action_size,
+                    system_model, cost,
+                    noise = None, 
+                    action_constraints = action_constraints, 
+                    horizon = int(HORIZON/DT), dt = DT, eps = 1e-3
+                    )
+            DATASET_RECENT_PROB = 0.5
+            dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
             agent, trainer =  create_pytorch_agnostic_mbrl(cost, 
                 ddp, dataset,
-                pytorch_class,
-                pytorch_model, 
+                DT, HORIZON, K_SHOOTS,
+                BATCH_SIZE, COLLECT_FORWARD_LOSS, 
                 replay_iterations, None,
+                LIB_TYPE, ENV_TYPE,
                 env, obs_size, action_size, action_constraints,
                 mlp_hdims, mlp_activations, 
                 lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
                 discrete_actions = False, 
                 has_value_function = False) 
-            #agent, trainer = create_pytorch_policy_agent(env, obs_size, 
-            #    action_size, action_constraints,
-            #    mlp_hdims, mlp_activations, mlp_base,
-            #    lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
-            #    discrete_actions = False, 
-            #    has_value_function = False) 
 
 
 
@@ -766,9 +898,14 @@ if __name__ == '__main__':
                             observation = timestep.observation
                             if MAXMIN_NORMALIZATION:
                                 observation = agent.transform_observation(observation)
-                                observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
+                                if type(observation) == torch.Tensor:
+                                    observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
+                                else:
+                                    observation = normalize_max_min(observation, mx, mn)
                                 #print("Observation:", observation)
-                            action = agent.step(observation).cpu().numpy()
+                            action = agent.step(observation)
+                            if type(action) is torch.tensor:
+                                action = action.cpu().numpy()
                             #print("Observation: ", observation)
                             #action = agent(timestep)
                             #print("Action: ", action)
@@ -801,7 +938,7 @@ if __name__ == '__main__':
                 # Update step
                 if not PRETRAINED:
                     trainer.step()
-                    print("Agent Net Loss: ", agent.net_loss_history[i])
+                    print("Agent Net Loss: ", agent.net_loss_history[-1])
                 if TRAIN_AUTOENCODER == True:
                     autoencoder_trainer.step()
                     autoencoder_trainer.plot_loss_histories()
@@ -816,7 +953,7 @@ if __name__ == '__main__':
                 if AGENT_TYPE == 'policy' and not PRETRAINED:
                     print("Agent Net Action loss: ", agent.value_loss_history[i])
                     print("Agent Net Value loss: ", agent.action_loss_history[i])
-                print("Agent Net Reward: ", agent.net_reward_history[i])
+                print("Agent Net Reward: ", agent.net_reward_history[-1])
                 #i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
                     try:
