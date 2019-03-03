@@ -92,7 +92,10 @@ class Dataset:
         agent = trainer.agent
         for i in range(len(agent.reward_history) - 1): #-1 for terminal state
             sample.append(agent.state_history[i])
-            sample.append(agent.action_history[i].detach())
+            action = agent.action_history[i]
+            if type(action) == torch.Tensor:
+                action = action.detach()
+            sample.append(action)
             sample.append(agent.reward_history[i])
             sample.append(agent.state_history[i+1])
             samples.append(sample)
@@ -173,6 +176,16 @@ class PyTorchTrainer(Trainer):
         V_st = self.agent.value_history[start] 
         V_st_k = self.gamma**(end - start) * self.agent.value_history[end]
         return R + V_st_k - V_st
+    
+    def get_sample_s(self, s):
+        return s[0]
+    def get_sample_a(self, s):
+        return s[1]
+    def get_sample_r(self, s):
+        return s[2]
+    def get_sample_s_(self, s):
+        return s[3]
+
     
 class PyTorchPolicyGradientTrainer(PyTorchTrainer):
     def __init__(self, value_coeff = 0.1, entropy_coeff = 0.0, 
@@ -339,15 +352,6 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
     @abc.abstractmethod
     def dataset(self, d):
         self._dataset = d
-   
-    def get_sample_s(self, s):
-        return s[0]
-    def get_sample_a(self, s):
-        return s[1]
-    def get_sample_r(self, s):
-        return s[2]
-    def get_sample_s_(self, s):
-        return s[3]
 
     def step(self):
         super().step()
@@ -490,9 +494,11 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
         self.net_loss_history = [] #net loss history
         self.forward_loss_history = [] #loss for MOST RECENT iteration 
         #independent of dataset
-
-    def compute_model_loss(s, a, r, s_, *args, **kwargs):
-        estimate = self.system_model.forward_predict(s, a, self.system_model.dt, *args, **kwargs)
+    
+    def compute_model_loss(self, s, a, r, s_, *args, **kwargs):
+        estimate = self.model.forward_predict(s, a, self.model.dt, *args, **kwargs)
+        if type(s_) == np.ndarray:
+            s_ = torch.tensor(s_, requires_grad = False, device = self.device).float()
         return self.criterion(s_, estimate)
 
     def step(self):
@@ -501,6 +507,7 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
         device = self.device
         optimizer = self.opt
         dataset = self.dataset
+        dataset.trainer_step(self) 
 
         loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
         net_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
@@ -513,7 +520,7 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
                 a = self.get_sample_a(sample[i])
                 r = self.get_sample_r(sample[i])
                 s_ = self.get_sample_s_(sample[i])
-                loss += compute_model_loss(s, a, r, s_)
+                loss += self.compute_model_loss(s, a, r, s_)
             optimizer.zero_grad() #HAHAHAHA
             loss.backward(retain_graph = True)
             optimizer.step()

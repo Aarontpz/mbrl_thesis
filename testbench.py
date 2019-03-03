@@ -578,7 +578,7 @@ LIB_TYPE = 'dm'
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
-#AGENT_TYPE = 'agnostic_MBRL'
+AGENT_TYPE = 'agnostic_MBRL'
 REPLAYS = 20
 horizon = 50
 
@@ -625,8 +625,8 @@ EPS_MIN = 0.5e-2
 EPS_DECAY = 1e-7
 GAMMA = 0.99
 ENV_TYPE = 'cartpole'
-TASK_NAME = 'swingup'
-#TASK_NAME = 'balance'
+#TASK_NAME = 'swingup'
+TASK_NAME = 'balance'
 
 MAXMIN_NORMALIZATION = True
 TRAIN_AUTOENCODER = False
@@ -863,7 +863,7 @@ if __name__ == '__main__':
                 LIB_TYPE, ENV_TYPE,
                 env, obs_size, action_size, action_constraints,
                 mlp_hdims, mlp_activations, 
-                lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+                lr = 1e0, adam_betas = (0.9, 0.999), momentum = 1e-3, 
                 discrete_actions = False, 
                 has_value_function = False) 
 
@@ -904,7 +904,7 @@ if __name__ == '__main__':
                                     observation = normalize_max_min(observation, mx, mn)
                                 #print("Observation:", observation)
                             action = agent.step(observation)
-                            if type(action) is torch.tensor:
+                            if type(action) is torch.Tensor:
                                 action = action.cpu().numpy()
                             #print("Observation: ", observation)
                             #action = agent(timestep)
