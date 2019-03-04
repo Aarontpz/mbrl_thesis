@@ -220,7 +220,17 @@ def create_ddp_dm_cartpole_agent(agent_base, *args, **kwargs):
 
     return DDP_DMCartpoleAgent(*args, **kwargs) 
 
-
+#NOTE: I really need to clean this initialization code up :(
+def create_ddp_agent(lib_type, env_type, agent_base = DDPMPCAgent, *args, **kwargs):
+    agent = None
+    if lib_type == 'dm':
+        if env_type == 'humanoid':
+            agent = create_ddp_dm_humanoid_agent(agent_base, *args, **kwargs)   
+        elif env_type == 'walker':
+            agent = create_ddp_dm_walker_agent(DDPMPCAgent, *args, **kwargs) 
+        elif env_type == 'cartpole':
+            agent = create_ddp_dm_cartpole_agent(DDPMPCAgent, *args, **kwargs) 
+    return agent
 
 def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwargs):
     agent = None
@@ -398,29 +408,7 @@ def create_pytorch_agnostic_mbrl(cost,
         has_value_function = False, ) -> (Agent, Trainer): 
     #NOTE: I'm going insane with this pseudoOOP it's compulsive right now D:
     #NOTE: I really need to clean this initialization code up :(
-    if lib_type == 'dm':
-        if env_type == 'humanoid':
-            agent = create_ddp_dm_humanoid_agent(DDPMPCAgent, ddp, 
-                    horizon, k_shoots, 
-                    [1, obs_size], 
-                    action_size, discrete_actions = DISCRETE_AGENT, 
-                    action_constraints = action_constraints, 
-                    has_value_function = True,
-                    terminal_penalty = 0.0, 
-                    policy_entropy_history = True, 
-                    energy_penalty_history = True)
-        elif env_type == 'walker':
-            agent = create_ddp_dm_walker_agent(DDPMPCAgent, ddp, 
-                    horizon, k_shoots, 
-                    [1, obs_size], 
-                    action_size, discrete_actions = DISCRETE_AGENT, 
-                    action_constraints = action_constraints, 
-                    has_value_function = True,
-                    terminal_penalty = 0.0, 
-                    policy_entropy_history = True, 
-                    energy_penalty_history = True)
-        elif env_type == 'cartpole':
-            agent = create_ddp_dm_cartpole_agent(DDPMPCAgent, ddp, 
+    agent = create_ddp_agent(lib_type, env_type, DDPMPCAgent, ddp, 
                     horizon, k_shoots, 
                     [1, obs_size], 
                     action_size, discrete_actions = DISCRETE_AGENT, 
@@ -479,14 +467,22 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                 encode_inputs = encoder is not None
                 if encode_inputs:
                     encoder_clone = copy.deepcopy(encoder).to(device)
-                clone = create_agent(PyTorchAgent, LIB_TYPE, env_type, device, [1, obs_size], 
+                    clone = create_agent(PyTorchAgent, LIB_TYPE, env_type, device, [1, obs_size], 
                         action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True, 
                         encode_inputs = encode_inputs, encoder = encoder_clone)
-                #clone = agent.clone()
-                clone.module = copy.deepcopy(agent.module)
-                clone.module.to(device)
-                launch_viewer(env, clone)    
+                if (issubclass(type(agent), DDPMPCAgent)) and (hasattr(agent.mpc_ddp.model, 'module')):
+                    clone = copy.deepcopy(agent)
+                    #clone.cost = copy.deepcopy(agent.cost)
+                    print("Clone: ", clone)
+                    clone.mpc_ddp.model.module = copy.deepcopy(agent.mpc_ddp.model.module)
+                    launch_viewer(env, clone)    
+                else:
+                    #clone = agent.clone()
+                    clone.module = copy.deepcopy(agent.module)
+                    clone.module.to(device)
+                    launch_viewer(env, clone)    
+                input()
                 print("RESUMING!")
 
    
@@ -809,8 +805,7 @@ if __name__ == '__main__':
             BATCH_SIZE = 64 
             COLLECT_FORWARD_LOSS = False
             DT = 1e-2 
-            HORIZON = 1e-1
-            MAX_ITER = 2e0
+            HORIZON = 2.0e-1
             K_SHOOTS = 1
             mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
             mlp_hdims = [obs_size * WIDENING_CONST] 
@@ -851,7 +846,8 @@ if __name__ == '__main__':
                     system_model, cost,
                     noise = None, 
                     action_constraints = action_constraints, 
-                    horizon = int(HORIZON/DT), dt = DT, eps = 1e-3
+                    horizon = int(HORIZON/DT), dt = DT, eps = 1e-2,
+                    max_iterations = 15
                     )
             DATASET_RECENT_PROB = 0.5
             dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
@@ -863,7 +859,7 @@ if __name__ == '__main__':
                 LIB_TYPE, ENV_TYPE,
                 env, obs_size, action_size, action_constraints,
                 mlp_hdims, mlp_activations, 
-                lr = 1e0, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+                lr = 1e-1, adam_betas = (0.9, 0.999), momentum = 1e-3, 
                 discrete_actions = False, 
                 has_value_function = False) 
 

@@ -294,6 +294,19 @@ class MPCAgent(Agent):
         '''Compute reward function based on (st, at) and additional arguments
         Left entirely abstract because I'm confused.'''
         pass
+    
+    def __call__(self, timestep):
+        '''Default (inherited) __call__ is designed to work within dm_control suite, handling "timestep" from dm_control environment..'''
+        obs = timestep.observation
+        obs = self.transform_observation(obs)
+        action = self.step(obs)
+        if self.discrete: #TODO: This is currently only compatible with action_space = 1
+            action_ind = max(range(len(action)), key=action.__getitem__) 
+            action = [-1, 1][action_ind] 
+        else: #continuous action space, currently mu + sigma
+            pass            
+        return action
+    
 
 
 class DMEnvMPCAgent(MPCAgent):
@@ -641,6 +654,7 @@ class DDPMPCAgent(MPCAgent):
         rewards[-1] = -1 * self.mpc_ddp.forward_cost(states, actions)
         #we seek to MAX rewards = MIN cost (-1 * COST)
         return states, actions, rewards
+
     def reward(self, X, U, *args, **kwargs):
         return self.mpc_ddp.forward_cost(X, U)
 
