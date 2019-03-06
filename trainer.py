@@ -540,7 +540,7 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
             plt.title("Dynamics Model Loss History")
             plt.xlim(0, len(self.net_loss_history))
             plt.ylim(0, max(self.net_loss_history)+1)
-            plt.ylabel("Net \n State AE Loss")
+            plt.ylabel("Net \n Dynamic Model Loss")
             plt.xlabel("Timestep")
             plt.scatter(range(len(self.net_loss_history)), [r.numpy()[0] for r in self.net_loss_history], s=1.0)
 

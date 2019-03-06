@@ -13,6 +13,8 @@ import torch.multiprocessing as mp
 
 import math
 
+from functools import reduce
+
 from ilqr import *
 
 class Agent:
@@ -641,11 +643,49 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
         return action
 
 class DDPMPCAgent(MPCAgent):
-    def __init__(self, mpc_ddp : ILQG,
+    def __init__(self, mpc_ddp : ILQG, 
+            reuse_shoots = True,
              *args, **kwargs): 
         super().__init__(*args, **kwargs)
         self.mpc_ddp = mpc_ddp
-         
+        self.reuse_shoots = reuse_shoots
+        self.prev_states = []
+        self.prev_actions = []
+        self.reuse_ind = 0
+        self.deviation_threshold = 1e-1
+
+    def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
+        action = None
+        if not self.reuse_shoots:
+            return super().evaluate(obs, *args, **kwargs)
+        else:
+            if self.reuse_criterion(obs, *args, **kwargs) and (self.reuse_ind) < len(self.prev_actions):
+                #print("Reusing previous MPC trajectory!")
+                #print("Actions: ", self.prev_actions)
+                action = self.prev_actions[self.reuse_ind]
+            else:
+                #print("Generating new MPC trajectory!")
+                self.reuse_ind = 0
+                traj = ()
+                max_r = -float('inf')
+                for k in range(self.k_shoots):
+                    states, actions, rewards = self.shoot(obs)
+                    if sum(rewards) > max_r:
+                        max_r = sum(rewards)
+                        traj = (states, actions, rewards)
+                states, actions, rewards = traj
+                self.prev_states = states
+                self.prev_actions = actions
+                action = actions[self.reuse_ind]
+            self.reuse_ind += 1
+        return action, None, None
+
+    def reuse_criterion(self, obs, *args, **kwargs):
+        if not self.reuse_ind < len(self.prev_actions):
+            return False
+        return np.linalg.norm(obs - self.prev_states[self.reuse_ind]) < self.deviation_threshold
+        #return True
+        
     def shoot(self, st) -> ([], [], []):
         rewards = [0 for i in range(int(self.horizon/self.mpc_ddp.dt))]
         st = st #wow
@@ -767,12 +807,14 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
         
 class PyTorchLinearSystemDynamicsLinearModule(PyTorchMLP):
     '''My god what a nightmarish class name.'''
-    def __init__(self, A_size, B_size, *args, **kwargs):
+    def __init__(self, A_shape, B_shape, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.a_size = A_size
-        self.b_size = B_size
-        self.a_module = torch.nn.Linear(self.outdim, A_size, bias = True)
-        self.b_module = torch.nn.Linear(self.outdim, B_size, bias = True)
+        self.a_shape = A_shape
+        self.a_size = reduce(lambda x,y:x*y, A_shape)
+        self.b_shape = B_shape
+        self.b_size = reduce(lambda x,y:x*y, B_shape)
+        self.a_module = torch.nn.Linear(self.outdim, self.a_size, bias = True)
+        self.b_module = torch.nn.Linear(self.outdim, self.b_size, bias = True)
 
     def forward(self, x, u, *args, **kwargs):
         if type(x) == np.ndarray:
@@ -788,8 +830,10 @@ class PyTorchLinearSystemDynamicsLinearModule(PyTorchMLP):
         #print("U: ", u)    
         inp = torch.cat((x, u), 0).float()
         out = super().forward(inp)
-        a_ = self.a_module(out)
-        b_ = self.b_module(out)
+        a_ = self.a_module(out).clamp(min=-1e3, max=1e3)
+        b_ = self.b_module(out).clamp(min=-1e3, max=1e3)
+        #print("A: ", a_)
+        #print("B: ", b_)
         return a_, b_ #NOTE: flattened version
     
 
@@ -1271,9 +1315,9 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
     def forward(self, xt, ut, a_, b_):
         self.update(xt, ut)
         #return LinearSystemModel.__call__(self, xt, ut)
-        a_size = (int(np.sqrt(self.module.a_size)),
-                int(np.sqrt(self.module.a_size)))
-        A = a_.reshape(a_size)
+        A = a_.reshape(self.module.a_shape)
+        B = b_.reshape(self.module.b_shape)
+        #print("A: %s \nB: %s" % (A, B))
         if type(xt) == np.ndarray:
             xt = torch.tensor(xt, requires_grad = True, device = self.module.device).float()
             xt = xt.unsqueeze(0)
@@ -1287,14 +1331,17 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
         #print("A: ", A)
         #print("Xt: ", xt)
         #print("A*xt: ", torch.mm(A, xt))
-        #print("B*ut: ", b_ * ut)
-        return torch.mm(A, xt) + (b_ * ut) #must build computational graph
+        #print("B*ut: ", torch.mm(B, ut))
+        #print("SUM: ", torch.mm(A, xt) + torch.mm(B, ut))
+        return torch.mm(A, xt) + torch.mm(B, ut) #must build computational graph
+        #return torch.mm(A, xt) + (b_ * ut) #must build computational graph
 
     def update(self, xt, ut):
         a_, b_ = self.module(xt, ut)
-        a_size = (int(np.sqrt(self.module.a_size)),
-                int(np.sqrt(self.module.a_size)))
         self.A = a_.cpu().detach().numpy()
-        self.A.resize(a_size)
         self.B = b_.cpu().detach().numpy()
+        self.A.resize(self.module.a_shape)
+        self.B.resize(self.module.b_shape)
+        #print("A: ", self.A)
+        #print("B: ", self.B)
 

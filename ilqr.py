@@ -163,6 +163,7 @@ class LQC(CostModel):
         size dt'''
         assert(dt is not None)
         #print("Dxu: ",np.zeros((self.R.Q[0].size, self.Q.Q[0].size)))
+        #return np.zeros((self.Q.Q[0].size, self.R.Q[0].size))
         return np.zeros((self.R.Q[0].size, self.Q.Q[0].size))
     def __call__(self, xt, ut, dt=None, *args, **kwargs):
         if dt is None:
@@ -196,7 +197,7 @@ class FiniteDifferencesModel(Model):
 
 class LinearSystemModel(Model):
     '''For testing convergence / functionality of iLQR.'''
-    def __init__(self, A : np.ndarray, B):
+    def __init__(self, A : np.ndarray, B : np.ndarray):
         self.A = A
         self.B = B
     def d_dx(self, xt, ut=None, dt=None, *args, **kwargs):
@@ -213,13 +214,15 @@ class LinearSystemModel(Model):
     def __call__(self, xt, ut, dt=None, A = None, B = None, *args, **kwargs):
         A = A if A is not None else self.A
         B = B if B is not None else self.B
-        #print("A: ", A)
-        #print("X: ", xt)
-        #print("Ax: ", np.dot(A, xt))
+        #print("B: %s ut: %s" % (B, ut))
         ax = np.dot(A, xt)
-        bu = B * ut
+        if len(ut.shape) == 1 and len(B.shape) == 1:
+            bu = B * ut
+        else:
+            bu = np.dot(B, ut)
         #print("A*xt: ",ax)
         #print("B*ut: ",bu)
+        #print("A*xt + B*ut: ",ax+bu)
         return ax + bu
     
 class ControlEnvironmentModel(Model):
@@ -238,7 +241,7 @@ class ControlEnvironmentModel(Model):
         size dt'''
         assert(dt is not None)
         assert(ut is not None)
-        print("d_du: ", self.env.d_du(xt, u = ut) * dt)
+        #print("d_du: ", self.env.d_du(xt, u = ut) * dt)
         return self.env.d_du(xt, u = ut) * dt
     def __call__(self, xt, ut, dt=None, *args, **kwargs):
         return self.env.dx(xt, ut) 
@@ -369,10 +372,11 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 #We start from after terminal state, V(x,u) = cost(Xterm)
                 #and perform backwards recursion to get seq. of approx.
                 #cost terms.
-                #print("V: %s Vx: %s Vxx: %s \nFu: %s Fx: %s" % (V, Vx, 
-                #    Vxx, fu[i], fx[i]))
-                #print("lxx: %s lxu: %s luu: %s" % (lxx[i], 
-                #    lxu[i], luu[i]))
+                #print("V: %s Vx: %s Vxx: %s \nFu: %s Fx: %s" % (V.shape, Vx.shape, 
+                #    Vxx.shape, fu[i].shape, fx[i].shape))
+                #print("lxx: %s lxu: %s luu: %s" % (lxx[i].shape, 
+                #    lxu[i].shape, luu[i].shape))
+                #print("lx: %s lu: %s" % (lx[i].shape, lu[i].shape))
 
                 Qx = lx[i] + np.dot(Vx, fx[i]) 
                 Qu = lu[i] + np.dot(Vx, fu[i]) #lu[term] = 0]
@@ -380,9 +384,10 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 #input()
                 Qxx = lxx[i] + np.dot(fx[i].T, np.dot(Vxx, fx[i]))
                 #print("DOT: ",  np.dot(fx[i].T, np.dot(Vxx, fu[i])))
-                Qxu = lxu[i] + np.dot(fx[i].T, np.dot(Vxx, fu[i]))
+                Qxu = lxu[i] + np.dot(fu[i].T, np.dot(Vxx, fx[i]))
                 Quu = luu[i] + np.dot(fu[i].T, np.dot(Vxx, fu[i]))
-                #print("Qxx: %s Qxu: %s Quu: %s" % (Qxx, Qxu, Quu))
+                #print("Qxx: %s Qxu: %s Quu: %s" % (Qxx.shape, 
+                #    Qxu.shape, Quu.shape))
                 #input() 
                 #apparently it's not recommended to calculate the
                 #'raw' inverse of Quu, so instead we perform
@@ -391,8 +396,10 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 #eigenvector-matrix WITH ALL NEGATIVE EIGENVALUES
                 #SET TO ZERO (heuristic serves to ensure descent is
                 #performed across all dimensions, or no steps at all)
-                
-                Quu_eval, Quu_evec = np.linalg.eig(Quu) 
+                try:
+                    Quu_eval, Quu_evec = np.linalg.eig(Quu) 
+                except:
+                    print("Quu: ", Quu)
                 #print("Quu Eigenvals: ", Quu_eval)
                 #print("Quu Eigenvecs: ", Quu_evec)
                 Quu_eval[Quu_eval < 0] = 0.0 #remove negative eigenvals
@@ -401,7 +408,7 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 Quu_inv = np.dot(Quu_evec, np.dot(np.diag(1.0/Quu_eval),
                     Quu_evec.T)) #quadratic function with reciproc-eigvals
                 #Quu_inv = np.linalg.pinv(Quu_inv)
-                #print("Quu Inv: ", Quu_inv) 
+                #print("Quu Inv: ", Quu_inv.shape) 
                 #update gain matrices, to be used to get delta-u
                 #as a linear function of delta-x
                 k[i] = -np.dot(Quu_inv, Qu)
@@ -526,7 +533,7 @@ def create_MPCController(control_base, *args, **kwargs):
 
 
 if __name__ == '__main__':
-    LINEARIZED_PENDULUM_TEST = False
+    LINEARIZED_PENDULUM_TEST = True
     NONLINEAR_PENDULUM_TEST = False
     
     NONLINEAR_CARTPOLE_TEST = True
@@ -538,7 +545,7 @@ if __name__ == '__main__':
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
-        max_iterations = 40
+        max_iterations = 10
         eps = 0.001
 
         SECONDARY_STEP = False
@@ -561,8 +568,8 @@ if __name__ == '__main__':
         action_size = 1
         
         #target = None
-        #target = np.array([0, 0, 0, 0], dtype = np.float64)
-        target = np.array([-1.0, 0, 0.7, 0], dtype = np.float64)
+        target = np.array([0, 0, 0.7, 0], dtype = np.float64)
+        #target = np.array([-1.0, 0, 0.7, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.0, 0], dtype = np.float64)
         x0 = np.array([0, 0, 0.50, 0.00],dtype=np.float64)
         #x0 = np.array([0, 1, 0.0, 1.00],dtype=np.float64)

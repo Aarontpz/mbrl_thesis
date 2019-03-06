@@ -395,7 +395,8 @@ def create_pytorch_policy_agent(env, obs_size,
     return agent, trainer
 
 def create_pytorch_agnostic_mbrl(cost, 
-        ddp, dataset, 
+        ddp, reuse_shoots, 
+        dataset, 
         #system_model, system_model_args, system_model_kwargs, 
         dt, horizon, k_shoots,
         batch_size, collect_forward_loss,
@@ -409,6 +410,7 @@ def create_pytorch_agnostic_mbrl(cost,
     #NOTE: I'm going insane with this pseudoOOP it's compulsive right now D:
     #NOTE: I really need to clean this initialization code up :(
     agent = create_ddp_agent(lib_type, env_type, DDPMPCAgent, ddp, 
+                    reuse_shoots, 
                     horizon, k_shoots, 
                     [1, obs_size], 
                     action_size, discrete_actions = DISCRETE_AGENT, 
@@ -475,14 +477,14 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                     clone = copy.deepcopy(agent)
                     #clone.cost = copy.deepcopy(agent.cost)
                     print("Clone: ", clone)
-                    clone.mpc_ddp.model.module = copy.deepcopy(agent.mpc_ddp.model.module)
+                    clone.mpc_ddp.model.module = copy.deepcopy(agent.mpc_ddp.model.module).to(device)
+                    clone.mpc_ddp.model.module.device = device
                     launch_viewer(env, clone)    
                 else:
                     #clone = agent.clone()
                     clone.module = copy.deepcopy(agent.module)
                     clone.module.to(device)
                     launch_viewer(env, clone)    
-                input()
                 print("RESUMING!")
 
    
@@ -577,6 +579,9 @@ AGENT_TYPE = 'policy'
 AGENT_TYPE = 'agnostic_MBRL'
 REPLAYS = 20
 horizon = 50
+#EPISODES_BEFORE_TRAINING = 3
+#max_traj_len = SMALL_TRAJECTORY_LENGTH
+replay_iterations = 6
 
 
 TRAINER_TYPE = 'AC'
@@ -616,13 +621,13 @@ ENV_TYPE = 'walker'
 TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-EPS = 0.7e-1
-EPS_MIN = 0.5e-2
-EPS_DECAY = 1e-7
-GAMMA = 0.99
-ENV_TYPE = 'cartpole'
+#EPS = 0.7e-1
+#EPS_MIN = 0.5e-2
+#EPS_DECAY = 1e-7
+#GAMMA = 0.99
+#ENV_TYPE = 'cartpole'
 #TASK_NAME = 'swingup'
-TASK_NAME = 'balance'
+##TASK_NAME = 'balance'
 
 MAXMIN_NORMALIZATION = True
 TRAIN_AUTOENCODER = False
@@ -805,8 +810,11 @@ if __name__ == '__main__':
             BATCH_SIZE = 64 
             COLLECT_FORWARD_LOSS = False
             DT = 1e-2 
-            HORIZON = 2.0e-1
+            #HORIZON = 0.8e-1
+            HORIZON = 1.5e-1
+            DDP_MAX_ITERATIONS = 10
             K_SHOOTS = 1
+            REUSE_SHOOTS = True
             mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
             mlp_hdims = [obs_size * WIDENING_CONST] 
             mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
@@ -816,27 +824,52 @@ if __name__ == '__main__':
                 pytorch_module = pytorch_class(device = device, indim = obs_size + action_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
             elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
-                pytorch_module = pytorch_class((obs_size * obs_size), (1 * obs_size), device = device, indim = obs_size + action_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size + action_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
             system_model = pytorch_model(pytorch_module, DT) 
 
-
+            #TODO TODO: Neural Network generation of quadratic cost
+            #function, using RL
             cost = None
             if LIB_TYPE == 'dm':
                 if ENV_TYPE == 'walker':
-                    pass
+                    #cost is manually set as walker height and
+                    #center-of-mass horizontal velocity, conditioned
+                    #on task type
+                    print("ENV TYPE IS WALKER")
+                    target = np.zeros(obs_size)
+                    upright_ind = 0 #1st "orientation" corresponds
+                    height_ind = 14 #height field corresponds
+                    com_vel_ind = 30 #NO obs directly corresponds to com velocity
+                    Q = np.eye(obs_size) * 1e8
+                    for i in range(obs_size):
+                        if i not in [height_ind, upright_ind, com_vel_ind]:
+                            Q[i][i] = np.sqrt(Q[i][i])
+                        if i == com_vel_ind and TASK_TYPE not in ['walk', 'run']:
+                            Q[i][i] = np.sqrt(Q[i][i])
+                    Qf = Q
+                    R = np.eye(action_size) * 1e-4
+                    diff_func = lambda t,x:x - t 
+                    print("Q: ", Q)
+                    cost = LQC(Q, R, Qf, target = target, 
+                            diff_func = diff_func)
                 if ENV_TYPE == 'cartpole':
+                    #cost is manually set as deviation from pole upright
+                    #position.
                     print("ENV TYPE IS CARTPOLE")
                     target = np.zeros(obs_size)
                     theta_ind = 1 #based on pole-angle cosine, rep theta
+                    target_theta = 1.0 #target pole position
+                    target[theta_ind] = target_theta
                     Q = np.eye(obs_size) * 1e8
                     for i in range(obs_size):
                         if i != theta_ind:
                             Q[i][i] = np.sqrt(Q[i][i])
                     Qf = Q
-                    R = np.eye(action_size) * 0
+                    R = np.eye(action_size) * 1e-4
                     diff_func = lambda t,x:x - t 
                     print("Q: ", Q)
+                    print("R: ", R)
                     cost = LQC(Q, R, Qf, target = target, 
                             diff_func = diff_func)
 
@@ -847,12 +880,15 @@ if __name__ == '__main__':
                     noise = None, 
                     action_constraints = action_constraints, 
                     horizon = int(HORIZON/DT), dt = DT, eps = 1e-2,
-                    max_iterations = 15
+                    max_iterations = DDP_MAX_ITERATIONS
                     )
             DATASET_RECENT_PROB = 0.5
+            
             dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
+            
             agent, trainer =  create_pytorch_agnostic_mbrl(cost, 
-                ddp, dataset,
+                ddp, REUSE_SHOOTS,
+                dataset,
                 DT, HORIZON, K_SHOOTS,
                 BATCH_SIZE, COLLECT_FORWARD_LOSS, 
                 replay_iterations, None,
@@ -880,6 +916,7 @@ if __name__ == '__main__':
             console_thread.daemon = True
             console_thread.start()
             ##
+            i = 0
             while i < MAX_ITERATIONS: #and error > threshold
                 print("ITERATION: ", i)
                 # Exploration / evaluation step
