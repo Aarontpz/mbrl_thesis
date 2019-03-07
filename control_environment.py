@@ -670,9 +670,11 @@ if __name__ == '__main__':
             umax = 2
             u = lambda sigma, x: umax * -(np.abs(-x[1] - np.cos(x[0]) + friction * x[1])) * np.sign(np.dot(sigma.T,  x))
             print("Sliding Surface: ", np.dot(sigma.T, x)) 
-            print("Control: ", u(sigma, x))
+            #control = u(sigma, x)
+            control = u(sigma, x_)
+            print("Control: ", control)
             #env.step(u(sigma, x_))
-            env.step(u(sigma, x_))
+            env.step(control)
         env.generate_plots()
         input()
 

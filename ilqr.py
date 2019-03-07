@@ -372,15 +372,15 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 #We start from after terminal state, V(x,u) = cost(Xterm)
                 #and perform backwards recursion to get seq. of approx.
                 #cost terms.
-                print("V: %s Vx: %s Vxx: %s \nFu: %s Fx: %s" % (V.shape, Vx.shape, 
-                    Vxx.shape, fu[i].shape, fx[i].shape))
-                print("lxx: %s lxu: %s luu: %s" % (lxx[i].shape, 
-                    lxu[i].shape, luu[i].shape))
-                print("lx: %s lu: %s" % (lx[i].shape, lu[i].shape))
+                #print("V: %s Vx: %s Vxx: %s \nFu: %s Fx: %s" % (V.shape, Vx.shape, 
+                #    Vxx.shape, fu[i].shape, fx[i].shape))
+                #print("lxx: %s lxu: %s luu: %s" % (lxx[i].shape, 
+                #    lxu[i].shape, luu[i].shape))
+                #print("lx: %s lu: %s" % (lx[i].shape, lu[i].shape))
 
                 Qx = lx[i] + np.dot(Vx, fx[i]) 
                 Qu = lu[i] + np.dot(Vx, fu[i]) #lu[term] = 0]
-                print("Qx: %s Qu: %s" % (Qx, Qu))
+                #print("Qx: %s Qu: %s" % (Qx, Qu))
                 #input()
                 Qxx = lxx[i] + np.dot(fx[i].T, np.dot(Vxx, fx[i]))
                 #print("DOT: ",  np.dot(fx[i].T, np.dot(Vxx, fu[i])))
@@ -571,28 +571,37 @@ if __name__ == '__main__':
         action_size = 1
         
         #target = None
-        target = np.array([0, 0, 0.7, 0], dtype = np.float64)
+        target = np.array([0, 0, 0.0, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.7, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.0, 0], dtype = np.float64)
         x0 = np.array([0, 0, 0.50, 0.00],dtype=np.float64)
         #x0 = np.array([0, 1, 0.0, 1.00],dtype=np.float64)
         #x0 = np.array([0, 1, 0, 5.00],dtype=np.float64)
         diff_func = lambda t,x : x - t
+        #def diff_func(t, x, null_ind = []):
+        #    '''Null_ind sets the target at (i in null_ind)
+        #    to equal x at (i in null_ind), effectively 
+        #    "freeing" the system from controlling at that
+        #    position.'''
+        #    t[null_ind] = x[null_ind]
+        #    return x-t
         #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
-        cost_func = lambda h,dt:1e7
+        ind = [0, 1, 3]
+        cost_func = lambda h,dt:1e3
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
         Qf = np.eye(state_size) * cost_func(horizon, dt) * 1.0
-        R = np.eye(action_size) * 0e0 * 1
+        R = np.eye(action_size) * 1e-1 * 1
 
         priority_cost = True
         if priority_cost:
-            Q[0][0] /= 1e4 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
-            Q[1][1] /= 1e4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-            Q[2][2] /= 1 #set theta Q term to 0 REEEEEE HAHAHAHAHHAA
-            Q[3][3] /= 1e4 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+            Q[0][0] = np.sqrt(Q[0][0]) 
+            Q[1][1] = np.sqrt(Q[1][1]) 
+            #Q[2][2] = np.sqrt(Q[0][0]) 
+            #Q[2][2] = np.sqrt(Q[0][0]) 
+            Q[3][3] = np.sqrt(Q[3][3]) 
         else:
             Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
             Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
@@ -678,19 +687,20 @@ if __name__ == '__main__':
             input()
         
         if MPC_COMPARISON:
-            cost_func = lambda h,dt:1e4
+            cost_func = lambda h,dt:1e8
             #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
             #cost_func = lambda h,dt:1e4
             Q = np.eye(state_size) * cost_func(horizon, dt) * 1
             #Qf = Q
             Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
             #R = np.eye(action_size) * cost_func(horizon, dt) * 0 #NO controls applied
-            R = np.eye(action_size) * 0e1
+            R = np.eye(action_size) * 1e3
             if priority_cost:
-                Q[0][0] *= 1e1 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
-                Q[1][1] *= 1e0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-                Q[2][2] *= 1e4 #set theta Q term to 0 REEEEEE HAHAHAHAHHAA
-                Q[3][3] *= 1e0 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+                Q[0][0] = np.sqrt(Q[0][0]) 
+                Q[1][1] = np.sqrt(Q[1][1]) 
+                #Q[2][2] = np.sqrt(Q[0][0]) 
+                #Q[2][2] = np.sqrt(Q[0][0]) 
+                Q[3][3] = np.sqrt(Q[3][3]) 
             else:
                 Q[0][0] /= 1e2 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
                 Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
