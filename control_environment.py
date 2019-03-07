@@ -61,7 +61,8 @@ class ModelledEnvironment(Environment):
         return self.state
 
 class ControlEnvironment(ModelledEnvironment):
-    def __init__(self, mode = 'point', target = None, *args, **kwargs):
+    def __init__(self, mode = 'point', target = None, 
+            error_func = lambda x, t:np.linalg.norm(x - t), *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.mode = mode
         if target is None:
@@ -69,6 +70,7 @@ class ControlEnvironment(ModelledEnvironment):
         self.set_target(target)
         self.state_history = []
         self.control_history = []
+        self.error_func = error_func
 
     def dx(self, x, u, *args) -> np.ndarray:
         self.control_history.append(u)
@@ -152,11 +154,12 @@ class ControlEnvironment(ModelledEnvironment):
             fig = self.control_fig 
             history = self.state_history
         else:
-            if not hasattr(self, 'secondary_theta_fig'):
+            if not hasattr(self, 'secondary_control_fig'):
                 self.secondary_control_fig = plt.figure()
             fig = self.secondary_control_fig
         y = self.control_history 
-        x = [i * self.ts for i in range(int(self.interval / self.ts))] 
+        length = len(self.control_history)
+        x = [i * self.ts for i in range(length)] 
         plt.figure(fig.number)
         plt.plot(x,y, label='parametric curve')
         plt.plot(x[0], y[0], 'ro')
@@ -169,9 +172,34 @@ class ControlEnvironment(ModelledEnvironment):
         plt.draw()
         plt.pause(0.01)
     
+    def generate_error_plot(self, history = None):
+        if history is None:
+            if not hasattr(self, 'error_fig'):
+                self.error_fig = plt.figure()
+            fig = self.error_fig 
+            history = self.state_history
+        else:
+            if not hasattr(self, 'secondary_error_fig'):
+                self.secondary_error_fig = plt.figure()
+            fig = self.secondary_error_fig
+        y = [self.error_func(s, target) for s in self.state_history]
+        length = len(self.state_history)
+        x = [i * self.ts for i in range(length)] 
+        plt.figure(fig.number)
+        plt.plot(x,y, label='parametric curve')
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'g')
+        plt.title("%s Error History" % (self.get_environment_name()))
+        plt.xlabel("Time [s]")
+        plt.ylabel("Control [N]")
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'go')
+        plt.draw()
+        plt.pause(0.01)
+    
     def generate_plots(self):
-        self.generate_state_history_plot()
         self.generate_control_plot()
+        self.generate_error_plot()
         #self.generate_eigenvalues_history_plot()
 
     @abc.abstractmethod
@@ -320,9 +348,6 @@ class InvertedPendulumEnvironment(ControlEnvironment):
     def get_action_constraints(self):
         return [np.ndarray([-2]), np.ndarray([2])]
 
-
-
-
     def get_reward(self):
         '''Reward = -Cost and vise-versa'''
         return 0
@@ -330,7 +355,9 @@ class InvertedPendulumEnvironment(ControlEnvironment):
     def get_environment_name(self):
         return 'Inverted Pendulum'
 
-
+    def generate_plots(self):
+        super().generate_plots()
+        self.generate_state_history_plot()
 
 class CartpoleEnvironment(ControlEnvironment):
     def __init__(self, mc = 1, mp = 0.5, L = 1, g=9.8,
@@ -467,7 +494,7 @@ class CartpoleEnvironment(ControlEnvironment):
     def generate_plots(self):
         self.generate_theta_phase_plot()
         self.generate_cart_phase_plot()
-        self.generate_control_plot()
+        super().generate_plots()
 
     def generate_theta_phase_plot(self, history = None):
         if history is None:
@@ -522,30 +549,6 @@ class CartpoleEnvironment(ControlEnvironment):
             plt.plot(target[0], target[1], 'b^')
         plt.draw()
         plt.pause(0.01)
-    
-    def generate_control_plot(self, history = None):
-        if history is None:
-            if not hasattr(self, 'control_fig'):
-                self.control_fig = plt.figure()
-            fig = self.control_fig 
-            history = self.state_history
-        else:
-            if not hasattr(self, 'secondary_theta_fig'):
-                self.secondary_control_fig = plt.figure()
-            fig = self.secondary_control_fig
-        y = self.control_history 
-        x = [i * self.ts for i in range(int(self.interval / self.ts) + 1)] 
-        plt.figure(fig.number)
-        plt.plot(x,y, label='parametric curve')
-        plt.plot(x[0], y[0], 'ro')
-        plt.plot(x[-1], y[-1], 'g')
-        plt.title("Cartpole Control History")
-        plt.xlabel("Time [s]")
-        plt.ylabel("Control [N]")
-        plt.plot(x[0], y[0], 'ro')
-        plt.plot(x[-1], y[-1], 'go')
-        plt.draw()
-        plt.pause(0.01)
 
     def get_reward(self):
         '''Reward = -Cost and vise-versa'''
@@ -583,7 +586,7 @@ if __name__ == '__main__':
         g = 9.8
         dt = 1e-2
         target = np.array([0.0, 0, 0.0, 0])
-        x0 = np.array([0, 0, 0.2, 0])
+        x0 = np.array([-1, 0, 0.2, -0.1])
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
                 mc, mp, L, g,
