@@ -6,6 +6,8 @@ import scipy.integrate as spi
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
+from math import copysign
+
 class Environment:
     __metaclass__ = abc.ABCMeta
     def __init__(self,):
@@ -65,16 +67,29 @@ class ControlEnvironment(ModelledEnvironment):
         if target is None:
             self.set_target(np.zeros())
         self.set_target(target)
+        self.state_history = []
+        self.control_history = []
 
-    @abc.abstractmethod
     def dx(self, x, u, *args) -> np.ndarray:
-        pass
+        self.control_history.append(u)
+
     @abc.abstractmethod
     def d_dx(self, x, u=None, r=None, *args):
         pass
     @abc.abstractmethod
     def d_du(self, x, u=None, r=None, *args):
         pass
+        
+    def step(self, action):
+        state = self.state.copy()
+        target = self.get_target()
+        #state += (self.dx(state, action, target) * self.interval*self.ts)
+        state += (self.dx(state, action) * self.ts)
+        #state += (self.dx(state, action))
+        #state[0] = state[0] % np.pi
+        self.steps += self.ts
+        self.state_history.append(state.copy())
+        self.state = state
 
     def set_control_mode(self, m):
         '''@args: 
@@ -98,6 +113,70 @@ class ControlEnvironment(ModelledEnvironment):
             return self.target_point
         elif self.mode == 'traj':
             return self.target_traj
+    
+    def reset(self):
+        self.state = self.get_initial_state(noise = self.noisy_init)
+        self.state_history = []
+        self.control_history = []
+        self.steps = 0
+    
+    def generate_state_history_plot(self, history = None):
+        if history is None:
+            if not hasattr(self, 'state_fig'):
+                self.state_fig = plt.figure()
+            history = self.state_history
+            fig = self.state_fig 
+        else:
+            if not hasattr(self, 'secondary_state_fig'):
+                self.secondary_state_fig = plt.figure()
+            fig = self.secondary_state_fig
+        x = [s[0] for s in history]
+        y = [s[1] for s in history]
+        plt.plot(x,y, label='parametric curve')
+        plt.ylabel("dTheta/dt")
+        plt.xlabel("Theta")
+        plt.title("Inverted Pendulum Phase Plot")
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'go')
+        if hasattr(self, 'target_point'):
+            target = self.target_point
+            plt.plot(target[0], target[1], 'b^')
+        plt.draw()
+        plt.pause(0.01)
+    
+    
+    def generate_control_plot(self, history = None):
+        if history is None:
+            if not hasattr(self, 'control_fig'):
+                self.control_fig = plt.figure()
+            fig = self.control_fig 
+            history = self.state_history
+        else:
+            if not hasattr(self, 'secondary_theta_fig'):
+                self.secondary_control_fig = plt.figure()
+            fig = self.secondary_control_fig
+        y = self.control_history 
+        x = [i * self.ts for i in range(int(self.interval / self.ts))] 
+        plt.figure(fig.number)
+        plt.plot(x,y, label='parametric curve')
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'g')
+        plt.title("%s Control History" % (self.get_environment_name()))
+        plt.xlabel("Time [s]")
+        plt.ylabel("Control [N]")
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'go')
+        plt.draw()
+        plt.pause(0.01)
+    
+    def generate_plots(self):
+        self.generate_state_history_plot()
+        self.generate_control_plot()
+        #self.generate_eigenvalues_history_plot()
+
+    @abc.abstractmethod
+    def get_environment_name(self):
+        return 'ControlEnvironment'
 
 class RosslerEnvironment(ModelledEnvironment):
     '''Actions don't affect this system, it is purely to test
@@ -119,34 +198,12 @@ class RosslerEnvironment(ModelledEnvironment):
         
         self.steps = 0
     
-    def reset(self):
-        self.state = self.get_initial_state(noise = self.noisy_init)
-        self.state_history = []
-        self.steps = 0
-
-    def step(self, action):
-        #if dx had an action, we would pass that into the spi.odeint args
-        #and/or call the function generator between passes, and make
-        #interval = sample frequency instead of transient-period
-        
-        #timesteps = np.linspace(0, self.interval, 1/self.ts)
-        #traj = spi.RK23() #Runge-Kutta method
-        #traj = spi.odeint(self.dx, self.state, timesteps, args = (self,))
-        #self.state_history = traj
-
-        state = self.state.copy()
-        state += (self.dx(state) * self.interval*self.ts)
-        self.steps += self.interval * self.ts
-        self.state_history.append(state.copy())
-        self.state = state
-        #print('STATE', state)
-        #print('STEPS: ', self.steps)
-         
     @abc.abstractmethod
-    def dx(self, x, *args) -> np.ndarray:
+    def dx(self, x, u = None, *args) -> np.ndarray:
         '''x' = dx * x + bu * u; u = 0 vector though'''
         dx = np.array([10*(x[1] - x[0]), 
             x[0]*(28-x[2])-x[1], x[0]*x[1]-(8/3)*x[2]])
+        super().dx(x, u)
         return dx 
 
     def get_initial_state(self, noise = False):
@@ -175,29 +232,11 @@ class RosslerEnvironment(ModelledEnvironment):
     def generate_plots(self):
         self.generate_state_history_plot()
 
-    def generate_state_history_plot(self, history = None):
-        if not hasattr(self, 'state_fig'):
-            self.state_fig = plt.figure()
-        if history is None:
-            history = self.state_history
-            fig = self.state_fig 
-        else:
-            if not hasattr(self, 'secondary_state_fig'):
-                self.secondary_state_fig = plt.figure()
-            fig = self.secondary_state_fig
-        x = [s[0] for s in history]
-        y = [s[1] for s in history]
-        z = [s[2] for s in history]
-        #print('State history: ', self.state_history)
-        #print("X: ", x)
-        #ax = self.state_fig.gca(projection='3d')
-        ax = fig.add_subplot(111, projection='3d')
-        ax.plot(x,y,z, label='parametric curve')
-        plt.draw()
-        plt.pause(0.01)
-
     def get_reward(self):
         return 0
+
+    def get_environment_name(self):
+        return 'Rossler'
 
 class InvertedPendulumEnvironment(ControlEnvironment):
     def __init__(self, friction = 0.1, initial_state = None, ts = 0.0001, 
@@ -223,18 +262,6 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         self.state_history = []
         self.steps = 0
 
-    def step(self, action):
-        '''Utilize Euler Integration to update system "discretely"'''
-        state = self.state.copy()
-        target = self.get_target()
-        #state += (self.dx(state, action, target) * self.interval*self.ts)
-        state += (self.dx(state, action) * self.ts)
-        #state += (self.dx(state, action))
-        #state[0] = state[0] % np.pi
-        self.steps += self.ts
-        self.state_history.append(state.copy())
-        self.state = state
-         
     def dx(self, x, u = None, r = None, *args) -> np.ndarray:
     #def dx(self, x, u, *args) -> np.ndarray:
         '''x' = dx * x + du * u'''
@@ -256,6 +283,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
             return d_dx
         du = np.array([0, 1]) * u
         #print("Dx: %s \n Du: %s" % (dx, du))
+        super().dx(x, u)
         return dx + du
 
     def d_dx(self, x, u=None, r=None, *args):
@@ -292,39 +320,15 @@ class InvertedPendulumEnvironment(ControlEnvironment):
     def get_action_constraints(self):
         return [np.ndarray([-2]), np.ndarray([2])]
 
-    def generate_plots(self):
-        self.generate_state_history_plot()
-        #self.generate_eigenvalues_history_plot()
 
-    def generate_state_history_plot(self, history = None):
-        if history is None:
-            if not hasattr(self, 'state_fig'):
-                self.state_fig = plt.figure()
-            history = self.state_history
-            fig = self.state_fig 
-        else:
-            if not hasattr(self, 'secondary_state_fig'):
-                self.secondary_state_fig = plt.figure()
-            fig = self.secondary_state_fig
-        x = [s[0] for s in history]
-        y = [s[1] for s in history]
-        plt.plot(x,y, label='parametric curve')
-        plt.ylabel("dTheta/dt")
-        plt.xlabel("Theta")
-        plt.title("Inverted Pendulum Phase Plot")
-        plt.plot(x[0], y[0], 'ro')
-        plt.plot(x[-1], y[-1], 'go')
-        if hasattr(self, 'target_point'):
-            target = self.target_point
-            plt.plot(target[0], target[1], 'b^')
-        plt.draw()
-        plt.pause(0.01)
-    
 
 
     def get_reward(self):
         '''Reward = -Cost and vise-versa'''
         return 0
+    
+    def get_environment_name(self):
+        return 'Inverted Pendulum'
 
 
 
@@ -351,12 +355,14 @@ class CartpoleEnvironment(ControlEnvironment):
         else:
             self.state = self.get_initial_state(noise = self.noisy_init)
         self.state_history = []
+        self.control_history = []
         
         self.steps = 0
     
     def reset(self):
         self.state = self.get_initial_state(noise = self.noisy_init)
         self.state_history = []
+        self.control_history = []
         self.steps = 0
 
     def step(self, action):
@@ -385,6 +391,7 @@ class CartpoleEnvironment(ControlEnvironment):
         utheta = -u*np.cos(x[2]) 
         dx = np.array([x[1], (ddx + ux) / x_denom, 
             x[3], (ddtheta + utheta) / theta_denom])
+        super().dx(x, u)
         return dx
 
     def d_dx(self, x, u=None, r=None, *args):
@@ -460,6 +467,7 @@ class CartpoleEnvironment(ControlEnvironment):
     def generate_plots(self):
         self.generate_theta_phase_plot()
         self.generate_cart_phase_plot()
+        self.generate_control_plot()
 
     def generate_theta_phase_plot(self, history = None):
         if history is None:
@@ -514,10 +522,37 @@ class CartpoleEnvironment(ControlEnvironment):
             plt.plot(target[0], target[1], 'b^')
         plt.draw()
         plt.pause(0.01)
+    
+    def generate_control_plot(self, history = None):
+        if history is None:
+            if not hasattr(self, 'control_fig'):
+                self.control_fig = plt.figure()
+            fig = self.control_fig 
+            history = self.state_history
+        else:
+            if not hasattr(self, 'secondary_theta_fig'):
+                self.secondary_control_fig = plt.figure()
+            fig = self.secondary_control_fig
+        y = self.control_history 
+        x = [i * self.ts for i in range(int(self.interval / self.ts) + 1)] 
+        plt.figure(fig.number)
+        plt.plot(x,y, label='parametric curve')
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'g')
+        plt.title("Cartpole Control History")
+        plt.xlabel("Time [s]")
+        plt.ylabel("Control [N]")
+        plt.plot(x[0], y[0], 'ro')
+        plt.plot(x[-1], y[-1], 'go')
+        plt.draw()
+        plt.pause(0.01)
 
     def get_reward(self):
         '''Reward = -Cost and vise-versa'''
         return 0
+    
+    def get_environment_name(self):
+        return 'ControlEnvironment'
 
 def retrieve_control_environment(env_type = 'rossler', *args, **kwargs):
     env = None
@@ -537,39 +572,105 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    noisy_init = True
-    target = np.array([0, 0])
-    horizon = 30
-    friction = 0.0
-    env = retrieve_control_environment('inverted', 
-            friction = friction,  
-            noisy_init = noisy_init, 
-            interval = horizon, ts = 0.001,
-            mode = 'point', 
-            target = target)
-    env.reset()
-    env.state = np.array([0.0001, 0])
-    gamma = 0.7
-    wn = 20
-    while not env.episode_is_done():
-        print("STEP ", env.steps)
-        x = env.state
-        x_ = target - x
-        print("State: ", x)
-        print("Target: %s \n Error: %s"%(target, x_))
-        w = np.array([4*np.sin(x[0]) - wn**2 * x[0] + friction*x[1] - 2*gamma*wn*x[1]])
-        dw = np.array([[0,0],[4*np.cos(x[0]) - wn**2, friction - 2*gamma*wn]])
-        #dw = np.array([4*np.cos(x[0]) - wn**2, 0.1 - 2*gamma*wn])
-        dw = np.zeros(1)
-        #dw = np.ones(1)
-        #print("dW: ", dw)
-        #print("U: ", target - w)
-        #env.step(target + dw)
-        #env.step(target + w)
-        env.step(dw)
-        #env.step(w)
-    env.generate_plots()
-    input()
+    TEST_INVERTED_PENDULUM = True
+    TEST_CARTPOLE = True
+
+    if TEST_CARTPOLE:
+        horizon = 15
+        mc = 1
+        mp = 0.1
+        L = 0.5
+        g = 9.8
+        dt = 1e-2
+        target = np.array([0.0, 0, 0.0, 0])
+        x0 = np.array([0, 0, 0.2, 0])
+        simplified_derivatives = False
+        env = retrieve_control_environment('cartpole', 
+                mc, mp, L, g,
+                simplified_derivatives,
+                x0, 
+                interval = horizon, ts = dt,
+                mode = 'point', 
+                target = target)
+        env.reset()
+        env.state = x0.copy()
+        while not env.episode_is_done():
+            print("STEP ", env.steps)
+            x = env.state
+            x_ = x - np.array([x[0], x[1], target[2], x[3]])
+            #x_ = x - target
+            print("State: ", x)
+            print("Target: %s \n Error: %s"%(target, x_))
+
+            ##Linearizing Feedback Controls
+
+            ## Sliding Mode Controls
+            x_denom = (mc + mp * (np.sin(x[2]))**2)
+            ddx = mp * np.sin(x[2]) * (L * (x[3])**2 - g*np.cos(x[2]))
+            ddtheta = -mp * L * (x[3])**2 * np.sin(x[2])*np.cos(x[2])
+            ddtheta += (mc + mp) * g * np.sin(x[2])
+            dx = x[1] + (ddx) / x_denom + x[3] + (ddtheta) / (L * x_denom)
+            sigma = np.array([1, 1, 1, 1]) #sliding surface definition
+            ucoeff = 2
+            umin = -10
+            umax = 10
+            ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)
+            #ucomp = 1
+            u = lambda sigma, x: ucoeff * (1/ucomp) * -(np.abs(dx)) * np.sign(np.dot(sigma.T, x))
+            print("Sliding Surface: ", np.dot(sigma.T, x_)) 
+            control = np.clip(u(sigma, x_), umin, umax)
+            #control = u(sigma, x_)
+            print("Control: ", control)
+            env.step(control)
+            #env.step(np.zeros(1))
+        env.generate_plots()
+        input()
+
+    if TEST_INVERTED_PENDULUM:
+        noisy_init = True
+        target = np.array([np.pi, 0])
+        horizon = 5
+        friction = 0.0
+        env = retrieve_control_environment('inverted', 
+                friction = friction,  
+                noisy_init = noisy_init, 
+                interval = horizon, ts = 0.001,
+                mode = 'point', 
+                target = target)
+        env.reset()
+        env.state = np.array([0.0, 0.0])
+        gamma = 0.7
+        wn = 20
+        while not env.episode_is_done():
+            print("STEP ", env.steps)
+            x = env.state
+            x_ = x - target
+            print("State: ", x)
+            print("Target: %s \n Error: %s"%(target, x_))
+
+            ##Linearizing Feedback Controls
+            w = np.array([4*np.sin(x[0]) - wn**2 * x[0] + friction*x[1] - 2*gamma*wn*x[1]])
+            dw = np.array([[0,0],[4*np.cos(x[0]) - wn**2, friction - 2*gamma*wn]])
+            #dw = np.array([4*np.cos(x[0]) - wn**2, 0.1 - 2*gamma*wn])
+            #dw = np.zeros(1)
+            #dw = np.ones(1)
+            #print("dW: ", dw)
+            #print("U: ", target - w)
+            #env.step(target + dw)
+            #env.step(target + w)
+            #env.step(dw)
+            #env.step(w)
+
+            ## Sliding Mode Controls
+            sigma = np.array([1, 1]) #sliding surface definition
+            umax = 2
+            u = lambda sigma, x: umax * -(np.abs(-x[1] - np.cos(x[0]) + friction * x[1])) * np.sign(np.dot(sigma.T,  x))
+            print("Sliding Surface: ", np.dot(sigma.T, x)) 
+            print("Control: ", u(sigma, x))
+            #env.step(u(sigma, x_))
+            env.step(u(sigma, x_))
+        env.generate_plots()
+        input()
 
 
 

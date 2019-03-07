@@ -481,7 +481,7 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                     clone.mpc_ddp.model.module.device = device
                     launch_viewer(env, clone)    
                 else:
-                    #clone = agent.clone()
+                    clone = agent.clone()
                     clone.module = copy.deepcopy(agent.module)
                     clone.module.to(device)
                     launch_viewer(env, clone)    
@@ -841,6 +841,8 @@ if __name__ == '__main__':
                     upright_ind = 0 #1st "orientation" corresponds
                     height_ind = 14 #height field corresponds
                     com_vel_ind = 30 #NO obs directly corresponds to com velocity
+                    target[height_ind] = 2.0
+                    target[upright_ind] = 1.0 #TODO: confirm this
                     Q = np.eye(obs_size) * 1e8
                     for i in range(obs_size):
                         if i not in [height_ind, upright_ind, com_vel_ind]:
@@ -859,7 +861,7 @@ if __name__ == '__main__':
                     print("ENV TYPE IS CARTPOLE")
                     target = np.zeros(obs_size)
                     theta_ind = 1 #based on pole-angle cosine, rep theta
-                    target_theta = 1.0 #target pole position
+                    target_theta = 0.0 #target pole position
                     target[theta_ind] = target_theta
                     Q = np.eye(obs_size) * 1e8
                     for i in range(obs_size):

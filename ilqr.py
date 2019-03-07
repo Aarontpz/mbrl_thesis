@@ -372,15 +372,15 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                 #We start from after terminal state, V(x,u) = cost(Xterm)
                 #and perform backwards recursion to get seq. of approx.
                 #cost terms.
-                #print("V: %s Vx: %s Vxx: %s \nFu: %s Fx: %s" % (V.shape, Vx.shape, 
-                #    Vxx.shape, fu[i].shape, fx[i].shape))
-                #print("lxx: %s lxu: %s luu: %s" % (lxx[i].shape, 
-                #    lxu[i].shape, luu[i].shape))
-                #print("lx: %s lu: %s" % (lx[i].shape, lu[i].shape))
+                print("V: %s Vx: %s Vxx: %s \nFu: %s Fx: %s" % (V.shape, Vx.shape, 
+                    Vxx.shape, fu[i].shape, fx[i].shape))
+                print("lxx: %s lxu: %s luu: %s" % (lxx[i].shape, 
+                    lxu[i].shape, luu[i].shape))
+                print("lx: %s lu: %s" % (lx[i].shape, lu[i].shape))
 
                 Qx = lx[i] + np.dot(Vx, fx[i]) 
                 Qu = lu[i] + np.dot(Vx, fu[i]) #lu[term] = 0]
-                #print("Qx: %s Qu: %s" % (Qx, Qu))
+                print("Qx: %s Qu: %s" % (Qx, Qu))
                 #input()
                 Qxx = lxx[i] + np.dot(fx[i].T, np.dot(Vxx, fx[i]))
                 #print("DOT: ",  np.dot(fx[i].T, np.dot(Vxx, fu[i])))
@@ -400,6 +400,9 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
                     Quu_eval, Quu_evec = np.linalg.eig(Quu) 
                 except:
                     print("Quu: ", Quu)
+                    print("luu: %s \n fu: %s vxx: %s" % (luu[i], 
+                        fu[i], Vxx))
+                    input()
                 #print("Quu Eigenvals: ", Quu_eval)
                 #print("Quu Eigenvecs: ", Quu_evec)
                 Quu_eval[Quu_eval < 0] = 0.0 #remove negative eigenvals

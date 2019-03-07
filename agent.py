@@ -1342,6 +1342,6 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
         self.B = b_.cpu().detach().numpy()
         self.A.resize(self.module.a_shape)
         self.B.resize(self.module.b_shape)
-        #print("A: ", self.A)
-        #print("B: ", self.B)
+        print("A: ", self.A)
+        print("B: ", self.B)
 
