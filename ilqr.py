@@ -648,6 +648,7 @@ if __name__ == '__main__':
         #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
         print("FINAL U: ", U)
         env.state = x0.copy()
+        env.set_target_point(target)
         for u in U:
             env.step(u)
         print("Final State: ", env.state_history[-1])

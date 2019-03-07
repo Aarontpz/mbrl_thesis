@@ -182,6 +182,7 @@ class ControlEnvironment(ModelledEnvironment):
             if not hasattr(self, 'secondary_error_fig'):
                 self.secondary_error_fig = plt.figure()
             fig = self.secondary_error_fig
+        target = self.target_point
         y = [self.error_func(s, target) for s in self.state_history]
         length = len(self.state_history)
         x = [i * self.ts for i in range(length)] 
@@ -191,7 +192,7 @@ class ControlEnvironment(ModelledEnvironment):
         plt.plot(x[-1], y[-1], 'g')
         plt.title("%s Error History" % (self.get_environment_name()))
         plt.xlabel("Time [s]")
-        plt.ylabel("Control [N]")
+        plt.ylabel("Error")
         plt.plot(x[0], y[0], 'ro')
         plt.plot(x[-1], y[-1], 'go')
         plt.draw()
