@@ -587,7 +587,7 @@ if __name__ == '__main__':
         g = 9.8
         dt = 1e-2
         target = np.array([0.0, 0, 0.0, 0])
-        x0 = np.array([-1, 0, 0.2, -0.1])
+        x0 = np.array([-0, 0, 0.0, -0.1])
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
                 mc, mp, L, g,

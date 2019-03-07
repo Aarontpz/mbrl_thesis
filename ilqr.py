@@ -536,7 +536,7 @@ def create_MPCController(control_base, *args, **kwargs):
 
 
 if __name__ == '__main__':
-    LINEARIZED_PENDULUM_TEST = True
+    LINEARIZED_PENDULUM_TEST = False
     NONLINEAR_PENDULUM_TEST = False
     
     NONLINEAR_CARTPOLE_TEST = True
@@ -559,7 +559,7 @@ if __name__ == '__main__':
         MPC_STEPS = 1
         #MPC_STEPS = int(MPC_HORIZON / MPC_DT) - 1
         MPC_MAX_STEPS = int(horizon / dt / 2)
-        MPC_THRESHOLD = 1e-2
+        MPC_THRESHOLD = 0e-2
         #MPC_THRESHOLD = 0e-2
         
 
@@ -574,7 +574,7 @@ if __name__ == '__main__':
         target = np.array([0, 0, 0.0, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.7, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.0, 0], dtype = np.float64)
-        x0 = np.array([0, 0, 0.50, 0.00],dtype=np.float64)
+        x0 = np.array([0, -0.2, 0.20, 0.10],dtype=np.float64)
         #x0 = np.array([0, 1, 0.0, 1.00],dtype=np.float64)
         #x0 = np.array([0, 1, 0, 5.00],dtype=np.float64)
         diff_func = lambda t,x : x - t
@@ -586,14 +586,14 @@ if __name__ == '__main__':
         #    t[null_ind] = x[null_ind]
         #    return x-t
         #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
-        ind = [0, 1, 3]
-        cost_func = lambda h,dt:1e3
+        null_ind = [0, 1, 3] #TODO: control INPUT, not ERROR?!
+        cost_func = lambda h,dt:1e4
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
-        Qf = np.eye(state_size) * cost_func(horizon, dt) * 1.0
-        R = np.eye(action_size) * 1e-1 * 1
+        Qf = np.eye(state_size) * cost_func(horizon, dt) * 0.0
+        R = np.eye(action_size) * 1e1* 1
 
         priority_cost = True
         if priority_cost:
