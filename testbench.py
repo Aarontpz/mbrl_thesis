@@ -396,6 +396,7 @@ def create_pytorch_policy_agent(env, obs_size,
 
 def create_pytorch_agnostic_mbrl(cost, 
         ddp, reuse_shoots, 
+        eps_base, eps_min, eps_decay,
         dataset, 
         #system_model, system_model_args, system_model_kwargs, 
         dt, horizon, k_shoots,
@@ -409,12 +410,9 @@ def create_pytorch_agnostic_mbrl(cost,
         has_value_function = False, ) -> (Agent, Trainer): 
     #NOTE: I'm going insane with this pseudoOOP it's compulsive right now D:
     #NOTE: I really need to clean this initialization code up :(
-    EPS_BASE = 1.5e-1
-    EPS_MIN = 2e-2
-    EPS_DECAY = 1e-7
     agent = create_ddp_agent(lib_type, env_type, DDPMPCAgent, ddp, 
                     reuse_shoots, 
-                    EPS_BASE, EPS_MIN, EPS_DECAY,
+                    eps_base, eps_min, eps_decay, 
                     horizon, k_shoots, 
                     [1, obs_size], 
                     action_size, discrete_actions = DISCRETE_AGENT, 
@@ -616,7 +614,7 @@ ENV_TYPE = 'humanoid'
 #TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-EPS = 0.5e-1
+EPS = 5e-2
 EPS_MIN = 2e-2
 EPS_DECAY = 1e-6
 GAMMA = 0.99
@@ -625,7 +623,7 @@ ENV_TYPE = 'walker'
 TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-EPS = 0.7e-1
+EPS = 7e-2
 EPS_MIN = 0.5e-2
 EPS_DECAY = 1e-7
 GAMMA = 0.99
@@ -815,10 +813,23 @@ if __name__ == '__main__':
             COLLECT_FORWARD_LOSS = False
             DT = 1e-2 
             #HORIZON = 0.8e-1
+            EPS_BASE = 1.5e-1
+            EPS_MIN = 2e-2
+            EPS_DECAY = 1e-7
+
+            ## 
+            
+            ## SMC-SPECIFIC ARGS
+
+            ## DDP-SPECIFIC ARGS 
+            LAMB_FACTOR = 10
+            LAMB_MAX = 1000
+            DDP_INIT = 0.0
             HORIZON = 1.5e-1
             DDP_MAX_ITERATIONS = 10
             K_SHOOTS = 1
-            REUSE_SHOOTS = True
+            UPDATE_DDP_MODEL = True
+            REUSE_SHOOTS = False
             mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
             mlp_hdims = [obs_size * WIDENING_CONST] 
             mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
@@ -871,7 +882,7 @@ if __name__ == '__main__':
                     print("ENV TYPE IS CARTPOLE")
                     target = np.zeros(obs_size)
                     theta_ind = 1 #based on pole-angle cosine, rep theta
-                    target_theta = 0.0 #target pole position
+                    target_theta = -0.0 #target pole position
                     target[theta_ind] = target_theta
                     Q = np.eye(obs_size) * 1e8
                     priority_cost = True
@@ -879,7 +890,7 @@ if __name__ == '__main__':
                         if i != theta_ind:
                             Q[i][i] = np.sqrt(Q[i][i])
                     Qf = Q
-                    R = np.eye(action_size) * 1e3
+                    R = np.eye(action_size) * 1e2
                     diff_func = lambda t,x:x - t 
                     print("Q: ", Q)
                     print("R: ", R)
@@ -887,20 +898,25 @@ if __name__ == '__main__':
                             diff_func = diff_func)
 
 
-            ddp = ILQG(obs_space, obs_size,
+            ddp = ILQG(LAMB_FACTOR, LAMB_MAX, DDP_INIT,
+                    obs_space, obs_size,
                     [1, action_size], action_size,
                     system_model, cost,
-                    noise = None, 
-                    action_constraints = action_constraints, 
-                    horizon = int(HORIZON/DT), dt = DT, eps = 1e-2,
-                    max_iterations = DDP_MAX_ITERATIONS
+                    None, 
+                    action_constraints, 
+                    horizon = int(HORIZON/DT), dt = DT, 
+                    max_iterations = DDP_MAX_ITERATIONS,
+                    eps = 1e-2,
+                    update_model = UPDATE_DDP_MODEL
                     )
+            
             DATASET_RECENT_PROB = 0.5
             
             dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
             
             agent, trainer =  create_pytorch_agnostic_mbrl(cost, 
                 ddp, REUSE_SHOOTS,
+                EPS_BASE, EPS_MIN, EPS_DECAY, 
                 dataset,
                 DT, HORIZON, K_SHOOTS,
                 BATCH_SIZE, COLLECT_FORWARD_LOSS, 
@@ -908,7 +924,7 @@ if __name__ == '__main__':
                 LIB_TYPE, ENV_TYPE,
                 env, obs_size, action_size, action_constraints,
                 mlp_hdims, mlp_activations, 
-                lr = 1e-1, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+                lr = 5e-2, adam_betas = (0.9, 0.999), momentum = 1e-3, 
                 discrete_actions = False, 
                 has_value_function = False) 
 

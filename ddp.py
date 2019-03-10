@@ -251,20 +251,15 @@ class ControlEnvironmentModel(Model):
 #        pass
 #NAAAAAAH 
 
-class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
-    '''Reference papers: https://homes.cs.washington.edu/~todorov/papers/LiICINCO04.pdf
-    http://maeresearch.ucsd.edu/skelton/publications/weiwei_ilqg_CDC43.pdf
-    https://homes.cs.washington.edu/~todorov/papers/TassaICRA14.pdf
-
-    Reference material: https://studywolf.wordpress.com/2016/02/03/the-iterative-linear-quadratic-regulator-method/
-    '''
+class DDP:
+    '''Abstract baseclass for DDP methods (and DDP-like methods, like
+    "iterative" sliding mode control.'''
     def __init__(self, state_shape, state_size, 
-            action_shape, action_size, 
-            model : Model, cost : Model, 
-            noise : Model = None,
+            action_shape, action_size,
+            model : Model, cost : Model = None, 
+            noise : Model = None, 
             action_constraints = None, 
-            lamb_factor = 10, lamb_max = 1000,
-            horizon = 10, initialization = 0.0, dt = 0.001,
+            horizon = 10, dt = 0.001,
             max_iterations = 1000, eps = 0.1,
             update_model = True):
         self.model = model
@@ -273,19 +268,70 @@ class ILQG: #TODO: technically THIS is just iLQR, no noise terms cause NO
 
         self.noise = noise
 
-        self.lamb_factor = lamb_factor #for updating lambda
-        self.lamb_max = lamb_max
-
         self.horizon = horizon
         self.state_shape = state_shape
         self.state_size = state_size
         self.action_shape = action_shape
         self.action_size = action_size
-        self.initial_ut = initialization
         self.dt = dt
 
         self.max_iterations = max_iterations
         self.eps = eps
+
+    @abc.abstractmethod
+    def step(self, xt) -> (np.ndarray, np.ndarray):
+        pass
+
+    def forward(self, xt, control : []) -> []:
+        '''Apply control sequence 'control' to system
+        in starting state xt (via Euler Integration), receive 
+        list containing xt, xt+1, ..., xt+horizon
+        '''
+        xt_ = xt.copy()
+        states = [xt_.copy(),]
+        for u in control:
+            if self.update_model:
+                traj = (xt_, u)
+                self.model.update(*traj)
+            dx = self.model(xt_, u)
+            #print("Xt: %s \ndx: %s " % (xt_, dx))
+            xt_ += dx * self.dt
+            #xt_ += dx
+            #xt_[0] = xt_[0] % np.pi
+            states.append(xt_.copy())
+        return states
+
+    def forward_cost(self, X, U):
+        assert(self.cost is not None)
+        cost = 0.0
+        for i in range(len(X)):
+            if i == len(X) - 1: #terminal
+                self.cost.terminal_mode()
+                #cost += self.cost(X[i], None, dt = self.dt) * self.dt
+                cost += self.cost(X[i], None, dt = self.dt) 
+                self.cost.normal_mode()
+            else:
+                assert(self.cost.terminal is False)
+                if self.cost(X[i], U[i], dt = self.dt) < 0:
+                    assert("Negative cost - something's wrong!")
+                cost += self.cost(X[i], U[i], dt = self.dt)
+        return cost
+
+
+class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
+    '''Reference papers: https://homes.cs.washington.edu/~todorov/papers/LiICINCO04.pdf
+    http://maeresearch.ucsd.edu/skelton/publications/weiwei_ilqg_CDC43.pdf
+    https://homes.cs.washington.edu/~todorov/papers/TassaICRA14.pdf
+
+    Reference material: https://studywolf.wordpress.com/2016/02/03/the-iterative-linear-quadratic-regulator-method/
+    '''
+    def __init__(self, lamb_factor = 10, lamb_max = 1000, 
+            initialization = 0.0, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        print("INITIALIZATION: ", initialization)
+        self.lamb_factor = lamb_factor #for updating lambda
+        self.lamb_max = lamb_max
+        self.initial_ut = initialization
 
     def step(self, xt) -> (np.ndarray, np.ndarray):
         '''Perform a step through iLQG, starting with a given
@@ -639,14 +685,16 @@ if __name__ == '__main__':
         env.state = x0.copy()
         #
 
-        ilqg = ILQG(state_shape, state_size, action_shape, action_size,
+        update_model = False
+        ilqg = ILQG(lamb_factor,
+                lamb_max,
+                initialization,
+                state_shape, state_size, action_shape, action_size,
                 model, cost, None, action_constraints, #no noise model, iLQR
-                lamb_factor = lamb_factor,
-                lamb_max = lamb_max,
                 horizon = int(horizon*1/dt),
-                initialization = initialization,
                 dt = dt,
-                max_iterations = max_iterations, eps = eps)
+                max_iterations = max_iterations, eps = eps,
+                update_model = update_model)
         
 
         X, U = ilqg.step(x0)
@@ -700,14 +748,15 @@ if __name__ == '__main__':
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
 
-            mpc_ilqg = ILQG(state_shape, state_size, action_shape, action_size,
-                model, cost, None, action_constraints, #no noise model, iLQR
-                lamb_factor = lamb_factor,
-                lamb_max = lamb_max,
-                horizon = int(MPC_HORIZON*1/MPC_DT),
-                initialization = initialization,
-                dt = MPC_DT,
-                max_iterations = max_iterations, eps = eps)
+            mpc_ilqg = ILQG(lamb_factor,
+                    lamb_max, 
+                    initialization,
+                    state_shape, state_size, action_shape, action_size,
+                    model, cost, None, action_constraints, #no noise model, iLQR
+                    horizon = int(MPC_HORIZON*1/MPC_DT),
+                    dt = MPC_DT,
+                    max_iterations = max_iterations, eps = eps,
+                    update_model = update_model)
             env.reset()
             env.state = x0.copy()
             env.state_history.append(env.state.copy())
@@ -811,15 +860,15 @@ if __name__ == '__main__':
         env.state = x0.copy()
         #
 
-        ilqg = ILQG(state_shape, state_size, action_shape, action_size,
+        ilqg = ILQG(lamb_factor,
+                lamb_max,
+                initialization,
+                state_shape, state_size, action_shape, action_size,
                 model, cost, None, action_constraints, #no noise model, iLQR
-                lamb_factor = lamb_factor,
-                lamb_max = lamb_max,
                 horizon = int(horizon*1/dt),
-                initialization = initialization,
                 dt = dt,
-                max_iterations = max_iterations, eps = eps)
-        
+                max_iterations = max_iterations, eps = eps,
+                update_model = update_model)
 
         X, U = ilqg.step(x0)
         #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
@@ -868,15 +917,16 @@ if __name__ == '__main__':
                     Q[i][i] = 0
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
+            mpc_ilqg = ILQG(lamb_factor,
+                    lamb_max, 
+                    initialization,
+                    state_shape, state_size, action_shape, action_size,
+                    model, cost, None, action_constraints, #no noise model, iLQR
+                    horizon = int(MPC_HORIZON*1/MPC_DT),
+                    dt = MPC_DT,
+                    max_iterations = max_iterations, eps = eps,
+                    update_model = update_model)
 
-            mpc_ilqg = ILQG(state_shape, state_size, action_shape, action_size,
-                model, cost, None, action_constraints, #no noise model, iLQR
-                lamb_factor = lamb_factor,
-                lamb_max = lamb_max,
-                horizon = int(MPC_HORIZON*1/MPC_DT),
-                initialization = initialization,
-                dt = MPC_DT,
-                max_iterations = max_iterations, eps = eps)
             env.reset()
             env.state = x0.copy()
             env.state_history.append(env.state.copy())

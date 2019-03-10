@@ -15,7 +15,7 @@ import math
 
 from functools import reduce
 
-from ilqr import *
+from ddp import *
 
 class Agent:
     __metaclass__ = abc.ABCMeta
@@ -641,6 +641,7 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
         else: #continuous action space, currently mu + sigma
             pass            
         return action
+
 
 class DDPMPCAgent(MPCAgent):
     def __init__(self, mpc_ddp : ILQG, 
