@@ -134,10 +134,11 @@ class ControlEnvironment(ModelledEnvironment):
             fig = self.secondary_state_fig
         x = [s[0] for s in history]
         y = [s[1] for s in history]
+        plt.figure(fig.number)
         plt.plot(x,y, label='parametric curve')
         plt.ylabel("dTheta/dt")
         plt.xlabel("Theta")
-        plt.title("Inverted Pendulum Phase Plot")
+        plt.title("%s Phase Plot" % (self.get_environment_name()))
         plt.plot(x[0], y[0], 'ro')
         plt.plot(x[-1], y[-1], 'go')
         if hasattr(self, 'target_point'):
@@ -587,7 +588,7 @@ if __name__ == '__main__':
         g = 9.8
         dt = 1e-2
         target = np.array([0.0, 0, 0.0, 0])
-        x0 = np.array([-0, 0, 0.0, -0.1])
+        x0 = np.array([-0, 0, 0.4, -0.0])
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
                 mc, mp, L, g,
@@ -633,6 +634,7 @@ if __name__ == '__main__':
     if TEST_INVERTED_PENDULUM:
         noisy_init = True
         target = np.array([np.pi, 0])
+        target = np.array([0, 0])
         horizon = 5
         friction = 0.0
         env = retrieve_control_environment('inverted', 
@@ -642,7 +644,8 @@ if __name__ == '__main__':
                 mode = 'point', 
                 target = target)
         env.reset()
-        env.state = np.array([0.0, 0.0])
+        #env.state = np.array([0.0, 0.0])
+        env.state = np.array([np.pi, 0.0])
         gamma = 0.7
         wn = 20
         while not env.episode_is_done():

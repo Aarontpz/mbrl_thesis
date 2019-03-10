@@ -496,6 +496,7 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
         #independent of dataset
     
     def compute_model_loss(self, s, a, r, s_, *args, **kwargs):
+        print("S: %s \n A: %s" % (s, a))
         estimate = self.model.forward_predict(s, a, self.model.dt, *args, **kwargs)
         if type(s_) == np.ndarray:
             s_ = torch.tensor(s_, requires_grad = False, device = self.device).float()

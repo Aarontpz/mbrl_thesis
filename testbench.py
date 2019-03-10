@@ -409,8 +409,12 @@ def create_pytorch_agnostic_mbrl(cost,
         has_value_function = False, ) -> (Agent, Trainer): 
     #NOTE: I'm going insane with this pseudoOOP it's compulsive right now D:
     #NOTE: I really need to clean this initialization code up :(
+    EPS_BASE = 1.5e-1
+    EPS_MIN = 2e-2
+    EPS_DECAY = 1e-7
     agent = create_ddp_agent(lib_type, env_type, DDPMPCAgent, ddp, 
                     reuse_shoots, 
+                    EPS_BASE, EPS_MIN, EPS_DECAY,
                     horizon, k_shoots, 
                     [1, obs_size], 
                     action_size, discrete_actions = DISCRETE_AGENT, 
@@ -581,7 +585,7 @@ REPLAYS = 20
 horizon = 50
 #EPISODES_BEFORE_TRAINING = 3
 #max_traj_len = SMALL_TRAJECTORY_LENGTH
-replay_iterations = 6
+replay_iterations = 5
 
 
 TRAINER_TYPE = 'AC'
@@ -621,13 +625,13 @@ ENV_TYPE = 'walker'
 TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-#EPS = 0.7e-1
-#EPS_MIN = 0.5e-2
-#EPS_DECAY = 1e-7
-#GAMMA = 0.99
-#ENV_TYPE = 'cartpole'
-#TASK_NAME = 'swingup'
-##TASK_NAME = 'balance'
+EPS = 0.7e-1
+EPS_MIN = 0.5e-2
+EPS_DECAY = 1e-7
+GAMMA = 0.99
+ENV_TYPE = 'cartpole'
+TASK_NAME = 'swingup'
+#TASK_NAME = 'balance'
 
 MAXMIN_NORMALIZATION = True
 TRAIN_AUTOENCODER = False
@@ -844,13 +848,19 @@ if __name__ == '__main__':
                     target[height_ind] = 2.0
                     target[upright_ind] = 1.0 #TODO: confirm this
                     Q = np.eye(obs_size) * 1e8
-                    for i in range(obs_size):
-                        if i not in [height_ind, upright_ind, com_vel_ind]:
-                            Q[i][i] = np.sqrt(Q[i][i])
-                        if i == com_vel_ind and TASK_TYPE not in ['walk', 'run']:
-                            Q[i][i] = np.sqrt(Q[i][i])
+                    priority_cost = True
+                    if priority_cost:
+                        for i in range(obs_size):
+                            if i not in [height_ind, upright_ind, com_vel_ind]:
+                                Q[i][i] = np.sqrt(Q[i][i])
+                            if i == com_vel_ind and TASK_TYPE not in ['walk', 'run']:
+                                Q[i][i] = np.sqrt(Q[i][i])
+                    else:
+                        for i in range(obs_size):
+                            if i not in [height_ind, upright_ind, com_vel_ind]:
+                                Q[i][i] = 0
                     Qf = Q
-                    R = np.eye(action_size) * 1e-4
+                    R = np.eye(action_size) * 1e3
                     diff_func = lambda t,x:x - t 
                     print("Q: ", Q)
                     cost = LQC(Q, R, Qf, target = target, 
@@ -864,11 +874,12 @@ if __name__ == '__main__':
                     target_theta = 0.0 #target pole position
                     target[theta_ind] = target_theta
                     Q = np.eye(obs_size) * 1e8
+                    priority_cost = True
                     for i in range(obs_size):
                         if i != theta_ind:
                             Q[i][i] = np.sqrt(Q[i][i])
                     Qf = Q
-                    R = np.eye(action_size) * 1e-4
+                    R = np.eye(action_size) * 1e3
                     diff_func = lambda t,x:x - t 
                     print("Q: ", Q)
                     print("R: ", R)

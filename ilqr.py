@@ -537,7 +537,7 @@ def create_MPCController(control_base, *args, **kwargs):
 
 if __name__ == '__main__':
     LINEARIZED_PENDULUM_TEST = False
-    NONLINEAR_PENDULUM_TEST = False
+    NONLINEAR_PENDULUM_TEST = True
     
     NONLINEAR_CARTPOLE_TEST = True
     ##NONLINEAR CARTPOLE TEST
@@ -554,11 +554,11 @@ if __name__ == '__main__':
         SECONDARY_STEP = False
         
         MPC_COMPARISON = True
-        MPC_HORIZON = 0.2e0
+        MPC_HORIZON = 0.15e0
         MPC_DT = dt
         MPC_STEPS = 1
         #MPC_STEPS = int(MPC_HORIZON / MPC_DT) - 1
-        MPC_MAX_STEPS = int(horizon / dt / 2)
+        MPC_MAX_STEPS = int(horizon / dt)
         MPC_THRESHOLD = 0e-2
         #MPC_THRESHOLD = 0e-2
         
@@ -597,15 +597,11 @@ if __name__ == '__main__':
 
         priority_cost = True
         if priority_cost:
-            Q[0][0] = np.sqrt(Q[0][0]) 
-            Q[1][1] = np.sqrt(Q[1][1]) 
-            #Q[2][2] = np.sqrt(Q[0][0]) 
-            #Q[2][2] = np.sqrt(Q[0][0]) 
-            Q[3][3] = np.sqrt(Q[3][3]) 
+            for i in null_ind:
+                Q[i][i] = np.sqrt(Q[i][i])
         else:
-            Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
-            Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-            Q[3][3] = 0 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+            for i in null_ind:
+                Q[i][i] = 0
         #    Q[0][0] /= 1e2 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
         #    Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
         #    #Q[2][2] = 0 #set theta Q term to 0 REEEEEE HAHAHAHAHHAA
@@ -696,17 +692,11 @@ if __name__ == '__main__':
             #R = np.eye(action_size) * cost_func(horizon, dt) * 0 #NO controls applied
             R = np.eye(action_size) * 1e3
             if priority_cost:
-                Q[0][0] = np.sqrt(Q[0][0]) 
-                Q[1][1] = np.sqrt(Q[1][1]) 
-                #Q[2][2] = np.sqrt(Q[0][0]) 
-                #Q[2][2] = np.sqrt(Q[0][0]) 
-                Q[3][3] = np.sqrt(Q[3][3]) 
+                for i in null_ind:
+                    Q[i][i] = np.sqrt(Q[i][i])
             else:
-                Q[0][0] /= 1e2 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
-                Q[0][0] = 0 #set position Q term to 0 REEEEEE HAHAHAHAHHAA
-                #Q[2][2] = 0 #set theta Q term to 0 REEEEEE HAHAHAHAHHAA
-                Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-                Q[3][3] = 0 #set dtheta/dt Q term to 0 REEEEEE HAHAHAHAHHAA
+                for i in null_ind:
+                    Q[i][i] = 0
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
 
@@ -758,10 +748,10 @@ if __name__ == '__main__':
         MPC_DT = dt
         MPC_STEPS = 1
         #MPC_STEPS = int(MPC_HORIZON / MPC_DT) - 1
-        MPC_MAX_STEPS = int(horizon / dt / 2)
+        MPC_MAX_STEPS = int(horizon / dt)
         MPC_THRESHOLD = 0e-2
         
-        MPC_NOISY_OBS = True
+        MPC_NOISY_OBS = False
         MPC_NOISY_MU = np.array([0, 0])
         MPC_NOISY_SIG = np.eye(2) * 5
 
@@ -772,19 +762,22 @@ if __name__ == '__main__':
         action_shape = [1]
         action_size = 1
         
-        #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
-        cost_func = lambda h,dt:1e5
+        cost_func = lambda h,dt:1e4
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
+        null_ind = [1,]
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
-        Qf = np.eye(state_size) * cost_func(horizon, dt) * 1
-        R = np.eye(action_size) * cost_func(horizon, dt) * 0
-
-        #Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-        #Qf[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-        #Qf[1][1] = Qf[0][0] / 4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-        #Q[1][1] = Q[0][0]/4 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+        Qf = np.eye(state_size) * cost_func(horizon, dt) * 0.0
+        R = np.eye(action_size) * 1e0* 1
+        
+        priority_cost = True
+        if priority_cost:
+            for i in null_ind:
+                Q[i][i] = np.sqrt(Q[i][i])
+        else:
+            for i in null_ind:
+                Q[i][i] = 0
         #target = None
         target = np.array([0, 0], dtype = np.float64)
         #target = np.array([0.5, 0], dtype = np.float64)
@@ -812,7 +805,7 @@ if __name__ == '__main__':
         #x0 = np.array([0, np.pi/2],dtype=np.float64)
         #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
         ##x0 = np.array([np.pi, 0.0],dtype=np.float64) #NOTE: don't do 
-        x0 = np.array([0.1, 0.00],dtype=np.float64)
+        x0 = np.array([0.1, 0.10],dtype=np.float64)
         
         env.reset()
         env.state = x0.copy()
@@ -834,7 +827,7 @@ if __name__ == '__main__':
         env.state = x0.copy()
         for u in U:
             env.step(u)
-        print("Final State: ", env.state_history[-1])
+        print("ILQR Final State: ", env.state_history[-1])
         print("Target: ", target)
         env.generate_plots()
         input()
@@ -855,22 +848,24 @@ if __name__ == '__main__':
             env.state = xt.copy()
             for u in U:
                 env.step(u)
-            print("Final State: ", env.state_history[-1])
+            print("ILQR Final State: ", env.state_history[-1])
             print("Target: ", target)
             env.generate_plots()
             input()
         
         if MPC_COMPARISON:
             cost_func = lambda h,dt:1e8
-            #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
-            #cost_func = lambda h,dt:1e4
             Q = np.eye(state_size) * cost_func(horizon, dt) * 1
             #Qf = Q
             Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
             #R = np.eye(action_size) * cost_func(horizon, dt) * 0 #NO controls applied
-            R = np.eye(action_size) * 0e1
-            Q[1][1] = np.sqrt(Q[1][1]) #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
-            #Q[1][1] = 0 #set velocity Q term to 0 REEEEEE HAHAHAHAHHAA
+            R = np.eye(action_size) * 1e2
+            if priority_cost:
+                for i in null_ind:
+                    Q[i][i] = np.sqrt(Q[i][i])
+            else:
+                for i in null_ind:
+                    Q[i][i] = 0
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
 
@@ -902,7 +897,7 @@ if __name__ == '__main__':
                     print("Error: ", abs(sum(diff_func(xt, target))))
                     break
                 #input("NEXT STEP!")
-            print("Final State: ", env.state_history[-1])
+            print("MPC Final State: ", env.state_history[-1])
             print("Target: ", target)
             env.generate_plots()
             input()

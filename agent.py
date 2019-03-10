@@ -161,7 +161,7 @@ class Agent:
         else:
             mins = self.action_constraints[0]
             maxs = self.action_constraints[1]
-            return np.random.uniform(mins, maxs, (1, self.action_space))
+            return np.random.uniform(mins, maxs, (self.action_space))
 
 
     def get_experience(self, k) -> []: 
@@ -644,7 +644,8 @@ class PyTorchMPCAgent(MPCAgent, PyTorchAgent):
 
 class DDPMPCAgent(MPCAgent):
     def __init__(self, mpc_ddp : ILQG, 
-            reuse_shoots = True,
+            reuse_shoots = True, eps_base = 1e-1, eps_min = 2e-2,
+            eps_decay = 1e-7,
              *args, **kwargs): 
         super().__init__(*args, **kwargs)
         self.mpc_ddp = mpc_ddp
@@ -654,31 +655,41 @@ class DDPMPCAgent(MPCAgent):
         self.reuse_ind = 0
         self.deviation_threshold = 1e-1
 
+        self.eps = eps_base
+        self.eps_base = eps_base
+        self.eps_min = eps_min
+        self.eps_decay = eps_decay
+
     def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
-        action = None
-        if not self.reuse_shoots:
-            return super().evaluate(obs, *args, **kwargs)
+        if random.random() < self.eps:
+            self.eps = max(self.eps_min, self.eps - self.eps_decay)
+            #print("ACTION: ", self.sample_action(obs))
+            return self.sample_action(obs), None, None
         else:
-            if self.reuse_criterion(obs, *args, **kwargs) and (self.reuse_ind) < len(self.prev_actions):
-                #print("Reusing previous MPC trajectory!")
-                #print("Actions: ", self.prev_actions)
-                action = self.prev_actions[self.reuse_ind]
+            action = None
+            if not self.reuse_shoots:
+                return super().evaluate(obs, *args, **kwargs)
             else:
-                #print("Generating new MPC trajectory!")
-                self.reuse_ind = 0
-                traj = ()
-                max_r = -float('inf')
-                for k in range(self.k_shoots):
-                    states, actions, rewards = self.shoot(obs)
-                    if sum(rewards) > max_r:
-                        max_r = sum(rewards)
-                        traj = (states, actions, rewards)
-                states, actions, rewards = traj
-                self.prev_states = states
-                self.prev_actions = actions
-                action = actions[self.reuse_ind]
-            self.reuse_ind += 1
-        return action, None, None
+                if self.reuse_criterion(obs, *args, **kwargs) and (self.reuse_ind) < len(self.prev_actions):
+                    #print("Reusing previous MPC trajectory!")
+                    #print("Actions: ", self.prev_actions)
+                    action = self.prev_actions[self.reuse_ind]
+                else:
+                    #print("Generating new MPC trajectory!")
+                    self.reuse_ind = 0
+                    traj = ()
+                    max_r = -float('inf')
+                    for k in range(self.k_shoots):
+                        states, actions, rewards = self.shoot(obs)
+                        if sum(rewards) > max_r:
+                            max_r = sum(rewards)
+                            traj = (states, actions, rewards)
+                    states, actions, rewards = traj
+                    self.prev_states = states
+                    self.prev_actions = actions
+                    action = actions[self.reuse_ind]
+                self.reuse_ind += 1
+            return action, None, None
 
     def reuse_criterion(self, obs, *args, **kwargs):
         if not self.reuse_ind < len(self.prev_actions):
@@ -1342,6 +1353,6 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
         self.B = b_.cpu().detach().numpy()
         self.A.resize(self.module.a_shape)
         self.B.resize(self.module.b_shape)
-        print("A: ", self.A)
-        print("B: ", self.B)
+        #print("A: ", self.A)
+        #print("B: ", self.B)
 
