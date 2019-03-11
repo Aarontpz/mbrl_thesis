@@ -828,20 +828,16 @@ class PyTorchLinearSystemDynamicsLinearModule(PyTorchMLP):
         self.a_module = torch.nn.Linear(self.outdim, self.a_size, bias = True)
         self.b_module = torch.nn.Linear(self.outdim, self.b_size, bias = True)
 
-    def forward(self, x, u, *args, **kwargs):
+    def forward(self, x, *args, **kwargs):
         if type(x) == np.ndarray:
             x = torch.tensor(x, requires_grad = True, device = self.device).float()
             #x = x.unsqueeze(0)
-        if type(u) == np.ndarray:
-            u = torch.tensor(u, requires_grad = True, device = self.device).float()
-            #u = u.unsqueeze(0)
-            #u = u.transpose(0, 1)
         if type(x) == torch.Tensor and len(x.size()) > 1:
             x = x.squeeze(0)
         #print("X: ", x)    
         #print("U: ", u)    
-        inp = torch.cat((x, u), 0).float()
-        out = super().forward(inp)
+        #inp = torch.cat((x, u), 0).float()
+        out = super().forward(x)
         a_ = self.a_module(out).clamp(min=-1e3, max=1e3)
         b_ = self.b_module(out).clamp(min=-1e3, max=1e3)
         #print("A: ", a_)
@@ -1310,6 +1306,10 @@ class PyTorchModel(Model):
     def forward(self, xt, ut, dt, *args, **kwargs):
         pass
 
+    @abc.abstractmethod
+    def update(self, xt):
+        pass
+
     def forward_predict(self, xt, ut, dt):
         if type(xt) == np.ndarray:
             xt = torch.tensor(xt, requires_grad = True, device = self.module.device).float()
@@ -1325,7 +1325,7 @@ class PyTorchForwardDynamicsModel(PyTorchModel):
 class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
     '''Note: Output of PyTorchModel is FLATTENED A/B'''
     def forward(self, xt, ut, a_, b_):
-        self.update(xt, ut)
+        self.update(xt)
         #return LinearSystemModel.__call__(self, xt, ut)
         A = a_.reshape(self.module.a_shape)
         B = b_.reshape(self.module.b_shape)
@@ -1348,8 +1348,8 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
         return torch.mm(A, xt) + torch.mm(B, ut) #must build computational graph
         #return torch.mm(A, xt) + (b_ * ut) #must build computational graph
 
-    def update(self, xt, ut):
-        a_, b_ = self.module(xt, ut)
+    def update(self, xt):
+        a_, b_ = self.module(xt)
         self.A = a_.cpu().detach().numpy()
         self.B = b_.cpu().detach().numpy()
         self.A.resize(self.module.a_shape)

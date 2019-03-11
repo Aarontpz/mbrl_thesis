@@ -292,7 +292,7 @@ class DDP:
         for u in control:
             if self.update_model:
                 traj = (xt_, u)
-                self.model.update(*traj)
+                self.model.update(traj[0])
             dx = self.model(xt_, u)
             #print("Xt: %s \ndx: %s " % (xt_, dx))
             xt_ += dx * self.dt
@@ -367,7 +367,7 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                     fx = []
                     fu = []
                     for t in TRAJ:
-                        self.model.update(*t)
+                        self.model.update(t[0])
                         fx.append(self.model.d_dx(t[0], t[1], self.dt))
                         fu.append(self.model.d_du(t[0], t[1], self.dt))
                 else:
@@ -480,7 +480,7 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 Unew[i] = U[i] + k[i] + np.dot(K[i], deltax)
                 if self.update_model:
                     traj = (xnew, Unew[i])
-                    self.model.update(*traj)
+                    self.model.update(traj[0])
                 dx = self.model(xnew, Unew[i]) * self.dt
                 #print("Unew: ", Unew[i])
                 xnew += self.model(xnew, Unew[i]) * self.dt #get next state
@@ -538,7 +538,7 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
         for u in control:
             if self.update_model:
                 traj = (xt_, u)
-                self.model.update(*traj)
+                self.model.update(traj[0])
             dx = self.model(xt_, u)
             #print("Xt: %s \ndx: %s " % (xt_, dx))
             xt_ += dx * self.dt
@@ -561,6 +561,46 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                     assert("Negative cost - something's wrong!")
                 cost += self.cost(X[i], U[i], dt = self.dt)
         return cost
+
+
+    #def __init__(self, state_shape, state_size, 
+    #        action_shape, action_size,
+    #        model : Model, cost : Model = None, 
+    #        noise : Model = None, 
+    #        action_constraints = None, 
+    #        horizon = 10, dt = 0.001,
+    #        max_iterations = 1000, eps = 0.1,
+    #        update_model = True):
+class ISMC(DDP):
+    '''(Abstract, default LINEAR, STATIC) Implementation of iterative sliding mode controller.'''
+    def __init__(self, surface_base : np.ndarray,
+            *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.surface_base = surface_base
+        self.surface = self.surface_base
+
+    def step(self, xt):
+        if self.update_model:
+            self.model.update(xt)
+        self.update_surface(xt)
+        return self.compute_control(xt) 
+
+    def compute_control(self, xt) -> np.ndarray:
+        assert(issubclass(type(self.model), LinearSystemModel))
+        sign = self.compute_switch(xt)
+        ds_dx = self.get_surface_d_dx(xt)
+        magnitude = -np.linalg.inv(np.dot(ds_dx, self.model.B)) #TODO: Verify this step
+        magnitude *= np.dot(self.model.A, xt)
+        return ds_dx * magnitude * sign
+
+    def compute_switch(self, xt) -> int: 
+        return np.sign(np.dot(self.surface.T, xt))
+
+    def update_surface(self, xt):
+        pass
+
+    def get_surface_d_dx(self, xt):
+        return self.surface #NOTE: assumes linear
 
 
 def create_MPCController(control_base, *args, **kwargs):

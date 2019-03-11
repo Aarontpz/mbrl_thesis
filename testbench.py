@@ -816,10 +816,11 @@ if __name__ == '__main__':
             EPS_BASE = 1.5e-1
             EPS_MIN = 2e-2
             EPS_DECAY = 1e-7
-
+            DDP_MODE = 'ismc'
             ## 
             
             ## SMC-SPECIFIC ARGS
+            SURFACE_BASE = None
 
             ## DDP-SPECIFIC ARGS 
             LAMB_FACTOR = 10
@@ -839,7 +840,7 @@ if __name__ == '__main__':
                 pytorch_module = pytorch_class(device = device, indim = obs_size + action_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
             elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
-                pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size + action_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
             system_model = pytorch_model(pytorch_module, DT) 
 
@@ -897,18 +898,31 @@ if __name__ == '__main__':
                     cost = LQC(Q, R, Qf, target = target, 
                             diff_func = diff_func)
 
-
-            ddp = ILQG(LAMB_FACTOR, LAMB_MAX, DDP_INIT,
-                    obs_space, obs_size,
-                    [1, action_size], action_size,
-                    system_model, cost,
-                    None, 
-                    action_constraints, 
-                    horizon = int(HORIZON/DT), dt = DT, 
-                    max_iterations = DDP_MAX_ITERATIONS,
-                    eps = 1e-2,
-                    update_model = UPDATE_DDP_MODEL
-                    )
+            ddp = None
+            if DDP_MODE == 'ilqg':
+                ddp = ILQG(LAMB_FACTOR, LAMB_MAX, DDP_INIT,
+                        obs_space, obs_size,
+                        [1, action_size], action_size,
+                        system_model, cost,
+                        None, 
+                        action_constraints, 
+                        horizon = int(HORIZON/DT), dt = DT, 
+                        max_iterations = DDP_MAX_ITERATIONS,
+                        eps = 1e-2,
+                        update_model = UPDATE_DDP_MODEL
+                        )
+            elif DDP_MODE == 'ismc':
+                ddp = ISMC(np.ones(obs_size),
+                        obs_space, obs_size,
+                        [1, action_size], action_size,
+                        system_model, cost,
+                        None, 
+                        action_constraints, 
+                        horizon = int(HORIZON/DT), dt = DT, 
+                        max_iterations = DDP_MAX_ITERATIONS,
+                        eps = 1e-2,
+                        update_model = UPDATE_DDP_MODEL
+                        )
             
             DATASET_RECENT_PROB = 0.5
             
