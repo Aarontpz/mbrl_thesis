@@ -582,6 +582,8 @@ class ISMC(DDP):
     def step(self, xt):
         if self.update_model:
             self.model.update(xt)
+        if self.cost is not None and self.cost.target is not None:
+            xt = xt - self.cost.target
         self.update_surface(xt)
         return None, self.compute_control(xt) #TODO: make this NOT a subclass of DDP so we don't need this janky None returnval?
 
@@ -592,14 +594,16 @@ class ISMC(DDP):
         assert(issubclass(type(self.model), LinearSystemModel))
         sign = self.compute_switch(xt)
         ds_dx = self.get_surface_d_dx(xt)
-        magnitude = -np.linalg.inv(np.dot(ds_dx, self.model.B)) #TODO: Verify this step
-        magnitude *= np.dot(ds_dx, np.dot(self.model.A, xt))
-        #print("ds_dx: %s Magnitude: %s Sign: %s" % (ds_dx, magnitude, sign))
+        print("ds_dx: %s Sign: %s" % (ds_dx, sign))
+        print("ds_dx.T: ",  (ds_dx.T.shape))
+        print("DOT: ", np.linalg.det(np.dot(ds_dx.T, self.model.B)))
+        magnitude = -(2 * np.linalg.inv(np.dot(ds_dx.T, self.model.B))) #TODO: Verify this step
+        magnitude *= np.dot(ds_dx.T, np.dot(self.model.A, xt))
         return magnitude * sign
 
     def compute_switch(self, xt) -> int: 
         #print("X: %s Surface: %s " % (xt, self.surface))
-        return np.sign(np.dot(self.surface, xt))
+        return np.sign(np.dot(self.surface.T, xt))
 
     def update_surface(self, xt):
         pass

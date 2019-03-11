@@ -543,7 +543,7 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-WIDENING_CONST = 2 #indim * WIDENING_CONST = hidden layer size
+WIDENING_CONST = 3 #indim * WIDENING_CONST = hidden layer size
 mlp_initializer = None
 DISCRETE_AGENT = False
 
@@ -623,13 +623,13 @@ ENV_TYPE = 'walker'
 TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-EPS = 7e-2
-EPS_MIN = 0.5e-2
-EPS_DECAY = 1e-7
-GAMMA = 0.99
-ENV_TYPE = 'cartpole'
-TASK_NAME = 'swingup'
-#TASK_NAME = 'balance'
+#EPS = 7e-2
+#EPS_MIN = 0.5e-2
+#EPS_DECAY = 1e-7
+#GAMMA = 0.99
+#ENV_TYPE = 'cartpole'
+#TASK_NAME = 'swingup'
+##TASK_NAME = 'balance'
 
 MAXMIN_NORMALIZATION = True
 TRAIN_AUTOENCODER = False
@@ -912,7 +912,12 @@ if __name__ == '__main__':
                         update_model = UPDATE_DDP_MODEL
                         )
             elif DDP_MODE == 'ismc':
-                ddp = ISMC(np.ones((1, obs_size)),
+                print("Obs Size: ", obs_size)
+                #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
+                surface = np.eye(obs_size, M=action_size)
+                #surface = np.ones([obs_size, action_size])
+                print("Surface Function: ", surface)
+                ddp = ISMC(surface,
                         obs_space, obs_size,
                         [1, action_size], action_size,
                         system_model, cost,
@@ -938,7 +943,7 @@ if __name__ == '__main__':
                 LIB_TYPE, ENV_TYPE,
                 env, obs_size, action_size, action_constraints,
                 mlp_hdims, mlp_activations, 
-                lr = 5e-2, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+                lr = 5e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
                 discrete_actions = False, 
                 has_value_function = False) 
 

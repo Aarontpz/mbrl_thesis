@@ -616,6 +616,7 @@ if __name__ == '__main__':
             ddtheta += (mc + mp) * g * np.sin(x[2])
             dx = x[1] + (ddx) / x_denom + x[3] + (ddtheta) / (L * x_denom)
             sigma = np.array([1, 1, 1, 1]) #sliding surface definition
+            ucoeff = 1.5
             ucoeff = 2
             umin = -10
             umax = 10
