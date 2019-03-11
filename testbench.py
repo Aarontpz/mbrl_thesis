@@ -912,7 +912,7 @@ if __name__ == '__main__':
                         update_model = UPDATE_DDP_MODEL
                         )
             elif DDP_MODE == 'ismc':
-                ddp = ISMC(np.ones(obs_size),
+                ddp = ISMC(np.ones((1, obs_size)),
                         obs_space, obs_size,
                         [1, action_size], action_size,
                         system_model, cost,

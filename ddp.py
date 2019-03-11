@@ -583,18 +583,23 @@ class ISMC(DDP):
         if self.update_model:
             self.model.update(xt)
         self.update_surface(xt)
-        return self.compute_control(xt) 
+        return None, self.compute_control(xt) #TODO: make this NOT a subclass of DDP so we don't need this janky None returnval?
+
+    def forward_cost(self, X, U):
+        return 0.0
 
     def compute_control(self, xt) -> np.ndarray:
         assert(issubclass(type(self.model), LinearSystemModel))
         sign = self.compute_switch(xt)
         ds_dx = self.get_surface_d_dx(xt)
         magnitude = -np.linalg.inv(np.dot(ds_dx, self.model.B)) #TODO: Verify this step
-        magnitude *= np.dot(self.model.A, xt)
-        return ds_dx * magnitude * sign
+        magnitude *= np.dot(ds_dx, np.dot(self.model.A, xt))
+        #print("ds_dx: %s Magnitude: %s Sign: %s" % (ds_dx, magnitude, sign))
+        return magnitude * sign
 
     def compute_switch(self, xt) -> int: 
-        return np.sign(np.dot(self.surface.T, xt))
+        #print("X: %s Surface: %s " % (xt, self.surface))
+        return np.sign(np.dot(self.surface, xt))
 
     def update_surface(self, xt):
         pass
