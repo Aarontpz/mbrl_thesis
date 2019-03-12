@@ -134,13 +134,15 @@ def create_dm_humanoid_agent(agent_base, *args, **kwargs):
                     com_velocity = obs['com_velocity']
                     #head_height = obs['head_height']
                     head_height = np.asarray([obs['head_height'],])
-                    print("HEAD_HEIGHT: ", head_height)
-                    print("Current state: ", state)
                     torso_vertical = obs['torso_vertical']
                     state = np.concatenate((state, com_velocity, head_height, torso_vertical))
-            elif type(obs) == type(np.zeros(0)):
+                state = Variable(torch.tensor(state).float(), requires_grad = True)
+            elif type(obs) in [type(np.zeros(0)),]: 
+                state = Variable(torch.tensor(obs).float(), requires_grad = True)
+            elif type(obs) in [type(torch.tensor([0])),]:
                 state = obs
-            return Variable(torch.tensor(state).float(), requires_grad = True)
+            #return Variable(torch.tensor(state).float(), requires_grad = True)
+            return state
     
         def reward(self, st, at, *args, **kwargs):
             global TASK_NAME #GROOOOOOSSSSSSSTHH
@@ -176,7 +178,13 @@ def create_ddp_dm_humanoid_agent(agent_base, *args, **kwargs):
                     head_height = np.asarray([obs['head_height'],])
                     torso_vertical = obs['torso_vertical']
                     state = np.concatenate((state, com_velocity, head_height, torso_vertical))
-            elif type(obs) == type(np.zeros(0)):
+                #print("STATE HEAD_HEIGHT: ", state[63])
+                #print("STATE COM_VEL: ", state[60:63])
+                #print("STATE TORSO_VERTICAL: ", state[64:])
+                #print("Head: ", obs['head_height'])
+                #print("com_vel: ", obs['com_velocity'])
+                #print("torso_vel: ", obs['torso_vertical'])
+            elif type(obs) in [type(np.zeros(0)), type(torch.tensor([0]))]:
                 state = obs
             #return Variable(torch.tensor(state).float(), requires_grad = True)
             return state
@@ -863,11 +871,11 @@ if __name__ == '__main__':
                 target_inds = []
                 if ENV_TYPE == 'humanoid':
                     target = np.zeros(obs_size)
-                    head_height_ind = 61 + 3 #61 from angle+extrem+vel
+                    head_height_ind = 60 + 3 #61 from angle+extrem+vel
                     #torso_vertx_ind = 0
                     #torso_verty_ind = 0
-                    torso_vertz_ind = 61 + 5
-                    com_velx_ind = 61
+                    torso_vertz_ind = 60 + 4
+                    com_velx_ind = 60
                     #com_vely_ind = 0
                     #com_velz_ind = 0
 
