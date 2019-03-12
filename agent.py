@@ -665,6 +665,9 @@ class DDPMPCAgent(MPCAgent):
         if random.random() < self.eps:
             self.eps = max(self.eps_min, self.eps - self.eps_decay)
             #print("ACTION: ", self.sample_action(obs))
+            #flush stored state/action pairs
+            self.prev_states = []
+            self.prev_actions = []
             return self.sample_action(obs), None, None
         else:
             action = None
@@ -693,10 +696,10 @@ class DDPMPCAgent(MPCAgent):
             return action, None, None
 
     def reuse_criterion(self, obs, *args, **kwargs):
-        if not self.reuse_ind < len(self.prev_actions):
-            return False
-        return np.linalg.norm(obs - self.prev_states[self.reuse_ind]) < self.deviation_threshold
-        #return True
+        #if not self.reuse_ind < len(self.prev_actions):
+        #    return False
+        #return np.linalg.norm(obs - self.prev_states[self.reuse_ind]) < self.deviation_threshold
+        return True
         
     def shoot(self, st) -> ([], [], []):
         rewards = [0 for i in range(int(self.horizon/self.mpc_ddp.dt))]

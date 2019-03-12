@@ -1,3 +1,5 @@
+#Author: Aaron Parisi
+#3/11/19
 import tensorflow as tf
 import torch
 import torch.optim as optim
@@ -120,7 +122,7 @@ def create_dm_humanoid_agent(agent_base, *args, **kwargs):
     '''Helper function to implement "transform_observation", and, in the case of MPC agents,
     a reward function, for the walker2d environment.'''
     class DMHumanoidAgent(agent_base):
-        def transform_observation(self, obs, extra_info = False) -> Variable:
+        def transform_observation(self, obs, extra_info = True) -> Variable:
             '''Converts ordered-dictionary of position and velocity into
             1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
             if type(obs) == type(collections.OrderedDict()):
@@ -130,7 +132,10 @@ def create_dm_humanoid_agent(agent_base, *args, **kwargs):
                 state = np.concatenate((angles, extremities, velocity))
                 if extra_info:
                     com_velocity = obs['com_velocity']
-                    head_height = obs['head_height']
+                    #head_height = obs['head_height']
+                    head_height = np.asarray([obs['head_height'],])
+                    print("HEAD_HEIGHT: ", head_height)
+                    print("Current state: ", state)
                     torso_vertical = obs['torso_vertical']
                     state = np.concatenate((state, com_velocity, head_height, torso_vertical))
             elif type(obs) == type(np.zeros(0)):
@@ -157,7 +162,7 @@ def create_numpy_agent(agent_base, *args, **kwargs):
 def create_ddp_dm_humanoid_agent(agent_base, *args, **kwargs):
     '''Transform_observation transforms observation into Numpy array. '''
     class DDPHumanoidAgent(agent_base):
-        def transform_observation(self, obs, extra_info = False) -> Variable:
+        def transform_observation(self, obs, extra_info = True) -> Variable:
             '''Converts ordered-dictionary of position and velocity into
             1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
             if type(obs) == type(collections.OrderedDict()):
@@ -167,7 +172,8 @@ def create_ddp_dm_humanoid_agent(agent_base, *args, **kwargs):
                 state = np.concatenate((angles, extremities, velocity))
                 if extra_info:
                     com_velocity = obs['com_velocity']
-                    head_height = obs['head_height']
+                    #head_height = obs['head_height']
+                    head_height = np.asarray([obs['head_height'],])
                     torso_vertical = obs['torso_vertical']
                     state = np.concatenate((state, com_velocity, head_height, torso_vertical))
             elif type(obs) == type(np.zeros(0)):
@@ -261,7 +267,10 @@ def initialize_dm_environment(env_type, task_name, *args, **kwargs):
         obs_size = obs_space['position'].shape[0] + obs_space['velocity'].shape[0]
     elif ENV_TYPE == 'humanoid':
         obs_size = obs_space['joint_angles'].shape[0] + obs_space['extremities'].shape[0]
-        obs_size = obs_size + obs_space['velocity'].shape[0]#+1 for height
+        obs_size = obs_size + obs_space['velocity'].shape[0]
+        obs_size = obs_size + obs_space['com_velocity'].shape[0]
+        obs_size = obs_size + 1 #+1 for height
+        obs_size = obs_size + obs_space['torso_vertical'].shape[0]
 
     action_size = action_space.shape[0] 
     #action_size = 2
@@ -475,7 +484,7 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                         action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True, 
                         encode_inputs = encode_inputs, encoder = encoder_clone)
-                if (issubclass(type(agent), DDPMPCAgent)) and (hasattr(agent.mpc_ddp.model, 'module')):
+                elif (issubclass(type(agent), DDPMPCAgent)) and (hasattr(agent.mpc_ddp.model, 'module')):
                     clone = copy.deepcopy(agent)
                     #clone.cost = copy.deepcopy(agent.cost)
                     print("Clone: ", clone)
@@ -483,8 +492,10 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                     clone.mpc_ddp.model.module.device = device
                     launch_viewer(env, clone)    
                 else:
-                    clone = agent.clone()
-                    clone.module = copy.deepcopy(agent.module)
+                    module = copy.deepcopy(agent.module)
+                    agent.module = None
+                    clone = copy.deepcopy(agent)
+                    clone.module = module
                     clone.module.to(device)
                     launch_viewer(env, clone)    
                 print("RESUMING!")
@@ -614,14 +625,14 @@ ENV_TYPE = 'humanoid'
 #TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-EPS = 5e-2
-EPS_MIN = 2e-2
-EPS_DECAY = 1e-6
-GAMMA = 0.99
-ENV_TYPE = 'walker'
-#TASK_NAME = 'run'
-TASK_NAME = 'walk'
-TASK_NAME = 'stand'
+#EPS = 5e-2
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
+#GAMMA = 0.99
+#ENV_TYPE = 'walker'
+##TASK_NAME = 'run'
+#TASK_NAME = 'walk'
+#TASK_NAME = 'stand'
 
 #EPS = 7e-2
 #EPS_MIN = 0.5e-2
@@ -631,7 +642,7 @@ TASK_NAME = 'stand'
 #TASK_NAME = 'swingup'
 ##TASK_NAME = 'balance'
 
-MAXMIN_NORMALIZATION = True
+MAXMIN_NORMALIZATION = False
 TRAIN_AUTOENCODER = False
 
 ###CONTROL ENVIRONMENTS
@@ -813,9 +824,9 @@ if __name__ == '__main__':
             COLLECT_FORWARD_LOSS = False
             DT = 1e-2 
             #HORIZON = 0.8e-1
-            EPS_BASE = 1.5e-1
-            EPS_MIN = 2e-2
-            EPS_DECAY = 1e-7
+            #EPS_BASE = 1.5e-1
+            #EPS_MIN = 2e-2
+            #EPS_DECAY = 1e-7
             DDP_MODE = 'ismc'
             ## 
             
@@ -823,6 +834,7 @@ if __name__ == '__main__':
             SURFACE_BASE = None
 
             ## DDP-SPECIFIC ARGS 
+            LQG_FULL_ITERATION = False
             LAMB_FACTOR = 10
             LAMB_MAX = 1000
             DDP_INIT = 0.0
@@ -830,9 +842,9 @@ if __name__ == '__main__':
             DDP_MAX_ITERATIONS = 10
             K_SHOOTS = 1
             UPDATE_DDP_MODEL = True
-            REUSE_SHOOTS = False
-            mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [obs_size * WIDENING_CONST] 
+            REUSE_SHOOTS = True if DDP_MODE == 'ilqg' else False
+            mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
+            mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
             mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
             pytorch_class = PyTorchLinearSystemDynamicsLinearModule
             pytorch_model = PyTorchLinearSystemModel 
@@ -848,6 +860,32 @@ if __name__ == '__main__':
             #function, using RL
             cost = None
             if LIB_TYPE == 'dm':
+                target_inds = []
+                if ENV_TYPE == 'humanoid':
+                    target = np.zeros(obs_size)
+                    head_height_ind = 61 + 3 #61 from angle+extrem+vel
+                    #torso_vertx_ind = 0
+                    #torso_verty_ind = 0
+                    torso_vertz_ind = 61 + 5
+                    com_velx_ind = 61
+                    #com_vely_ind = 0
+                    #com_velz_ind = 0
+
+                    target_head_height = 1.4
+                    target_vertz_val = 0.9 #MINIMAL upright value
+                    target_com_velx_val = 0#TRY to have it run in straight line
+                    target[head_height_ind] = target_head_height
+                    target[torso_vertz_ind] = target_vertz_val #TODO: confirm this
+                    target[com_velx_ind] = target_com_velx_val
+                    target_inds = [head_height_ind, torso_vertz_ind, com_velx_ind]
+                    
+                    if TASK_NAME == 'walk':
+                        target_com_velx_val = 1
+                    elif TASK_NAME == 'run':
+                        target_com_velx_val = 10
+                    Q = np.eye(obs_size) * 1e8
+                    Qf = Q
+                    R = np.eye(action_size) * 1e3
                 if ENV_TYPE == 'walker':
                     #cost is manually set as walker height and
                     #center-of-mass horizontal velocity, conditioned
@@ -859,24 +897,10 @@ if __name__ == '__main__':
                     com_vel_ind = 30 #NO obs directly corresponds to com velocity
                     target[height_ind] = 2.0
                     target[upright_ind] = 1.0 #TODO: confirm this
+                    target_inds = [height_ind, upright_ind, com_vel_ind]
                     Q = np.eye(obs_size) * 1e8
-                    priority_cost = True
-                    if priority_cost:
-                        for i in range(obs_size):
-                            if i not in [height_ind, upright_ind, com_vel_ind]:
-                                Q[i][i] = np.sqrt(Q[i][i])
-                            if i == com_vel_ind and TASK_TYPE not in ['walk', 'run']:
-                                Q[i][i] = np.sqrt(Q[i][i])
-                    else:
-                        for i in range(obs_size):
-                            if i not in [height_ind, upright_ind, com_vel_ind]:
-                                Q[i][i] = 0
                     Qf = Q
                     R = np.eye(action_size) * 1e3
-                    diff_func = lambda t,x:x - t 
-                    print("Q: ", Q)
-                    cost = LQC(Q, R, Qf, target = target, 
-                            diff_func = diff_func)
                 if ENV_TYPE == 'cartpole':
                     #cost is manually set as deviation from pole upright
                     #position.
@@ -885,22 +909,28 @@ if __name__ == '__main__':
                     theta_ind = 1 #based on pole-angle cosine, rep theta
                     target_theta = -0.0 #target pole position
                     target[theta_ind] = target_theta
+                    target_inds = [theta_ind]
                     Q = np.eye(obs_size) * 1e8
-                    priority_cost = True
-                    for i in range(obs_size):
-                        if i != theta_ind:
-                            Q[i][i] = np.sqrt(Q[i][i])
                     Qf = Q
-                    R = np.eye(action_size) * 1e2
-                    diff_func = lambda t,x:x - t 
-                    print("Q: ", Q)
-                    print("R: ", R)
-                    cost = LQC(Q, R, Qf, target = target, 
-                            diff_func = diff_func)
+                    R = np.eye(action_size) * 1e3
+                priority_cost = True
+                if priority_cost:
+                    for i in range(obs_size):
+                        if i not in target_inds:
+                            Q[i][i] = np.sqrt(Q[i][i])
+                else:
+                    for i in range(obs_size):
+                        if i not in target_inds:
+                            Q[i][i] = 0
+                diff_func = lambda t,x:x - t 
+                print("Q: ", Q)
+                cost = LQC(Q, R, Qf, target = target, 
+                        diff_func = diff_func)
 
             ddp = None
             if DDP_MODE == 'ilqg':
-                ddp = ILQG(LAMB_FACTOR, LAMB_MAX, DDP_INIT,
+                ddp = ILQG(LQG_FULL_ITERATION,
+                        LAMB_FACTOR, LAMB_MAX, DDP_INIT,
                         obs_space, obs_size,
                         [1, action_size], action_size,
                         system_model, cost,
@@ -935,7 +965,7 @@ if __name__ == '__main__':
             
             agent, trainer =  create_pytorch_agnostic_mbrl(cost, 
                 ddp, REUSE_SHOOTS,
-                EPS_BASE, EPS_MIN, EPS_DECAY, 
+                EPS, EPS_MIN, EPS_DECAY, 
                 dataset,
                 DT, HORIZON, K_SHOOTS,
                 BATCH_SIZE, COLLECT_FORWARD_LOSS, 
@@ -943,7 +973,7 @@ if __name__ == '__main__':
                 LIB_TYPE, ENV_TYPE,
                 env, obs_size, action_size, action_constraints,
                 mlp_hdims, mlp_activations, 
-                lr = 5e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+                lr = 5e-4, adam_betas = (0.9, 0.999), momentum = 1e-3, 
                 discrete_actions = False, 
                 has_value_function = False) 
 
@@ -977,8 +1007,8 @@ if __name__ == '__main__':
                                 reward = 0.0
                             #print("TIMESTEP %s: %s" % (step, timestep))
                             observation = timestep.observation
+                            observation = agent.transform_observation(observation)
                             if MAXMIN_NORMALIZATION:
-                                observation = agent.transform_observation(observation)
                                 if type(observation) == torch.Tensor:
                                     observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
                                 else:
