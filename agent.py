@@ -662,6 +662,9 @@ class DDPMPCAgent(MPCAgent):
         self.eps_decay = eps_decay
 
     def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
+        if isinstance(self.mpc_ddp, ISMC):
+            _, action = self.mpc_ddp.step(obs) 
+            return action.flatten(), None, None
         if random.random() < self.eps:
             self.eps = max(self.eps_min, self.eps - self.eps_decay)
             #print("ACTION: ", self.sample_action(obs))
@@ -1333,7 +1336,7 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
         A = a_.reshape(self.module.a_shape)
         B = b_.reshape(self.module.b_shape)
         #print("A: %s \nB: %s" % (A, B))
-        if type(xt) == np.ndarray:
+        if type(xt) == type(np.array([0])):
             xt = torch.tensor(xt, requires_grad = True, device = self.module.device).float()
             xt = xt.unsqueeze(0)
         if type(xt) == torch.Tensor and xt.size()[0] < xt.size()[1]:
@@ -1342,13 +1345,20 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
             ut = torch.tensor(ut, requires_grad = True, device = self.module.device).float()
             ut = ut.unsqueeze(0)
             ut = ut.transpose(0, 1)
-
-        #print("A: ", A)
-        #print("Xt: ", xt)
-        #print("A*xt: ", torch.mm(A, xt))
-        #print("B*ut: ", torch.mm(B, ut))
+        print("A: ", A.shape)
+        print("xt: ", xt.shape)
+        ax = torch.mm(A, xt)
+        #if len(ax.shape) < 2:
+        #    ax = ax.squeeze(0)
+        bu = torch.mm(B, ut)
+        print("Ut: ", type(ut))
+        print("Ut: ", ut.shape)
+        print("A: ", A)
+        print("Xt: ", xt)
+        print("A*xt: ", (ax).shape)
+        print("B*ut: ", (bu).shape)
         #print("SUM: ", torch.mm(A, xt) + torch.mm(B, ut))
-        return torch.mm(A, xt) + torch.mm(B, ut) #must build computational graph
+        return ax + bu #must build computational graph
         #return torch.mm(A, xt) + (b_ * ut) #must build computational graph
 
     def update(self, xt):
@@ -1357,6 +1367,6 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
         self.B = b_.cpu().detach().numpy()
         self.A.resize(self.module.a_shape)
         self.B.resize(self.module.b_shape)
-        #print("A: ", self.A)
-        #print("B: ", self.B)
+        print("A: ", self.A.shape)
+        print("B: ", self.B.shape)
 

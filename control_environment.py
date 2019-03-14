@@ -1,3 +1,5 @@
+#Author: Aaron Parisi
+#3/11/19
 import abc
 
 import numpy as np
@@ -159,6 +161,8 @@ class ControlEnvironment(ModelledEnvironment):
                 self.secondary_control_fig = plt.figure()
             fig = self.secondary_control_fig
         y = self.control_history 
+        if len(y[0].shape) >= 2:
+            y = [c[0] for c in y]
         length = len(self.control_history)
         x = [i * self.ts for i in range(length)] 
         plt.figure(fig.number)
@@ -617,7 +621,7 @@ if __name__ == '__main__':
             dx = x[1] + (ddx) / x_denom + x[3] + (ddtheta) / (L * x_denom)
             sigma = np.array([1, 1, 1, 1]) #sliding surface definition
             ucoeff = 1.5
-            ucoeff = 2
+            #ucoeff = 2
             umin = -10
             umax = 10
             ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)

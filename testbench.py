@@ -91,6 +91,9 @@ def create_dm_walker_agent(agent_base, *args, **kwargs):
                 state = np.concatenate((orientation, vel, height))
             elif type(obs) == type(np.zeros(0)):
                 state = obs
+            #elif isinstance(obs, type(torch.tensor)):
+            elif type(obs) == type(torch.tensor([0])):
+                return obs
             return Variable(torch.tensor(state).float(), requires_grad = True)
     
         def reward(self, st, at, *args, **kwargs):
@@ -633,14 +636,14 @@ ENV_TYPE = 'humanoid'
 #TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-#EPS = 5e-2
-#EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.99
-#ENV_TYPE = 'walker'
-##TASK_NAME = 'run'
-#TASK_NAME = 'walk'
-#TASK_NAME = 'stand'
+EPS = 5e-2
+EPS_MIN = 2e-2
+EPS_DECAY = 1e-6
+GAMMA = 0.99
+ENV_TYPE = 'walker'
+#TASK_NAME = 'run'
+TASK_NAME = 'walk'
+TASK_NAME = 'stand'
 
 #EPS = 7e-2
 #EPS_MIN = 0.5e-2
@@ -846,10 +849,11 @@ if __name__ == '__main__':
             LAMB_FACTOR = 10
             LAMB_MAX = 1000
             DDP_INIT = 0.0
-            HORIZON = 1.5e-1
-            DDP_MAX_ITERATIONS = 10
+            HORIZON = 0.5e-1
+            DDP_MAX_ITERATIONS = 5
             K_SHOOTS = 1
             UPDATE_DDP_MODEL = True
+            ILQG_SMC = True
             REUSE_SHOOTS = True if DDP_MODE == 'ilqg' else False
             mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
             mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
@@ -937,8 +941,7 @@ if __name__ == '__main__':
 
             ddp = None
             if DDP_MODE == 'ilqg':
-                ddp = ILQG(LQG_FULL_ITERATION,
-                        LAMB_FACTOR, LAMB_MAX, DDP_INIT,
+                ddp = ILQG(LAMB_FACTOR, LAMB_MAX, DDP_INIT,
                         obs_space, obs_size,
                         [1, action_size], action_size,
                         system_model, cost,
@@ -949,6 +952,23 @@ if __name__ == '__main__':
                         eps = 1e-2,
                         update_model = UPDATE_DDP_MODEL
                         )
+                if ILQG_SMC == True:
+                    surface = np.eye(obs_size, M=action_size)
+                    #surface = np.ones([obs_size, action_size])
+                    print("Surface Function: ", surface)
+                    smc = ISMC(surface,
+                            obs_space, obs_size,
+                            [1, action_size], action_size,
+                            system_model, cost,
+                            None, 
+                            action_constraints, 
+                            horizon = int(HORIZON/DT), dt = DT, 
+                            max_iterations = DDP_MAX_ITERATIONS,
+                            eps = 1e-2,
+                            update_model = UPDATE_DDP_MODEL
+                            )
+                    ddp.set_smc(smc)
+
             elif DDP_MODE == 'ismc':
                 print("Obs Size: ", obs_size)
                 #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])

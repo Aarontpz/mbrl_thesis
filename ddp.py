@@ -4,19 +4,6 @@ from control_environment import *
 
 import numpy as np
 
-if True:
-    import torch
-    from torch.autograd import grad
-    from torchviz import make_dot
-    
-    ## PyTorch helper functions
-    def dx(f, x, create_graph = True):
-        return grad(f, x, create_graph = create_graph)
-    
-    def dxx(f, x, create_graph = True):
-        pass
-    ##
-
 class Model: 
     #TODO: Use LINEAR MODEL/Env to test iLQG / verify convergence
     #TODO: COMPARE WITH FINITE DIFFERENCING
@@ -64,6 +51,26 @@ class Model:
         '''Returns dx, the change in state xt given control ut
         and timestep size dt.'''
         pass
+
+
+
+if True:
+    import torch
+    from torch.autograd import grad
+    from torchviz import make_dot
+    
+    ## PyTorch helper functions
+    def dx(f, x, create_graph = True):
+        return grad(f, x, create_graph = create_graph)
+    
+    def dxx(f, x, create_graph = True):
+        pass
+
+
+    class PyTorchDecoupledSystemModel(Model):
+        pass
+
+    ##
 
 class LinearQuadraticModel(Model):
     '''Generic linear quadratic model to use with linear quadratic
@@ -214,15 +221,19 @@ class LinearSystemModel(Model):
     def __call__(self, xt, ut, dt=None, A = None, B = None, *args, **kwargs):
         A = A if A is not None else self.A
         B = B if B is not None else self.B
-        #print("B: %s ut: %s" % (B, ut))
+        print("B: %s ut: %s" % (B.shape, ut.shape))
         ax = np.dot(A, xt)
         if len(ut.shape) == 1 and len(B.shape) == 1:
             bu = B * ut
         else:
             bu = np.dot(B, ut)
-        #print("A*xt: ",ax)
-        #print("B*ut: ",bu)
-        #print("A*xt + B*ut: ",ax+bu)
+        if len(ax.shape) < 2:
+            ax = ax[..., np.newaxis]
+        if len(bu.shape) < 2:
+            bu = bu[..., np.newaxis]
+        print("A*xt: ",ax.shape)
+        print("B*ut: ",bu.shape)
+        print("A*xt + B*ut: ",(ax+bu).shape)
         return ax + bu
     
 class ControlEnvironmentModel(Model):
@@ -333,7 +344,7 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
         self.lamb_max = lamb_max
         self.initial_ut = initialization
 
-    def step(self, xt) -> (np.ndarray, np.ndarray):
+    def step(self, xt, U = None) -> (np.ndarray, np.ndarray):
         '''Perform a step through iLQG, starting with a given
         state xt, initializing a control sequence, and performing
         backwards recursion on the results until convergence is met
@@ -342,11 +353,15 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
         Based on https://github.com/studywolf/control/blob/master/studywolf_control/controllers/ilqr.py and details in https://homes.cs.washington.edu/~todorov/papers/TassaICRA14.pdf.
         '''
         sim_new_trajectory = True #I MISSED THIS IN THE ALGORITHM
-        U = self.initialize_constant_control(xt, self.initial_ut)
+        if hasattr(self, 'smc'):
+            U = self.initialize_smc_control(xt)
+        else:
+            U = self.initialize_constant_control(xt, self.initial_ut)
         #print('States: ', X)
         #input()
         #self.model.env.generate_state_history_plot(X)
         #input()
+        print("INITIAL CONTROLS: ", U.shape)
         #self.cost.terminal_mode()
         #cost = self.cost(X[-1], U[-1], self.dt) #dt = 1 for terminal?
         #self.cost.normal_mode()
@@ -357,6 +372,8 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
             #print("STEP: ", ii)
             if sim_new_trajectory:
                 X = self.forward(xt, U)
+                #if len(X[0].shape) < 2:
+                #    X = [x.flatten() for x in X]
                 cost = self.forward_cost(X, U) #dt = 1 for terminal?
                 prev_cost = cost.copy()
                 ## Forward Rollout
@@ -483,9 +500,11 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                     self.model.update(traj[0])
                 dx = self.model(xnew, Unew[i]) * self.dt
                 #print("Unew: ", Unew[i])
-                xnew += self.model(xnew, Unew[i]) * self.dt #get next state
+                if len(dx) > 1:
+                    dx = dx.flatten()
+                print("Xnew: %s dx: %s" % (xnew.shape, dx.shape))
+                xnew += dx #get next state
                 #xnew += self.model(xnew, Unew[i]) #get next state
-                #print("Xnew: %s dx: %s" % (xnew, dx))
             
             Xnew = self.forward(xt, Unew) #use updated control sequence
             costnew = self.forward_cost(Xnew, Unew) #dt = 1 for terminal?
@@ -524,6 +543,29 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
     def initialize_constant_control(self, xt, initial=0.0) -> np.ndarray:
         #return np.ones((int((self.horizon)/self.dt), self.action_size))  * self.initial_ut 
         return np.ones((self.horizon - 1, self.action_size))  * self.initial_ut 
+    def set_smc(self, smc):
+        self.smc = smc
+
+    def initialize_smc_control(self, xt) -> np.ndarray: 
+        #TODO TODO TODO: current method performs euler integration TWICE needlessly
+        assert(hasattr(self, 'smc'))
+        #assert(type(self.model) == LinearSystemModel or 
+        #        type(self.model) == PyTorchDecoupledSystemModel)
+        xt_ = xt.copy()
+        if len(xt_.shape) < 2:
+            xt_ = xt_[..., np.newaxis]
+        U = []
+        for i in range(self.horizon): 
+            _, u = self.smc.step(xt_)
+            U.append(u)
+            print("U: ", u)
+            np.clip(u, -1e2, 1e2, out = u)
+            dx = self.model(xt_, u)
+            print("Xt: %s \ndx: %s " % (xt_.shape, dx.shape))
+            xt_ += dx * self.dt
+        if len(u[0].shape) < 2:
+            U = [u.flatten() for u in U]
+        return np.array(U)
 
     def initialize_random_control(self, xt) -> np.ndarray:
         pass
@@ -540,7 +582,8 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 traj = (xt_, u)
                 self.model.update(traj[0])
             dx = self.model(xt_, u)
-            #print("Xt: %s \ndx: %s " % (xt_, dx))
+            if len(dx) > 1:
+                dx = dx.flatten()
             xt_ += dx * self.dt
             #xt_ += dx
             #xt_[0] = xt_[0] % np.pi
@@ -563,6 +606,7 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
         return cost
 
 
+
     #def __init__(self, state_shape, state_size, 
     #        action_shape, action_size,
     #        model : Model, cost : Model = None, 
@@ -581,6 +625,8 @@ class ISMC(DDP):
 
     def step(self, xt):
         if self.update_model:
+            if len(xt.shape) > 1:
+                xt = xt.flatten()
             self.model.update(xt)
         if self.cost is not None and self.cost.target is not None:
             xt = xt - self.cost.target
@@ -594,12 +640,23 @@ class ISMC(DDP):
         assert(issubclass(type(self.model), LinearSystemModel))
         sign = self.compute_switch(xt)
         ds_dx = self.get_surface_d_dx(xt)
-        print("ds_dx: %s Sign: %s" % (ds_dx, sign))
-        print("ds_dx.T: ",  (ds_dx.T.shape))
+        #print("ds_dx: %s Sign: %s" % (ds_dx, sign))
+        #print("ds_dx.T: ",  (ds_dx.T.shape))
+        print("B: ", self.model.B)
         print("DOT: ", np.linalg.det(np.dot(ds_dx.T, self.model.B)))
         magnitude = -(2 * np.linalg.inv(np.dot(ds_dx.T, self.model.B))) #TODO: Verify this step
         magnitude *= np.dot(ds_dx.T, np.dot(self.model.A, xt))
-        return magnitude * sign
+        if len(sign.shape) < 2:
+            sign = sign[..., np.newaxis]
+        print("mag: ", magnitude.shape)
+        print("sign: ", sign.shape)
+        #out = magnitude * sign
+        out = np.dot(magnitude, sign)
+        #if len(out.shape) < 2:
+        #    out = out[..., np.newaxis]
+        print("OUT SHAPE: ", out.shape)
+        np.clip(out, -1e2, 1e2, out = out)
+        return out 
 
     def compute_switch(self, xt) -> int: 
         #print("X: %s Surface: %s " % (xt, self.surface))
@@ -744,7 +801,15 @@ if __name__ == '__main__':
                 dt = dt,
                 max_iterations = max_iterations, eps = eps,
                 update_model = update_model)
-        
+        #can't decouple Cartpole dynamics currently....... 
+        #smc = ISMC(np.eye(state_size, M=action_size),
+        #        state_shape, state_size, action_shape, action_size,
+        #        model, cost, None, action_constraints, #no noise model, iLQR
+        #        horizon = int(horizon*1/dt),
+        #        dt = dt,
+        #        max_iterations = max_iterations, eps = eps,
+        #        update_model = update_model)
+        #ilqg.set_smc(smc)
 
         X, U = ilqg.step(x0)
         #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
