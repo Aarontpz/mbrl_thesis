@@ -609,24 +609,33 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 Kv[i] = np.dot(ricatti, (Bk.T))
                 Ku[i] = np.dot(ricatti, R)
                 print("K: %s \n Kv: %s \n Ku: %s" % (K[i], Kv[i], Ku[i]))
-                S = Ak.T * S*(Ak - np.dot(Bk, K[i])) + self.cost.Q.Q
-                print("V: ", v[i])
+                S = np.dot(np.dot(Ak.T, S), (Ak - np.dot(Bk, K[i]))) + Q
                 v[i] = np.dot((Ak - np.dot(Bk, K[i])).T , v[i+1])
-                u_term = np.dot(K[i].T, np.dot(self.cost.R.Q, U[i]))
+                print("V: ", v[i])
+                u_term = np.dot(K[i].T, np.dot(R, U[i]))
                 if len(u_term.shape) < 2:
                     u_term = u_term[..., np.newaxis]
+                print("u_term: ", u_term)
                 v[i] -= u_term
-                x_term = np.dot(self.cost.Q.Q, X[i])
+                x_term = np.dot(Q, X[i])
                 if len(x_term.shape) < 2:
                     x_term = x_term[..., np.newaxis]
+                print("X_term: ", x_term)
                 v[i] += u_term
+                print("V: ", v[i])
+                input()
 
+            #input()
             #forward pass to calculate new control sequence Unew
             #based on U' = U + deltaU = ut + kt + Kt * delta-xt
             xnew = xt.copy()
             Unew = np.zeros((self.horizon, self.action_size, 1)) #"new" control sequence
+            deltax = np.zeros(xnew.shape)
+            if len(deltax.shape) < 2:
+                deltax = deltax[..., np.newaxis]
             for i in range(self.horizon - 1):
-                deltax = xnew - X[i]
+                print("Deltax: ", deltax)
+                #deltax = xnew - X[i]
                 deltau = -np.dot(K[i],deltax) 
                 if len(deltau.shape) < 2:
                     deltau = deltau[..., np.newaxis]
@@ -639,16 +648,27 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 if self.update_model:
                     traj = (xnew, Unew[i])
                     self.model.update(traj[0])
-                dx = self.model(xnew, Unew[i]) * self.dt
+                #dx = self.model(xnew, Unew[i]) * self.dt
                 #print("Unew: ", Unew[i])
-                xnew += self.model(xnew, Unew[i]) * self.dt #get next state
+                #xnew += self.model(xnew, Unew[i]) * self.dt #get next state
+                Ak = fx[i]
+                Bk = fu[i]
+                if len(Bk.shape) < 2:
+                    Bk = Bk[..., np.newaxis]
                 #xnew += self.model(xnew, Unew[i]) #get next state
-                #print("Xnew: %s dx: %s" % (xnew, dx))
+                print("Ak: ", Ak)
+                print("deltau: ", deltau.shape)
+                print("Ax*dx: ", np.dot(Ak, deltax))
+                print("Bu*du: ", np.dot(Bk, deltau))
+                deltax = np.dot(Ak, deltax) + np.dot(Bk, deltau)
             
             Xnew = self.forward(xt, Unew) #use updated control sequence
             costnew = self.forward_cost(Xnew, Unew) #dt = 1 for terminal?
             print("NEWCOST: ", costnew)
             print("Original: ", cost)
+            input()
+            X = Xnew.copy()
+            U = Unew.copy()
             #LM Heuristic:
             # Based on change in cost, update lambda to move optimization
             # toward 2nd (Newton's) or 1st (Gradient Descent) order method
@@ -826,7 +846,7 @@ def create_MPCController(control_base, *args, **kwargs):
 
 if __name__ == '__main__':
     LINEARIZED_PENDULUM_TEST = False
-    NONLINEAR_PENDULUM_TEST = True
+    NONLINEAR_PENDULUM_TEST = False
     
     NONLINEAR_CARTPOLE_TEST = True
     ##NONLINEAR CARTPOLE TEST
@@ -876,13 +896,13 @@ if __name__ == '__main__':
         #    return x-t
         #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
         null_ind = [0, 1, 3] #TODO: control INPUT, not ERROR?!
-        cost_func = lambda h,dt:1e2
+        cost_func = lambda h,dt:1e4
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
         Qf = np.eye(state_size) * cost_func(horizon, dt) * 1.0
-        R = np.eye(action_size) * 1e0* 1
+        R = np.eye(action_size) * 1e1* 1
 
         priority_cost = True
         if priority_cost:
@@ -1113,7 +1133,8 @@ if __name__ == '__main__':
         env.reset()
         env.state = x0.copy()
         #
-        FULL_ITERATIONS = True
+        update_model = False
+        FULL_ITERATIONS = False
         ilqg = ILQG(FULL_ITERATIONS,
                 lamb_factor,
                 lamb_max,
