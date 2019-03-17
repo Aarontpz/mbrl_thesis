@@ -336,7 +336,8 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
 
     Reference material: https://studywolf.wordpress.com/2016/02/03/the-iterative-linear-quadratic-regulator-method/
     '''
-    def __init__(self, lamb_factor = 10, lamb_max = 1000, 
+    def __init__(self, full_iterations = False, 
+            lamb_factor = 10, lamb_max = 1000, 
             initialization = 0.0, *args, **kwargs):
         super().__init__(*args, **kwargs)
         print("INITIALIZATION: ", initialization)
@@ -344,7 +345,16 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
         self.lamb_max = lamb_max
         self.initial_ut = initialization
 
-    def step(self, xt, U = None) -> (np.ndarray, np.ndarray):
+        self.full_iterations = full_iterations
+
+
+    def step(self, xt) -> (np.ndarray, np.ndarray):
+        if self.full_iterations:
+            return self._step_full_iterations(xt)
+        else:
+            return self._step_closed_form(xt)
+
+    def _step_full_iterations(self, xt, U = None) -> (np.ndarray, np.ndarray):
         '''Perform a step through iLQG, starting with a given
         state xt, initializing a control sequence, and performing
         backwards recursion on the results until convergence is met
@@ -537,7 +547,135 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                     break
         #input("Converged after %s steps!" % (ii))
         return X, U
+    
+    def _step_closed_form(self, xt) -> (np.ndarray, np.ndarray):
+        sim_new_trajectory = True #I MISSED THIS IN THE ALGORITHM
+        U = self.initialize_constant_control(xt, self.initial_ut)
+        lamb = 1 
+        ii = 0
+        for ii in range(self.max_iterations): 
+            #print("STEP: ", ii)
+            if sim_new_trajectory:
+                X = self.forward(xt, U)
+                cost = self.forward_cost(X, U) #dt = 1 for terminal?
+                prev_cost = cost.copy()
+                ## Forward Rollout
+                TRAJ = [t for t in zip(X, U)]
+                #print("TRAJ: ", [t for t in TRAJ])
+                #calculate local derivatives along trajectories
+                if self.update_model:
+                    fx = []
+                    fu = []
+                    for t in TRAJ:
+                        self.model.update(t[0])
+                        fx.append(self.model.d_dx(t[0], t[1], self.dt))
+                        fu.append(self.model.d_du(t[0], t[1], self.dt))
+                else:
+                    fx = [self.model.d_dx(t[0], t[1], self.dt) for t in TRAJ]
+                    fu = [self.model.d_du(t[0], t[1], self.dt) for t in TRAJ]
+                #calculate first and 2nd derivatives for cost along traj
+                #TODO TODO: should the LAST element be cost.d_dx in TERMINAL mode?
+                sim_new_trajectory = False
 
+
+            v = np.zeros((self.horizon, self.state_size, 1))
+            K = np.zeros((self.horizon, self.action_size, self.state_size))
+            Kv = np.zeros((self.horizon, self.action_size, self.state_size)) #
+            Ku = np.zeros((self.horizon, self.action_size, self.action_size)) #
+            S = self.cost.Qf.Q #initialize cost-to-go at TERMINAL state
+            self.cost.terminal_mode()
+            v[-1] = self.cost(X[-1], None) 
+            self.cost.normal_mode()
+            print("VN: ", v[-1])
+            ## (CLOSED-FORM) Backwards Rollout
+            for i in reversed(range(self.horizon - 1)):  
+                #From Todorov: "The Q-function is the discrete-time 
+                #analogue of the Hamiltonian, sometimes known as the 
+                #pseudo-Hamiltonian"
+
+                #https://homes.cs.washington.edu/~todorov/papers/LiICINCO04.pdf
+                Ak = fx[i]
+                Bk = fu[i]
+                if len(Bk.shape) < 2:
+                    Bk = Bk[..., np.newaxis]
+                if len(Ak.shape) < 2:
+                    Ak = Ak[..., np.newaxis]
+                Q = self.cost.Q.Q
+                R = self.cost.R.Q
+                ricatti = np.linalg.inv(np.dot(Bk.T, np.dot(S, Bk)) + R)
+                print("Ricatti: ", ricatti.shape)
+                print("R: ", R.shape)
+                K[i] = np.dot(ricatti, (np.dot(Bk.T, np.dot(S, Ak))))
+                Kv[i] = np.dot(ricatti, (Bk.T))
+                Ku[i] = np.dot(ricatti, R)
+                print("K: %s \n Kv: %s \n Ku: %s" % (K[i], Kv[i], Ku[i]))
+                S = Ak.T * S*(Ak - np.dot(Bk, K[i])) + self.cost.Q.Q
+                print("V: ", v[i])
+                v[i] = np.dot((Ak - np.dot(Bk, K[i])).T , v[i+1])
+                u_term = np.dot(K[i].T, np.dot(self.cost.R.Q, U[i]))
+                if len(u_term.shape) < 2:
+                    u_term = u_term[..., np.newaxis]
+                v[i] -= u_term
+                x_term = np.dot(self.cost.Q.Q, X[i])
+                if len(x_term.shape) < 2:
+                    x_term = x_term[..., np.newaxis]
+                v[i] += u_term
+
+            #forward pass to calculate new control sequence Unew
+            #based on U' = U + deltaU = ut + kt + Kt * delta-xt
+            xnew = xt.copy()
+            Unew = np.zeros((self.horizon, self.action_size, 1)) #"new" control sequence
+            for i in range(self.horizon - 1):
+                deltax = xnew - X[i]
+                deltau = -np.dot(K[i],deltax) 
+                if len(deltau.shape) < 2:
+                    deltau = deltau[..., np.newaxis]
+                deltau -= np.dot(Kv[i],v[i+1]) 
+                u_term = np.dot(Ku[i], U[i])
+                if len(u_term.shape) < 2:
+                    u_term = u_term[..., np.newaxis]
+                deltau -= u_term
+                Unew[i] = U[i] + deltau
+                if self.update_model:
+                    traj = (xnew, Unew[i])
+                    self.model.update(traj[0])
+                dx = self.model(xnew, Unew[i]) * self.dt
+                #print("Unew: ", Unew[i])
+                xnew += self.model(xnew, Unew[i]) * self.dt #get next state
+                #xnew += self.model(xnew, Unew[i]) #get next state
+                #print("Xnew: %s dx: %s" % (xnew, dx))
+            
+            Xnew = self.forward(xt, Unew) #use updated control sequence
+            costnew = self.forward_cost(Xnew, Unew) #dt = 1 for terminal?
+            print("NEWCOST: ", costnew)
+            print("Original: ", cost)
+            #LM Heuristic:
+            # Based on change in cost, update lambda to move optimization
+            # toward 2nd (Newton's) or 1st (Gradient Descent) order method
+            if costnew < cost: #move towards 2nd order method, update X,U
+                lamb /= self.lamb_factor
+
+                X = Xnew.copy()
+                U = Unew.copy()
+                prev_cost = np.copy(cost) #for stopping conditions
+                cost = np.copy(costnew)
+                sim_new_trajectory = True
+                #print("Delta-Cost: %s, Threshold: %s" % ((abs(prev_cost - cost)/cost),  self.eps))
+                if ii > 0 and ((abs(prev_cost - cost)/cost) < self.eps):
+                    #print("CONVERGED at Iteration %s, Cost: %s" % (ii, 
+                        #cost)) 
+                    #print("Prev Cost: ", prev_cost)
+                    break
+            else: #move towards gradient descent
+                lamb *= self.lamb_factor
+                if lamb > self.lamb_max:
+                    #print("We're not converging (lamb = %s): %s vs %s" % (lamb, costnew, cost))
+                    if False:
+                        X = Xnew.copy()
+                        U = Unew.copy()
+                    break
+        #input("Converged after %s steps!" % (ii))
+        return X, U
 
 
     def initialize_constant_control(self, xt, initial=0.0) -> np.ndarray:
@@ -559,7 +697,6 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
             _, u = self.smc.step(xt_)
             U.append(u)
             print("U: ", u)
-            np.clip(u, -1e2, 1e2, out = u)
             dx = self.model(xt_, u)
             print("Xt: %s \ndx: %s " % (xt_.shape, dx.shape))
             xt_ += dx * self.dt
@@ -739,13 +876,13 @@ if __name__ == '__main__':
         #    return x-t
         #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
         null_ind = [0, 1, 3] #TODO: control INPUT, not ERROR?!
-        cost_func = lambda h,dt:1e4
+        cost_func = lambda h,dt:1e2
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
-        Qf = np.eye(state_size) * cost_func(horizon, dt) * 0.0
-        R = np.eye(action_size) * 1e1* 1
+        Qf = np.eye(state_size) * cost_func(horizon, dt) * 1.0
+        R = np.eye(action_size) * 1e0* 1
 
         priority_cost = True
         if priority_cost:
@@ -792,7 +929,9 @@ if __name__ == '__main__':
         #
 
         update_model = False
-        ilqg = ILQG(lamb_factor,
+        FULL_ITERATIONS = False
+        ilqg = ILQG(FULL_ITERATIONS,
+                lamb_factor,
                 lamb_max,
                 initialization,
                 state_shape, state_size, action_shape, action_size,
@@ -862,7 +1001,8 @@ if __name__ == '__main__':
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
 
-            mpc_ilqg = ILQG(lamb_factor,
+            mpc_ilqg = ILQG(FULL_ITERATIONS,
+                    lamb_factor,
                     lamb_max, 
                     initialization,
                     state_shape, state_size, action_shape, action_size,
@@ -973,8 +1113,9 @@ if __name__ == '__main__':
         env.reset()
         env.state = x0.copy()
         #
-
-        ilqg = ILQG(lamb_factor,
+        FULL_ITERATIONS = True
+        ilqg = ILQG(FULL_ITERATIONS,
+                lamb_factor,
                 lamb_max,
                 initialization,
                 state_shape, state_size, action_shape, action_size,
@@ -1031,7 +1172,8 @@ if __name__ == '__main__':
                     Q[i][i] = 0
             cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
-            mpc_ilqg = ILQG(lamb_factor,
+            mpc_ilqg = ILQG(FULL_ITERATIONS,
+                    lamb_factor,
                     lamb_max, 
                     initialization,
                     state_shape, state_size, action_shape, action_size,
@@ -1130,7 +1272,7 @@ if __name__ == '__main__':
         x0 = np.array([0.1, 0.00],dtype=np.float64)
         #x0 = np.array([0.00, 0.00],dtype=np.float64)
         #
-
+        FULL_ITERATIONS = True
         ilqg = ILQG(state_shape, state_size, action_shape, action_size,
                 model, cost, None, action_constraints, #no noise model, iLQR
                 lamb_factor = lamb_factor,

@@ -581,7 +581,7 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    TEST_INVERTED_PENDULUM = True
+    TEST_INVERTED_PENDULUM = False
     TEST_CARTPOLE = True
 
     if TEST_CARTPOLE:
@@ -603,6 +603,8 @@ if __name__ == '__main__':
                 target = target)
         env.reset()
         env.state = x0.copy()
+        smc_lyap = []
+        lyap = []
         while not env.episode_is_done():
             print("STEP ", env.steps)
             x = env.state
@@ -619,21 +621,44 @@ if __name__ == '__main__':
             ddtheta = -mp * L * (x[3])**2 * np.sin(x[2])*np.cos(x[2])
             ddtheta += (mc + mp) * g * np.sin(x[2])
             dx = x[1] + (ddx) / x_denom + x[3] + (ddtheta) / (L * x_denom)
-            sigma = np.array([1, 1, 1, 1]) #sliding surface definition
+            sigma = np.array([1e0, 1e0, 1e0, 1e0]) #sliding surface definition
             ucoeff = 1.5
-            #ucoeff = 2
-            umin = -10
-            umax = 10
+            ucoeff = 2
+            umin = -1e1
+            umax = 1e1
             ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)
             #ucomp = 1
             u = lambda sigma, x: ucoeff * (1/ucomp) * -(np.abs(dx)) * np.sign(np.dot(sigma.T, x))
             print("Sliding Surface: ", np.dot(sigma.T, x_)) 
+            print("(SMC) Lyapunov function: ", np.dot(sigma.T, x_).T * np.dot(sigma.T, x_))
+            smc_lyap.append(np.dot(sigma.T, x_).T * np.dot(sigma.T, x_))
+            print("(System) Lyapunov function: ", np.dot(sigma.T, x_).T * np.dot(sigma.T, x_))
+            lyap.append(np.linalg.norm(x_))
             control = np.clip(u(sigma, x_), umin, umax)
             #control = u(sigma, x_)
             print("Control: ", control)
             env.step(control)
             #env.step(np.zeros(1))
         env.generate_plots()
+        if len(smc_lyap) > 0:
+            plt.figure(10) #eh
+            x = range(len(smc_lyap))
+            plt.plot(x,smc_lyap, label='parametric curve')
+            plt.title("SMC Lyapunov Function")
+            plt.xlabel("Timestep")
+            plt.ylabel("V(x)")
+            plt.draw()
+            plt.pause(0.01)
+        if len(lyap) > 0:
+            plt.figure(11) #eh
+            x = range(len(lyap))
+            plt.plot(x,lyap, label='parametric curve')
+            plt.title("System Lyapunov Function")
+            plt.xlabel("Timestep")
+            plt.ylabel("V(x)")
+            plt.draw()
+            plt.pause(0.01)
+                
         input()
 
     if TEST_INVERTED_PENDULUM:

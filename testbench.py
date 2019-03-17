@@ -600,16 +600,16 @@ LIB_TYPE = 'dm'
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
-AGENT_TYPE = 'agnostic_MBRL'
-REPLAYS = 20
-horizon = 50
-#EPISODES_BEFORE_TRAINING = 3
-#max_traj_len = SMALL_TRAJECTORY_LENGTH
-replay_iterations = 5
+#AGENT_TYPE = 'agnostic_MBRL'
+#REPLAYS = 20
+#horizon = 50
+##EPISODES_BEFORE_TRAINING = 3
+##max_traj_len = SMALL_TRAJECTORY_LENGTH
+#replay_iterations = 5
 
 
 TRAINER_TYPE = 'AC'
-#TRAINER_TYPE = 'PPO'
+TRAINER_TYPE = 'PPO'
 #EPISODES_BEFORE_TRAINING = 3
 #max_traj_len = SMALL_TRAJECTORY_LENGTH
 #replay_iterations = 6
@@ -627,7 +627,7 @@ value_coeff = 9e-2
 energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
 #energy_penalty_coeff = 0 #zero, to not penalize at all
 
-EPS = 1.0e-1
+EPS = 1.5e-1
 EPS_MIN = 1e-2
 EPS_DECAY = 1e-8
 GAMMA = 0.999
@@ -636,14 +636,14 @@ ENV_TYPE = 'humanoid'
 #TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-EPS = 5e-2
-EPS_MIN = 2e-2
-EPS_DECAY = 1e-6
-GAMMA = 0.99
-ENV_TYPE = 'walker'
-#TASK_NAME = 'run'
-TASK_NAME = 'walk'
-TASK_NAME = 'stand'
+#EPS = 5e-2
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
+#GAMMA = 0.99
+#ENV_TYPE = 'walker'
+##TASK_NAME = 'run'
+#TASK_NAME = 'walk'
+#TASK_NAME = 'stand'
 
 #EPS = 7e-2
 #EPS_MIN = 0.5e-2
@@ -850,7 +850,7 @@ if __name__ == '__main__':
             LAMB_MAX = 1000
             DDP_INIT = 0.0
             HORIZON = 0.5e-1
-            DDP_MAX_ITERATIONS = 5
+            DDP_MAX_ITERATIONS = 10
             K_SHOOTS = 1
             UPDATE_DDP_MODEL = True
             ILQG_SMC = True
@@ -987,7 +987,7 @@ if __name__ == '__main__':
                         update_model = UPDATE_DDP_MODEL
                         )
             
-            DATASET_RECENT_PROB = 0.5
+            DATASET_RECENT_PROB = 0.7
             
             dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
             
