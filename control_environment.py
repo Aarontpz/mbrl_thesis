@@ -585,7 +585,7 @@ if __name__ == '__main__':
     TEST_CARTPOLE = True
 
     if TEST_CARTPOLE:
-        horizon = 15
+        horizon = 10
         mc = 1
         mp = 0.1
         L = 0.5
@@ -609,9 +609,10 @@ if __name__ == '__main__':
             print("STEP ", env.steps)
             x = env.state
             x_ = x - np.array([x[0], x[1], target[2], x[3]])
+            #x_ = x - target
             if len(x_.shape) < 2:
                 x_ = x_[..., np.newaxis]
-            #x_ = x - target
+            #x = x_ #to see if it makes a difference
             print("State: ", x)
             print("Target: %s \n Error: %s"%(target, x_))
 
@@ -623,18 +624,18 @@ if __name__ == '__main__':
             ddtheta = -mp * L * (x[3])**2 * np.sin(x[2])*np.cos(x[2])
             ddtheta += (mc + mp) * g * np.sin(x[2])
             dx = x[1] + (ddx) / x_denom + x[3] + (ddtheta) / (L * x_denom)
-            sigma = np.array([[1e0, 1e0, 1e0, 1e0]]).T #sliding surface definition
+            sigma = np.array([[1e0, 1e0, 8e0, 1e0]]).T #sliding surface definition
             #x' = h(x) + g(x)u
             hx = np.array([x[1], ddx/x_denom, x[3],ddtheta/(L*x_denom)])
             gx = np.array([0, 1/x_denom, 0, -np.cos(x[2])/L * 1/x_denom])
-            #ucoeff = 1.5
+            ucoeff = 1.5
             ucoeff = 2
             umin = -1e1
             umax = 1e1
             ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)
             #ucomp = 1
-            u = lambda sigma, x: ucoeff * (np.dot(sigma.T, gx)) * -(np.abs(np.dot(sigma.T, hx))) * np.sign(np.dot(sigma.T, x))
-            u = lambda sigma, x: ucoeff * (np.dot(sigma.T, gx)) * -(np.abs(dx)) * np.sign(np.dot(sigma.T, x))
+            u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * np.sign(np.dot(sigma.T, x))
+            #u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(dx)) * np.sign(np.dot(sigma.T, x))
             print("Sliding Surface: ", np.dot(sigma.T, x_)) 
             print("(SMC) Lyapunov function: ", np.dot(sigma.T, x_).T * np.dot(sigma.T, x_))
             smc_lyap.append(np.dot(sigma.T, x_).T * np.dot(sigma.T, x_))
