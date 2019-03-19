@@ -601,15 +601,30 @@ if __name__ == '__main__':
                 interval = horizon, ts = dt,
                 mode = 'point', 
                 target = target)
+        env.error_func = lambda x, t: ((x[2]-t[2]) + (x[3]-t[3]))
         env.reset()
         env.state = x0.copy()
         smc_lyap = []
         lyap = []
+        v = 0 #for TSSMC
+        integrated = np.zeros(env.state.shape) #integral-error
+        if len(integrated.shape) < 2:
+            integrated = integrated[..., np.newaxis]
+        sigma = np.array([[1e0, 1e0, 4e0, 1e0]]).T #sliding surface definition
+        x = env.state
+        x_ = x - np.array([x[0], x[1], target[2], x[3]])
+        #x_ = x - target
+        if len(x_.shape) < 2:
+            x_ = x_[..., np.newaxis]
+        sx = np.dot(sigma.T, x_)
         while not env.episode_is_done():
             print("STEP ", env.steps)
             x = env.state
-            x_ = x - np.array([x[0], x[1], target[2], x[3]])
+            x_ = x - np.array([x[0], x[1], target[2], target[3]])
+            #x_ = x - np.array([x[0], x[1], target[2], x[3]])
+            #x_ = np.array([x[0], x[1], target[2], x[3]]) - x
             #x_ = x - target
+            #x_ = target - x
             if len(x_.shape) < 2:
                 x_ = x_[..., np.newaxis]
             #x = x_ #to see if it makes a difference
@@ -624,26 +639,56 @@ if __name__ == '__main__':
             ddtheta = -mp * L * (x[3])**2 * np.sin(x[2])*np.cos(x[2])
             ddtheta += (mc + mp) * g * np.sin(x[2])
             dx = x[1] + (ddx) / x_denom + x[3] + (ddtheta) / (L * x_denom)
-            sigma = np.array([[1e0, 1e0, 8e0, 1e0]]).T #sliding surface definition
             #x' = h(x) + g(x)u
             hx = np.array([x[1], ddx/x_denom, x[3],ddtheta/(L*x_denom)])
             gx = np.array([0, 1/x_denom, 0, -np.cos(x[2])/L * 1/x_denom])
+            
             ucoeff = 1.5
             ucoeff = 2
-            umin = -1e1
-            umax = 1e1
+            umin = -1.0e1
+            umax = 1.0e1
             ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)
             #ucomp = 1
-            u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * np.sign(np.dot(sigma.T, x))
-            #u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(dx)) * np.sign(np.dot(sigma.T, x))
+            
+            ## FOSMC
+            sx = np.dot(sigma.T, x_)
+            u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * np.sign(sx)
+            #u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(dx)) * np.sign(sx)
+            control = np.clip(u(sigma, x_), umin, umax)
+            #control = u(sigma, x_)
+            print("Control: ", control)
+
+            ## TSSMC (twisted-surface)
+            ##integrated += x_
+            #sx = np.dot(sigma.T, x_)
+            ##sx = np.dot(sigma.T,x_ - integrated)
+            #c2 = 10
+            #lamb = 4
+            ##vi = np.clip(v, -1, 1)
+            #vi = v
+            #u = control + np.clip(-lamb * np.abs(sx)**(0.5) * np.sign(sx) + vi, umin, umax)
+            #if np.abs(v) < umax/2:
+            #    v += (-c2 * np.sign(sx)) * dt
+            #else:
+            #    v += -v * dt
+            ##vi = np.clip(v + (-c2 * np.sign(sx)) * dt, -1, 1)
+            ##print("Integrated: ", integrated)
+            #print("Integral term: ", v)
+            ##dsigma = np.array([[0, 0, x[3], lamb*(hx[3]+gx[3]*u)]]).T#dsigma = dsigma/dt + d/dxsigma(f(x,u)), 2nd order surface changes OVER TIME
+            ##print("dsigma: ", dsigma)
+            #print("sigma: ", sx)
+            ##sx += (lamb*x[3] + (hx[3]+gx[3]*u)) * dt
+            ##print("NEW sigma: ", sigma)
+            ##control = np.clip(u, umin, umax)
+            #control = u
+            
+            print("CONTROL: ", control)
+
             print("Sliding Surface: ", np.dot(sigma.T, x_)) 
             print("(SMC) Lyapunov function: ", np.dot(sigma.T, x_).T * np.dot(sigma.T, x_))
             smc_lyap.append(np.dot(sigma.T, x_).T * np.dot(sigma.T, x_))
             lyap.append(np.linalg.norm(x_))
             print("(System) Lyapunov function: ", lyap[-1])
-            control = np.clip(u(sigma, x_), umin, umax)
-            #control = u(sigma, x_)
-            print("Control: ", control)
             env.step(control)
             #env.step(np.zeros(1))
         env.generate_plots()
