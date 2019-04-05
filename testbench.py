@@ -645,13 +645,13 @@ ENV_TYPE = 'walker'
 TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-EPS = 7e-2
-EPS_MIN = 0.5e-2
-EPS_DECAY = 1e-7
-GAMMA = 0.99
-ENV_TYPE = 'cartpole'
-TASK_NAME = 'swingup'
-#TASK_NAME = 'balance'
+#EPS = 7e-2
+#EPS_MIN = 0.5e-2
+#EPS_DECAY = 1e-7
+#GAMMA = 0.99
+#ENV_TYPE = 'cartpole'
+#TASK_NAME = 'swingup'
+##TASK_NAME = 'balance'
 
 MAXMIN_NORMALIZATION = False
 TRAIN_AUTOENCODER = False
@@ -866,7 +866,7 @@ if __name__ == '__main__':
             pytorch_class = PyTorchForwardDynamicsLinearModule
             pytorch_model = PyTorchForwardDynamicsModel 
             if pytorch_class == PyTorchForwardDynamicsLinearModule:
-                pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size + action_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
             elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
                 pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,

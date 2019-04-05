@@ -843,6 +843,9 @@ class ISMC(DDP):
         return 0.0
 
     def compute_control(self, xt) -> np.ndarray:
+        '''Compute FIRST-ORDER sliding mode control given either
+        a linear system model (x' = Ax + Bu) or general system model
+        (x' = f + gu)'''
         if (issubclass(type(self.model), LinearSystemModel)):
             sign = self.compute_switch(xt)
             ds_dx = self.get_surface_d_dx(xt)
@@ -864,7 +867,23 @@ class ISMC(DDP):
             np.clip(out, -1e2, 1e2, out = out)
             return out 
         elif (issubclass(type(self.model), GeneralSystemModel)):
-            print("Awww yuss")
+            sign = self.compute_switch(xt)
+            ds_dx = self.get_surface_d_dx(xt)
+            print("g: ", self.model.g)
+            print("DOT: ", np.linalg.det(np.dot(ds_dx.T, self.model.g)))
+            magnitude = -(2 * np.linalg.inv(np.dot(ds_dx.T, self.model.g))) #TODO: Verify this step
+            magnitude *= np.dot(ds_dx.T, self.model.f)
+            if len(sign.shape) < 2:
+                sign = sign[..., np.newaxis]
+            print("mag: ", magnitude.shape)
+            print("sign: ", sign.shape)
+            #out = magnitude * sign
+            out = np.dot(magnitude, sign)
+            #if len(out.shape) < 2:
+            #    out = out[..., np.newaxis]
+            print("OUT SHAPE: ", out.shape)
+            np.clip(out, -1e2, 1e2, out = out)
+            return out 
         else:
             raise Exception("Unsupported Model for SMC")
 

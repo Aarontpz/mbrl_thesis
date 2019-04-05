@@ -820,13 +820,14 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
         self.f_module = torch.nn.Linear(self.outdim, A_shape[1], bias = True)
         self.g_module = torch.nn.Linear(self.outdim, self.b_size, bias = True)
 
-    def forward(self, x, u = None, *args, **kwargs):
+    def forward(self, x, *args, **kwargs):
         if type(x) == np.ndarray:
-            x = torch.tensor(x, requires_grad = True, device = self.device)
-        if type(u) == np.ndarray:
-            u = torch.tensor(u, requires_grad = True, device = self.device)
-        #print("type(x): %s type(u): %s" % (type(x), type(u)))
-        inp = torch.cat((x, u), 0).float()
+            x = torch.tensor(x, requires_grad = True, device = self.device).float()
+        #if type(u) == np.ndarray:
+        #    u = torch.tensor(u, requires_grad = True, device = self.device)
+        ##print("type(x): %s type(u): %s" % (type(x), type(u)))
+        #inp = torch.cat((x, u), 0).float()
+        inp = x
         mlp_out = super().forward(inp)
         f = self.f_module(mlp_out)
         g = self.g_module(mlp_out)
@@ -1334,14 +1335,26 @@ class PyTorchModel(Model):
     #resnet style <3
 
 class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
-    def forward(self, xt, ut, f_, g_):
+    def forward(self, xt, ut, f, g):
         '''Operate on f_, g_ returned from ForwardDynamicsModule in order
         to compute x' = f + g*u, assuming the system is linear w.r.t
         controls'''
-        return f + np.dot(g, ut) #s.t. xt+1 = xt + dt * f, f = self.module(x, u, dt)
+        g = g.reshape(self.module.b_shape)
+        if type(xt) == type(np.array([0])):
+            xt = torch.tensor(xt, requires_grad = True, device = self.module.device).float()
+            xt = xt.unsqueeze(0)
+        if type(xt) == torch.Tensor and xt.size()[0] < xt.size()[1]:
+            xt = xt.transpose(0, 1)
+        if type(ut) == np.ndarray:
+            ut = torch.tensor(ut, requires_grad = True, device = self.module.device).float()
+            ut = ut.unsqueeze(0)
+            ut = ut.transpose(0, 1)
+        gu = torch.mm(g, ut)
+        return f + gu #s.t. xt+1 = xt + dt * (f+gu), linear w.r.t controls
+
     def update(self, xt):
         f, g = self.module(xt)
-        raise Exception("Todo: conclude this for GeneralModels")
+        #raise Exception("Todo: conclude this for GeneralModels")
         self.f = f.cpu().detach().numpy()
         self.g = g.cpu().detach().numpy()
         #self.f.resize(self.module.a_shape)
