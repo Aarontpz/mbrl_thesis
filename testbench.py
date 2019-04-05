@@ -565,7 +565,7 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-WIDENING_CONST = 3 #indim * WIDENING_CONST = hidden layer size
+WIDENING_CONST = 10 #indim * WIDENING_CONST = hidden layer size
 mlp_initializer = None
 DISCRETE_AGENT = False
 
@@ -600,12 +600,12 @@ LIB_TYPE = 'dm'
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
-#AGENT_TYPE = 'agnostic_MBRL'
-#REPLAYS = 20
-#horizon = 50
-##EPISODES_BEFORE_TRAINING = 3
-##max_traj_len = SMALL_TRAJECTORY_LENGTH
-#replay_iterations = 5
+AGENT_TYPE = 'agnostic_MBRL'
+REPLAYS = 20
+horizon = 50
+#EPISODES_BEFORE_TRAINING = 3
+#max_traj_len = SMALL_TRAJECTORY_LENGTH
+replay_iterations = 5
 
 
 TRAINER_TYPE = 'AC'
@@ -636,22 +636,22 @@ ENV_TYPE = 'humanoid'
 #TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-#EPS = 5e-2
-#EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.99
-#ENV_TYPE = 'walker'
-##TASK_NAME = 'run'
-#TASK_NAME = 'walk'
-#TASK_NAME = 'stand'
+EPS = 5e-2
+EPS_MIN = 2e-2
+EPS_DECAY = 1e-6
+GAMMA = 0.99
+ENV_TYPE = 'walker'
+#TASK_NAME = 'run'
+TASK_NAME = 'walk'
+TASK_NAME = 'stand'
 
-#EPS = 7e-2
-#EPS_MIN = 0.5e-2
-#EPS_DECAY = 1e-7
-#GAMMA = 0.99
-#ENV_TYPE = 'cartpole'
-#TASK_NAME = 'swingup'
-##TASK_NAME = 'balance'
+EPS = 7e-2
+EPS_MIN = 0.5e-2
+EPS_DECAY = 1e-7
+GAMMA = 0.99
+ENV_TYPE = 'cartpole'
+TASK_NAME = 'swingup'
+#TASK_NAME = 'balance'
 
 MAXMIN_NORMALIZATION = False
 TRAIN_AUTOENCODER = False
@@ -845,23 +845,28 @@ if __name__ == '__main__':
             SURFACE_BASE = None
 
             ## DDP-SPECIFIC ARGS 
-            LQG_FULL_ITERATION = False
+            LQG_FULL_ITERATIONS = True
             LAMB_FACTOR = 10
             LAMB_MAX = 1000
             DDP_INIT = 0.0
             HORIZON = 0.5e-1
-            DDP_MAX_ITERATIONS = 10
+            DDP_MAX_ITERATIONS = 2
             K_SHOOTS = 1
             UPDATE_DDP_MODEL = True
-            ILQG_SMC = True
+            ILQG_SMC = False
             REUSE_SHOOTS = True if DDP_MODE == 'ilqg' else False
-            mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
+            #mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
+            #mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
+            #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
+            mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
+            mlp_hdims = [obs_size * WIDENING_CONST] 
             mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
-            pytorch_class = PyTorchLinearSystemDynamicsLinearModule
-            pytorch_model = PyTorchLinearSystemModel 
+            #pytorch_class = PyTorchLinearSystemDynamicsLinearModule
+            #pytorch_model = PyTorchLinearSystemModel 
+            pytorch_class = PyTorchForwardDynamicsLinearModule
+            pytorch_model = PyTorchForwardDynamicsModel 
             if pytorch_class == PyTorchForwardDynamicsLinearModule:
-                pytorch_module = pytorch_class(device = device, indim = obs_size + action_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size + action_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
             elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
                 pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
@@ -934,6 +939,15 @@ if __name__ == '__main__':
                     for i in range(obs_size):
                         if i not in target_inds:
                             Q[i][i] = 0
+                #class DiffFunc:
+                #    def __init__(self, target_inds):
+                #        self.inds = target_inds
+                #    def __call__(self, t, x):
+                #        x_ = np.zeros(x.shape)
+                #        for i in self.inds:
+                #            x_[i] = x[i] - t[i]
+                #        return x_
+                #diff_func = DiffFunc(target_inds)
                 diff_func = lambda t,x:x - t 
                 print("Q: ", Q)
                 cost = LQC(Q, R, Qf, target = target, 
@@ -941,7 +955,8 @@ if __name__ == '__main__':
 
             ddp = None
             if DDP_MODE == 'ilqg':
-                ddp = ILQG(LAMB_FACTOR, LAMB_MAX, DDP_INIT,
+                ddp = ILQG(LQG_FULL_ITERATIONS,
+                        LAMB_FACTOR, LAMB_MAX, DDP_INIT,
                         obs_space, obs_size,
                         [1, action_size], action_size,
                         system_model, cost,

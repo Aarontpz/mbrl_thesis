@@ -585,14 +585,14 @@ if __name__ == '__main__':
     TEST_CARTPOLE = True
 
     if TEST_CARTPOLE:
-        horizon = 10
+        horizon = 5
         mc = 1
         mp = 0.1
         L = 0.5
         g = 9.8
         dt = 1e-2
         target = np.array([0.0, 0, 0.0, 0])
-        x0 = np.array([-0, 0, 0.4, -0.0])
+        x0 = np.array([-0, 0, 0.4, -0.3])
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
                 mc, mp, L, g,
@@ -610,7 +610,7 @@ if __name__ == '__main__':
         integrated = np.zeros(env.state.shape) #integral-error
         if len(integrated.shape) < 2:
             integrated = integrated[..., np.newaxis]
-        sigma = np.array([[1e0, 1e0, 4e0, 1e0]]).T #sliding surface definition
+        sigma = np.array([[1e0, 1e0, 15e0, 5e0]]).T #sliding surface definition
         x = env.state
         x_ = x - np.array([x[0], x[1], target[2], x[3]])
         #x_ = x - target
@@ -630,7 +630,7 @@ if __name__ == '__main__':
             #x = x_ #to see if it makes a difference
             print("State: ", x)
             print("Target: %s \n Error: %s"%(target, x_))
-
+            TSSMC = False
             ##Linearizing Feedback Controls
 
             ## Sliding Mode Controls
@@ -660,27 +660,28 @@ if __name__ == '__main__':
 
             ## TSSMC (twisted-surface)
             ##integrated += x_
-            #sx = np.dot(sigma.T, x_)
-            ##sx = np.dot(sigma.T,x_ - integrated)
-            #c2 = 10
-            #lamb = 4
-            ##vi = np.clip(v, -1, 1)
-            #vi = v
-            #u = control + np.clip(-lamb * np.abs(sx)**(0.5) * np.sign(sx) + vi, umin, umax)
-            #if np.abs(v) < umax/2:
-            #    v += (-c2 * np.sign(sx)) * dt
-            #else:
-            #    v += -v * dt
-            ##vi = np.clip(v + (-c2 * np.sign(sx)) * dt, -1, 1)
-            ##print("Integrated: ", integrated)
-            #print("Integral term: ", v)
-            ##dsigma = np.array([[0, 0, x[3], lamb*(hx[3]+gx[3]*u)]]).T#dsigma = dsigma/dt + d/dxsigma(f(x,u)), 2nd order surface changes OVER TIME
-            ##print("dsigma: ", dsigma)
-            #print("sigma: ", sx)
-            ##sx += (lamb*x[3] + (hx[3]+gx[3]*u)) * dt
-            ##print("NEW sigma: ", sigma)
-            ##control = np.clip(u, umin, umax)
-            #control = u
+            if TSSMC == True:
+                sx = np.dot(sigma.T, x_)
+                #sx = np.dot(sigma.T,x_ - integrated)
+                c2 = 10
+                lamb = 2
+                #vi = np.clip(v, -1, 1)
+                vi = v
+                u = control + np.clip(-lamb * np.abs(sx)**(0.5) * np.sign(sx) + vi, umin, umax)
+                if np.abs(v) < 1:
+                    v += (-c2 * np.sign(sx)) * dt
+                else:
+                    v += -v * dt
+                #vi = np.clip(v + (-c2 * np.sign(sx)) * dt, -1, 1)
+                #print("Integrated: ", integrated)
+                print("Integral term: ", v)
+                #dsigma = np.array([[0, 0, x[3], lamb*(hx[3]+gx[3]*u)]]).T#dsigma = dsigma/dt + d/dxsigma(f(x,u)), 2nd order surface changes OVER TIME
+                #print("dsigma: ", dsigma)
+                print("sigma: ", sx)
+                #sx += (lamb*x[3] + (hx[3]+gx[3]*u)) * dt
+                #print("NEW sigma: ", sigma)
+                control = np.clip(u, umin, umax)
+                #control = u
             
             print("CONTROL: ", control)
 

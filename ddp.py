@@ -203,7 +203,8 @@ class FiniteDifferencesModel(Model):
     pass
 
 class LinearSystemModel(Model):
-    '''For testing convergence / functionality of iLQR.'''
+    '''Model a system as a linear relationship in the state-transition
+    equation'''
     def __init__(self, A : np.ndarray, B : np.ndarray):
         self.A = A
         self.B = B
@@ -235,6 +236,42 @@ class LinearSystemModel(Model):
         print("B*ut: ",bu.shape)
         print("A*xt + B*ut: ",(ax+bu).shape)
         return ax + bu
+
+class GeneralSystemModel(Model):
+    '''Model a system as a "general" relationship which assumes only
+    a linear control relationship: x' = f(x,t) + g(x,t)*u, where
+    f has no guarentees on linearity.'''
+    def __init__(self, f : np.ndarray, g : np.ndarray):
+        self.f = f
+        self.g = g
+    def d_dx(self, xt, ut=None, dt=None, *args, **kwargs):
+        '''Calculate df/dx, given timestep
+        size dt'''
+        raise Exception("This needs to be considered carefully.")
+        assert(dt is not None)
+        return self.A * dt
+    def d_du(self, xt = None, ut=None, dt=None, *args, **kwargs):
+        '''Calculate df/dx, given timestep
+        size dt'''
+        assert(dt is not None)
+        assert(ut is not None)
+        return self.B * dt
+    def __call__(self, xt, ut, dt=None, A = None, B = None, *args, **kwargs):
+        f = f if f is not None else self.f
+        g = g if g is not None else self.g
+        print("g: %s ut: %s" % (g.shape, ut.shape))
+        if len(ut.shape) == 1 and len(B.shape) == 1:
+            gu = g * ut
+        else:
+            gu = np.dot(g, ut)
+        if len(f.shape) < 2:
+            f = f[..., np.newaxis]
+        if len(bu.shape) < 2:
+            gu = gu[..., np.newaxis]
+        print("f shape: ",ax.shape)
+        print("g shape: ",bu.shape)
+        print("f + g*u: ",(f+gu).shape)
+        return f + gu
     
 class ControlEnvironmentModel(Model):
     def __init__(self, env : ControlEnvironment):
@@ -586,20 +623,32 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
             self.cost.terminal_mode()
             v[-1] = self.cost(X[-1], None) 
             self.cost.normal_mode()
+            #v[-1] = cost 
             print("VN: ", v[-1])
             ## (CLOSED-FORM) Backwards Rollout
             for i in reversed(range(self.horizon - 1)):  
                 #From Todorov: "The Q-function is the discrete-time 
                 #analogue of the Hamiltonian, sometimes known as the 
                 #pseudo-Hamiltonian"
-
                 #https://homes.cs.washington.edu/~todorov/papers/LiICINCO04.pdf
+
+                #if self.update_model:
+                #    self.model.update(X[i])
+                #dx = self.model(X[i], U[i])
+                #if len(dx) > 1:
+                #    dx = dx.flatten()
+                #dx = dx * self.dt
+                #Ak = np.dot(fx[i], dx)
+                #Bk = np.dot(fu[i], dx)
                 Ak = fx[i]
                 Bk = fu[i]
                 if len(Bk.shape) < 2:
                     Bk = Bk[..., np.newaxis]
                 if len(Ak.shape) < 2:
                     Ak = Ak[..., np.newaxis]
+                
+                print("Ak: %s \n Bk: %s" % (Ak, Bk))
+                print("fx: %s \n fu: %s" % (fx[i], fu[i]))
                 Q = self.cost.Q.Q
                 R = self.cost.R.Q
                 ricatti = np.linalg.inv(np.dot(Bk.T, np.dot(S, Bk)) + R)
@@ -623,7 +672,7 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 print("X_term: ", x_term)
                 v[i] += u_term
                 print("V: ", v[i])
-                input()
+                #input()
 
             #input()
             #forward pass to calculate new control sequence Unew
@@ -666,7 +715,7 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
             costnew = self.forward_cost(Xnew, Unew) #dt = 1 for terminal?
             print("NEWCOST: ", costnew)
             print("Original: ", cost)
-            input()
+            #input()
             X = Xnew.copy()
             U = Unew.copy()
             #LM Heuristic:
@@ -794,26 +843,30 @@ class ISMC(DDP):
         return 0.0
 
     def compute_control(self, xt) -> np.ndarray:
-        assert(issubclass(type(self.model), LinearSystemModel))
-        sign = self.compute_switch(xt)
-        ds_dx = self.get_surface_d_dx(xt)
-        #print("ds_dx: %s Sign: %s" % (ds_dx, sign))
-        #print("ds_dx.T: ",  (ds_dx.T.shape))
-        print("B: ", self.model.B)
-        print("DOT: ", np.linalg.det(np.dot(ds_dx.T, self.model.B)))
-        magnitude = -(2 * np.linalg.inv(np.dot(ds_dx.T, self.model.B))) #TODO: Verify this step
-        magnitude *= np.dot(ds_dx.T, np.dot(self.model.A, xt))
-        if len(sign.shape) < 2:
-            sign = sign[..., np.newaxis]
-        print("mag: ", magnitude.shape)
-        print("sign: ", sign.shape)
-        #out = magnitude * sign
-        out = np.dot(magnitude, sign)
-        #if len(out.shape) < 2:
-        #    out = out[..., np.newaxis]
-        print("OUT SHAPE: ", out.shape)
-        np.clip(out, -1e2, 1e2, out = out)
-        return out 
+        if (issubclass(type(self.model), LinearSystemModel)):
+            sign = self.compute_switch(xt)
+            ds_dx = self.get_surface_d_dx(xt)
+            #print("ds_dx: %s Sign: %s" % (ds_dx, sign))
+            #print("ds_dx.T: ",  (ds_dx.T.shape))
+            print("B: ", self.model.B)
+            print("DOT: ", np.linalg.det(np.dot(ds_dx.T, self.model.B)))
+            magnitude = -(2 * np.linalg.inv(np.dot(ds_dx.T, self.model.B))) #TODO: Verify this step
+            magnitude *= np.dot(ds_dx.T, np.dot(self.model.A, xt))
+            if len(sign.shape) < 2:
+                sign = sign[..., np.newaxis]
+            print("mag: ", magnitude.shape)
+            print("sign: ", sign.shape)
+            #out = magnitude * sign
+            out = np.dot(magnitude, sign)
+            #if len(out.shape) < 2:
+            #    out = out[..., np.newaxis]
+            print("OUT SHAPE: ", out.shape)
+            np.clip(out, -1e2, 1e2, out = out)
+            return out 
+        elif (issubclass(type(self.model), GeneralSystemModel)):
+            print("Awww yuss")
+        else:
+            raise Exception("Unsupported Model for SMC")
 
     def compute_switch(self, xt) -> int: 
         #print("X: %s Surface: %s " % (xt, self.surface))
@@ -853,7 +906,7 @@ if __name__ == '__main__':
     if NONLINEAR_CARTPOLE_TEST:
         lamb_factor = 10
         lamb_max = 1000
-        horizon = 5
+        horizon = 2
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -870,6 +923,7 @@ if __name__ == '__main__':
         MPC_MAX_STEPS = int(horizon / dt)
         MPC_THRESHOLD = 0e-2
         #MPC_THRESHOLD = 0e-2
+        MPC_MAX_ITER = 2
         
 
         
@@ -886,7 +940,9 @@ if __name__ == '__main__':
         x0 = np.array([0, -0.2, 0.20, 0.10],dtype=np.float64)
         #x0 = np.array([0, 1, 0.0, 1.00],dtype=np.float64)
         #x0 = np.array([0, 1, 0, 5.00],dtype=np.float64)
-        diff_func = lambda t,x : x - t
+        diff_func = lambda t,x : x - np.array([x[0], x[1], t[2], t[3]])
+        #diff_func = lambda t,x : x - t
+                   
         #def diff_func(t, x, null_ind = []):
         #    '''Null_ind sets the target at (i in null_ind)
         #    to equal x at (i in null_ind), effectively 
@@ -896,13 +952,13 @@ if __name__ == '__main__':
         #    return x-t
         #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
         null_ind = [0, 1, 3] #TODO: control INPUT, not ERROR?!
-        cost_func = lambda h,dt:1e4
+        cost_func = lambda h,dt:1e2
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         #Qf = Q
         Qf = np.eye(state_size) * cost_func(horizon, dt) * 1.0
-        R = np.eye(action_size) * 1e1* 1
+        R = np.eye(action_size) * 1e0* 1
 
         priority_cost = True
         if priority_cost:
@@ -1029,7 +1085,7 @@ if __name__ == '__main__':
                     model, cost, None, action_constraints, #no noise model, iLQR
                     horizon = int(MPC_HORIZON*1/MPC_DT),
                     dt = MPC_DT,
-                    max_iterations = max_iterations, eps = eps,
+                    max_iterations = MPC_MAX_ITER, eps = eps,
                     update_model = update_model)
             env.reset()
             env.state = x0.copy()

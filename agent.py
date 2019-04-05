@@ -810,21 +810,30 @@ class PyTorchMLP(torch.nn.Module):
         return x
 
 class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
-    '''My god what a nightmarish class name.'''
-    def __init__(self, *args, **kwargs):
+    '''Approximates the dynamics of a system .'''
+    def __init__(self, A_shape, B_shape, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.a_shape = A_shape
+        self.a_size = reduce(lambda x,y:x*y, A_shape)
+        self.b_shape = B_shape
+        self.b_size = reduce(lambda x,y:x*y, B_shape)
+        self.f_module = torch.nn.Linear(self.outdim, A_shape[1], bias = True)
+        self.g_module = torch.nn.Linear(self.outdim, self.b_size, bias = True)
 
-    def forward(self, x, u, *args, **kwargs):
+    def forward(self, x, u = None, *args, **kwargs):
         if type(x) == np.ndarray:
             x = torch.tensor(x, requires_grad = True, device = self.device)
         if type(u) == np.ndarray:
             u = torch.tensor(u, requires_grad = True, device = self.device)
         #print("type(x): %s type(u): %s" % (type(x), type(u)))
         inp = torch.cat((x, u), 0).float()
-        return super().forward(inp)
+        mlp_out = super().forward(inp)
+        f = self.f_module(mlp_out)
+        g = self.g_module(mlp_out)
+        return f, g
         
 class PyTorchLinearSystemDynamicsLinearModule(PyTorchMLP):
-    '''My god what a nightmarish class name.'''
+    '''.'''
     def __init__(self, A_shape, B_shape, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.a_shape = A_shape
@@ -1324,13 +1333,27 @@ class PyTorchModel(Model):
         return xt + dt * self.forward(xt, ut, *self.module(xt, ut)) 
     #resnet style <3
 
-class PyTorchForwardDynamicsModel(PyTorchModel):
-    def forward(self, xt, ut, f):
-        return f #s.t. xt+1 = xt + dt * f, f = self.module(x, u, dt)
+class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
+    def forward(self, xt, ut, f_, g_):
+        '''Operate on f_, g_ returned from ForwardDynamicsModule in order
+        to compute x' = f + g*u, assuming the system is linear w.r.t
+        controls'''
+        return f + np.dot(g, ut) #s.t. xt+1 = xt + dt * f, f = self.module(x, u, dt)
+    def update(self, xt):
+        f, g = self.module(xt)
+        raise Exception("Todo: conclude this for GeneralModels")
+        self.f = f.cpu().detach().numpy()
+        self.g = g.cpu().detach().numpy()
+        #self.f.resize(self.module.a_shape)
+        self.g.resize(self.module.b_shape)
+        print("f: ", self.f.shape)
+        print("g: ", self.g.shape)
 
 class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
     '''Note: Output of PyTorchModel is FLATTENED A/B'''
     def forward(self, xt, ut, a_, b_):
+        '''Operate on a_, b_ returned from LinearDynamicsModule in 
+        order to compute x' = Ax + Bu'''
         self.update(xt)
         #return LinearSystemModel.__call__(self, xt, ut)
         A = a_.reshape(self.module.a_shape)
