@@ -301,6 +301,8 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         '''x' = dx * x + du * u'''
         if u is None:
             u = 0.0
+        if len(u.shape) > 1:
+            u = u[0]
         #dx = self.d_dx(x, u, r) 
         #dx = np.array([x[1], -4*np.sin(x[0]) - 0.01*x[1]])
         #input("Self.friction: %s" % (self.friction))
@@ -316,7 +318,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
             d_dx = dx + np.array([0, 1]) * (u)
             return d_dx
         du = np.array([0, 1]) * u
-        #print("Dx: %s \n Du: %s" % (dx, du))
+        print("Dx: %s \n Du: %s" % (dx, du))
         super().dx(x, u)
         return dx + du
 
@@ -585,7 +587,7 @@ if __name__ == '__main__':
     TEST_CARTPOLE = True
 
     if TEST_CARTPOLE:
-        horizon = 5
+        horizon = 3
         mc = 1
         mp = 0.1
         L = 0.5
@@ -610,7 +612,7 @@ if __name__ == '__main__':
         integrated = np.zeros(env.state.shape) #integral-error
         if len(integrated.shape) < 2:
             integrated = integrated[..., np.newaxis]
-        sigma = np.array([[1e0, 1e0, 15e0, 5e0]]).T #sliding surface definition
+        sigma = np.array([[1e0, 1e0, 30, 5e0]]).T #sliding surface definition
         x = env.state
         x_ = x - np.array([x[0], x[1], target[2], x[3]])
         #x_ = x - target
@@ -650,9 +652,13 @@ if __name__ == '__main__':
             ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)
             #ucomp = 1
             
+            ARCTAN = True
             ## FOSMC
             sx = np.dot(sigma.T, x_)
-            u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * np.sign(sx)
+            if ARCTAN:
+                u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * (np.arctan(sx) * 2/np.pi)
+            else:
+                u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * np.sign(sx)
             #u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(dx)) * np.sign(sx)
             control = np.clip(u(sigma, x_), umin, umax)
             #control = u(sigma, x_)
@@ -667,9 +673,16 @@ if __name__ == '__main__':
                 lamb = 2
                 #vi = np.clip(v, -1, 1)
                 vi = v
-                u = control + np.clip(-lamb * np.abs(sx)**(0.5) * np.sign(sx) + vi, umin, umax)
+                if ARCTAN:
+                    u = control + np.clip(-lamb * np.abs(sx)**(0.5) * (np.arctan(sx) * 2 / np.pi) + vi, umin, umax)
+                else:
+                    u = control + np.clip(-lamb * np.abs(sx)**(0.5) * np.sign(sx) + vi, umin, umax)
+
                 if np.abs(v) < 1:
-                    v += (-c2 * np.sign(sx)) * dt
+                    if ARCTAN:
+                        v += (-c2 * (np.arctan(sx)) * 2/np.pi) * dt
+                    else:
+                        v += (-c2 * np.sign(sx)) * dt
                 else:
                     v += -v * dt
                 #vi = np.clip(v + (-c2 * np.sign(sx)) * dt, -1, 1)
