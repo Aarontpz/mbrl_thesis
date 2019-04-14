@@ -381,8 +381,7 @@ class PyTorchAgent(Agent):
    
     def evaluate(self, obs, *args, **kwargs) -> torch.tensor:
         #online param calculation discussion: https://discuss.pytorch.org/t/normalization-of-input-data-to-qnetwork/14800/2
-        #print("PyTorch Evaluate")
-        #obs = self.preprocess(obs) 
+        #if self.encode_inputs and # Ensure that inputs are encoded if necessary
         return super(PyTorchAgent, self).evaluate(obs, *args, **kwargs)
 
     def terminate_episode(self):
@@ -662,7 +661,7 @@ class DDPMPCAgent(MPCAgent):
         self.eps_decay = eps_decay
 
     def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
-        if isinstance(self.mpc_ddp, ISMC):
+        if isinstance(self.mpc_ddp, SMC):
             _, action = self.mpc_ddp.step(obs) 
             return action.flatten(), None, None
         if random.random() < self.eps:

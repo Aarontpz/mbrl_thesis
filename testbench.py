@@ -503,9 +503,13 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                     clone.mpc_ddp.model.module.device = device
                     launch_viewer(env, clone)    
                 else:
+                    clone = create_agent(PyTorchAgent, LIB_TYPE, env_type, device, [1, obs_size], 
+                        action_size, discrete_actions = DISCRETE_AGENT, 
+                        action_constraints = action_constraints, has_value_function = True, 
+                        encode_inputs = None, encoder = None)
                     module = copy.deepcopy(agent.module)
-                    agent.module = None
-                    clone = copy.deepcopy(agent)
+                    #agent.module = None
+                    #clone = copy.deepcopy(agent)
                     clone.module = module
                     clone.module.to(device)
                     launch_viewer(env, clone)    
@@ -565,7 +569,7 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-WIDENING_CONST = 10 #indim * WIDENING_CONST = hidden layer size
+WIDENING_CONST = 20 #indim * WIDENING_CONST = hidden layer size
 mlp_initializer = None
 DISCRETE_AGENT = False
 
@@ -609,7 +613,7 @@ replay_iterations = 5
 
 
 TRAINER_TYPE = 'AC'
-TRAINER_TYPE = 'PPO'
+#TRAINER_TYPE = 'PPO'
 #EPISODES_BEFORE_TRAINING = 3
 #max_traj_len = SMALL_TRAJECTORY_LENGTH
 #replay_iterations = 6
@@ -761,7 +765,7 @@ if __name__ == '__main__':
 
             AE_BATCHES = 64
             AE_REPLAYS = 10
-            DATASET_RECENT_PROB = 0.7
+            DATASET_RECENT_PROB = 0.5
             if action_size > 1:
                 forward_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + math.floor(action_size * REDUCTION_FACTOR**DEPTH)
             else:
@@ -843,6 +847,7 @@ if __name__ == '__main__':
             
             ## SMC-SPECIFIC ARGS
             SURFACE_BASE = None
+            SMC_SWITCHING_FUNCTION = 'arctan'
 
             ## DDP-SPECIFIC ARGS 
             LQG_FULL_ITERATIONS = True
@@ -855,12 +860,12 @@ if __name__ == '__main__':
             UPDATE_DDP_MODEL = True
             ILQG_SMC = False
             REUSE_SHOOTS = True if DDP_MODE == 'ilqg' else False
-            #mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
-            #mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
-            #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
-            mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [obs_size * WIDENING_CONST] 
+            mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
+            mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
             mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
+            #mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
+            #mlp_hdims = [obs_size * WIDENING_CONST] 
+            #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
             #pytorch_class = PyTorchLinearSystemDynamicsLinearModule
             #pytorch_model = PyTorchLinearSystemModel 
             pytorch_class = PyTorchForwardDynamicsLinearModule
@@ -939,16 +944,16 @@ if __name__ == '__main__':
                     for i in range(obs_size):
                         if i not in target_inds:
                             Q[i][i] = 0
-                #class DiffFunc:
-                #    def __init__(self, target_inds):
-                #        self.inds = target_inds
-                #    def __call__(self, t, x):
-                #        x_ = np.zeros(x.shape)
-                #        for i in self.inds:
-                #            x_[i] = x[i] - t[i]
-                #        return x_
-                #diff_func = DiffFunc(target_inds)
-                diff_func = lambda t,x:x - t 
+                class DiffFunc:
+                    def __init__(self, target_inds):
+                        self.inds = target_inds
+                    def __call__(self, t, x):
+                        x_ = np.zeros(x.shape)
+                        for i in self.inds:
+                            x_[i] = x[i] - t[i]
+                        return x_
+                diff_func = DiffFunc(target_inds)
+                #diff_func = lambda t,x:x - t 
                 print("Q: ", Q)
                 cost = LQC(Q, R, Qf, target = target, 
                         diff_func = diff_func)
@@ -971,7 +976,8 @@ if __name__ == '__main__':
                     surface = np.eye(obs_size, M=action_size)
                     #surface = np.ones([obs_size, action_size])
                     print("Surface Function: ", surface)
-                    smc = ISMC(surface,
+                    smc = SMC(surface,
+                            SMC_SWITCHING_FUNCTION,
                             obs_space, obs_size,
                             [1, action_size], action_size,
                             system_model, cost,
@@ -986,11 +992,13 @@ if __name__ == '__main__':
 
             elif DDP_MODE == 'ismc':
                 print("Obs Size: ", obs_size)
+                print("Action Size: ", action_size)
                 #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
                 surface = np.eye(obs_size, M=action_size)
                 #surface = np.ones([obs_size, action_size])
                 print("Surface Function: ", surface)
-                ddp = ISMC(surface,
+                ddp = SMC(surface,
+                        SMC_SWITCHING_FUNCTION,
                         obs_space, obs_size,
                         [1, action_size], action_size,
                         system_model, cost,
@@ -1002,7 +1010,7 @@ if __name__ == '__main__':
                         update_model = UPDATE_DDP_MODEL
                         )
             
-            DATASET_RECENT_PROB = 0.7
+            DATASET_RECENT_PROB = 0.5
             
             dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
             
@@ -1027,6 +1035,8 @@ if __name__ == '__main__':
             mx, mn = retrieve_max_min([obs_size],[obs_size],LIB_TYPE, ENV_TYPE, norm_dir = 'norm')
             print("CURRENT MX: %s \n MN: %s \n" % (mx, mn))
             new_mx, new_mn = mx, mn #copy them for updating
+
+        #input()
         
         ## RUN AGENT / TRAINING
         if (not PRETRAINED) or (RUN_ANYWAYS):
