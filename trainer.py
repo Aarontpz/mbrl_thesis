@@ -383,7 +383,7 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
         forward_criterion = torch.nn.MSELoss()
         for r in range(self.replay):
             sample = dataset.sample(self.batch_size) 
-            raise Exception("The following line was missing; test this again you DINGUS <3")
+            #raise Exception("The following line was missing; test this again you DINGUS <3")
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory #idiot
             for i in range(len(sample)):
                 s = self.get_sample_s(sample[i])

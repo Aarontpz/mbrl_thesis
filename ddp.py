@@ -837,7 +837,8 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
 
 class SMC(DDP):
     '''(Abstract, default LINEAR, STATIC) Implementation of iterative sliding mode controller.'''
-    def __init__(self, surface_base : np.ndarray,
+    def __init__(self, surface_base : np.ndarray, 
+            target : np.ndarray, diff_func = lambda t,x : x-t,
             switching_function = 'sign', 
             *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -846,7 +847,11 @@ class SMC(DDP):
 
         self.switching_function = switching_function
 
+        self.target = target
+        self.diff_func = diff_func
+
     def step(self, xt):
+        xt = self.diff_func(self.target, xt)
         if self.update_model:
             if len(xt.shape) > 1:
                 xt = xt.flatten()
@@ -1002,7 +1007,8 @@ if __name__ == '__main__':
     LINEARIZED_PENDULUM_TEST = False
     NONLINEAR_PENDULUM_TEST = True
     
-    NONLINEAR_CARTPOLE_TEST = True
+    NONLINEAR_CARTPOLE_TEST = False
+
     ##NONLINEAR CARTPOLE TEST
     if NONLINEAR_CARTPOLE_TEST:
         lamb_factor = 10
@@ -1280,7 +1286,7 @@ if __name__ == '__main__':
             for i in null_ind:
                 Q[i][i] = 0
         #target = None
-        target = np.array([0, 0], dtype = np.float64)
+        target = np.array([np.pi, 0], dtype = np.float64)
         #target = np.array([0.5, 0], dtype = np.float64)
         #target = np.array([np.pi, 0], dtype = np.float64)
         #target = np.array([np.pi/2, 0], dtype = np.float64)
@@ -1288,7 +1294,7 @@ if __name__ == '__main__':
         
         #x0 = np.array([0, np.pi/2],dtype=np.float64)
         #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
-        x0 = np.array([np.pi, -0.05],dtype=np.float64) #NOTE: don't do 
+        x0 = np.array([np.pi/2, -0.00],dtype=np.float64) #NOTE: don't do 
         #x0 = np.array([0.1, 0.10],dtype=np.float64)
         
         diff_func = lambda t,x : x - t

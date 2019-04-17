@@ -64,7 +64,8 @@ def create_dm_cartpole_agent(agent_base, *args, **kwargs):
                 pos = obs['position']
                 vel = obs['velocity']
                 state = np.concatenate((pos, vel))
-            elif type(obs) == type(np.zeros(0)):
+            #elif type(obs) == type(np.zeros(0)):
+            else:
                 state = obs
             return Variable(torch.tensor(state).float(), requires_grad = False)
     
@@ -247,6 +248,8 @@ def create_ddp_agent(lib_type, env_type, agent_base = DDPMPCAgent, *args, **kwar
             agent = create_ddp_dm_walker_agent(DDPMPCAgent, *args, **kwargs) 
         elif env_type == 'cartpole':
             agent = create_ddp_dm_cartpole_agent(DDPMPCAgent, *args, **kwargs) 
+    else:
+        return create_numpy_agent(agent_base, *args, **kwargs)
     return agent
 
 def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwargs):
@@ -569,7 +572,7 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-WIDENING_CONST = 20 #indim * WIDENING_CONST = hidden layer size
+WIDENING_CONST = 50 #indim * WIDENING_CONST = hidden layer size
 mlp_initializer = None
 DISCRETE_AGENT = False
 
@@ -611,6 +614,8 @@ horizon = 50
 #max_traj_len = SMALL_TRAJECTORY_LENGTH
 replay_iterations = 5
 
+AGENT_RANDOM_BASELINE = False 
+AGENT_RANDOM_BASELINE = True 
 
 TRAINER_TYPE = 'AC'
 #TRAINER_TYPE = 'PPO'
@@ -618,9 +623,9 @@ TRAINER_TYPE = 'AC'
 #max_traj_len = SMALL_TRAJECTORY_LENGTH
 #replay_iterations = 6
 
-lr = 0.5e-3
+lr = 0.1e-3
 ADAM_BETAS = (0.9, 0.999)
-MOMENTUM = 1e-3
+MOMENTUM = 1e-4
 #MOMENTUM = 0
 entropy_coeff = 5e-3
 #entropy_coeff = 0 
@@ -640,22 +645,22 @@ ENV_TYPE = 'humanoid'
 #TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-EPS = 5e-2
-EPS_MIN = 2e-2
-EPS_DECAY = 1e-6
-GAMMA = 0.99
-ENV_TYPE = 'walker'
-#TASK_NAME = 'run'
-TASK_NAME = 'walk'
-TASK_NAME = 'stand'
-
-#EPS = 7e-2
-#EPS_MIN = 0.5e-2
-#EPS_DECAY = 1e-7
+#EPS = 5e-2
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
 #GAMMA = 0.99
-#ENV_TYPE = 'cartpole'
-#TASK_NAME = 'swingup'
-##TASK_NAME = 'balance'
+#ENV_TYPE = 'walker'
+##TASK_NAME = 'run'
+#TASK_NAME = 'walk'
+#TASK_NAME = 'stand'
+
+EPS = 7e-2
+EPS_MIN = 0.5e-2
+EPS_DECAY = 1e-7
+GAMMA = 0.99
+ENV_TYPE = 'cartpole'
+TASK_NAME = 'swingup'
+#TASK_NAME = 'balance'
 
 MAXMIN_NORMALIZATION = False
 TRAIN_AUTOENCODER = False
@@ -671,9 +676,35 @@ TRAIN_AUTOENCODER = False
 #EPS_DECAY = 1e-6
 #GAMMA = 0.98
 #ENV_TYPE = 'rossler'
-#ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.0001, 'interval' : 10}
+#ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
 #TASK_NAME = 'point'
 
+#LIB_TYPE = 'control'
+#PRETRAINED = False
+#RUN_ANYWAYS = True
+#MAXMIN_NORMALIZATION = False
+#TRAIN_AUTOENCODER = False
+#EPS = 0.5e-1
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
+#GAMMA = 0.98
+#ENV_TYPE = 'cartpole'
+#ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
+#TASK_NAME = 'point'
+
+LIB_TYPE = 'control'
+PRETRAINED = False
+RUN_ANYWAYS = True
+MAXMIN_NORMALIZATION = False
+TRAIN_AUTOENCODER = False
+EPS = 0.5e-1
+EPS_MIN = 2e-2
+EPS_DECAY = 1e-6
+GAMMA = 0.98
+ENV_TYPE = 'inverted'
+ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
+        'target':np.array([0, 0])}
+TASK_NAME = 'point'
 
 MA_LEN = -1
 MA_LEN = 15
@@ -860,16 +891,16 @@ if __name__ == '__main__':
             UPDATE_DDP_MODEL = True
             ILQG_SMC = False
             REUSE_SHOOTS = True if DDP_MODE == 'ilqg' else False
-            mlp_activations = ['relu', 'relu', None] #+1 for outdim activation, remember extra action/value modules
+            mlp_activations = [None, 'relu', None] #+1 for outdim activation, remember extra action/value modules
             mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
             mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
             #mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
             #mlp_hdims = [obs_size * WIDENING_CONST] 
             #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
-            #pytorch_class = PyTorchLinearSystemDynamicsLinearModule
-            #pytorch_model = PyTorchLinearSystemModel 
-            pytorch_class = PyTorchForwardDynamicsLinearModule
-            pytorch_model = PyTorchForwardDynamicsModel 
+            pytorch_class = PyTorchLinearSystemDynamicsLinearModule
+            pytorch_model = PyTorchLinearSystemModel 
+            #pytorch_class = PyTorchForwardDynamicsLinearModule
+            #pytorch_model = PyTorchForwardDynamicsModel 
             if pytorch_class == PyTorchForwardDynamicsLinearModule:
                 pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                     activations = mlp_activations, initializer = mlp_initializer).to(device)
@@ -935,29 +966,44 @@ if __name__ == '__main__':
                     Q = np.eye(obs_size) * 1e8
                     Qf = Q
                     R = np.eye(action_size) * 1e3
-                priority_cost = True
-                if priority_cost:
-                    for i in range(obs_size):
-                        if i not in target_inds:
-                            Q[i][i] = np.sqrt(Q[i][i])
-                else:
-                    for i in range(obs_size):
-                        if i not in target_inds:
-                            Q[i][i] = 0
-                class DiffFunc:
-                    def __init__(self, target_inds):
-                        self.inds = target_inds
-                    def __call__(self, t, x):
-                        x_ = np.zeros(x.shape)
-                        for i in self.inds:
-                            x_[i] = x[i] - t[i]
-                        return x_
-                diff_func = DiffFunc(target_inds)
-                #diff_func = lambda t,x:x - t 
-                print("Q: ", Q)
-                cost = LQC(Q, R, Qf, target = target, 
-                        diff_func = diff_func)
+            elif LIB_TYPE == 'control':
+                if ENV_TYPE == 'inverted':
+                    #cost is manually set as deviation from pole upright
+                    #position.
+                    print("ENV TYPE IS INVERTED PENDULUM (control environment)")
+                    target = np.zeros(obs_size)
+                    theta_ind = 0 #based on pole-angle cosine, rep theta
+                    target_theta = 0.0 #target pole position
+                    target[theta_ind] = target_theta
+                    target_inds = [theta_ind]
+                    Q = np.eye(obs_size) * 1e2
+                    Qf = Q * 1e2
+                    R = np.eye(action_size) * 1e1
 
+            priority_cost = True
+            if priority_cost:
+                for i in range(obs_size):
+                    if i not in target_inds:
+                        Q[i][i] = np.sqrt(Q[i][i])
+            else:
+                for i in range(obs_size):
+                    if i not in target_inds:
+                        Q[i][i] = 0
+            class DiffFunc:
+                def __init__(self, target_inds):
+                    self.inds = target_inds
+                def __call__(self, t, x):
+                    x_ = np.zeros(x.shape)
+                    for i in self.inds:
+                        x_[i] = x[i] - t[i]
+                    return x_
+            #diff_func = DiffFunc(target_inds)
+            diff_func = lambda t,x:x - t 
+            print("Q: ", Q)
+            cost = LQC(Q, R, Qf, target = target, 
+                    diff_func = diff_func)
+            if LIB_TYPE == 'control':
+                env.cost = cost #to get meaningful reward data
             ddp = None
             if DDP_MODE == 'ilqg':
                 ddp = ILQG(LQG_FULL_ITERATIONS,
@@ -998,6 +1044,7 @@ if __name__ == '__main__':
                 #surface = np.ones([obs_size, action_size])
                 print("Surface Function: ", surface)
                 ddp = SMC(surface,
+                        target, diff_func,
                         SMC_SWITCHING_FUNCTION,
                         obs_space, obs_size,
                         [1, action_size], action_size,
@@ -1010,7 +1057,7 @@ if __name__ == '__main__':
                         update_model = UPDATE_DDP_MODEL
                         )
             
-            DATASET_RECENT_PROB = 0.5
+            DATASET_RECENT_PROB = 0.7
             
             dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
             
@@ -1024,10 +1071,10 @@ if __name__ == '__main__':
                 LIB_TYPE, ENV_TYPE,
                 env, obs_size, action_size, action_constraints,
                 mlp_hdims, mlp_activations, 
-                lr = 5e-4, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+                lr = lr, adam_betas = ADAM_BETAS, momentum = MOMENTUM, 
                 discrete_actions = False, 
                 has_value_function = False) 
-
+       
 
 
         if MAXMIN_NORMALIZATION: 
@@ -1091,7 +1138,9 @@ if __name__ == '__main__':
                         env.reset()
                         while not env.episode_is_done() and step < MAX_TIMESTEPS:
                             obs = env.get_state()
-                            action = agent.step(obs).cpu().numpy()
+                            action = agent.step(obs)
+                            if isinstance(action, torch.Tensor):
+                                action = agent.step(obs).cpu().numpy()
                             env.step(action)
                             reward = env.get_reward()
                             agent.store_reward(reward)
@@ -1111,7 +1160,11 @@ if __name__ == '__main__':
                     if MAXMIN_NORMALIZATION: 
                         print("(stored) max: %s\n min: %s\n"%(new_mx, new_mn))
                         store_max_min(new_mx, new_mn, LIB_TYPE, ENV_TYPE, norm_dir = 'norm') 
-                            
+                
+                if 'MB' in AGENT_TYPE: #look for model-based. Disgusting
+                    env.generate_vector_field_plot(agent.mpc_ddp.model)
+                if LIB_TYPE == 'control':
+                    env.generate_vector_field_plot()
 
                 agent.reset_histories()
                 if AGENT_TYPE == 'policy' and not PRETRAINED:

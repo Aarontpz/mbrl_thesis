@@ -202,11 +202,12 @@ class ControlEnvironment(ModelledEnvironment):
         plt.plot(x[-1], y[-1], 'go')
         plt.draw()
         plt.pause(0.01)
+
+
     
     def generate_plots(self):
         self.generate_control_plot()
         self.generate_error_plot()
-        #self.generate_eigenvalues_history_plot()
 
     @abc.abstractmethod
     def get_environment_name(self):
@@ -300,13 +301,13 @@ class InvertedPendulumEnvironment(ControlEnvironment):
     #def dx(self, x, u, *args) -> np.ndarray:
         '''x' = dx * x + du * u'''
         if u is None:
-            u = 0.0
+            u = np.array([0.0])
         if len(u.shape) > 1:
             u = u[0]
         #dx = self.d_dx(x, u, r) 
         #dx = np.array([x[1], -4*np.sin(x[0]) - 0.01*x[1]])
         #input("Self.friction: %s" % (self.friction))
-        dx = np.array([x[1], 1*np.cos(x[0]) - self.friction*x[1]])
+        dx = np.array([x[1], -1*np.sin(x[0]) - self.friction*x[1]])
         #dx = np.array([x[1], -4*np.sin(x[0])])
         if r is not None:
             #print("Ref: ", r) 
@@ -325,7 +326,8 @@ class InvertedPendulumEnvironment(ControlEnvironment):
     def d_dx(self, x, u=None, r=None, *args):
         #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
         #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
-        dx = np.array([[0, 1], [-1*np.sin(x[0]), -self.friction]])
+        print("INP: ", x)
+        dx = np.array([[0, 1], [-1*np.cos(x[0]), -self.friction]])
         #dx = np.array([[0, 1], [-4*np.sin(x[0]), 0]])
         #dx = np.array([x[1], 4*np.sin(x[0]) - 0.001*x[1]]) #additional friction term
         return dx
@@ -354,18 +356,75 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         return 1
 
     def get_action_constraints(self):
-        return [np.ndarray([-2]), np.ndarray([2])]
+        return [np.array([-2,]), np.array([2,])]
 
     def get_reward(self):
         '''Reward = -Cost and vise-versa'''
+        if hasattr(self, 'cost'):
+            return -self.cost(self.state[-1], self.control_history[-1])
         return 0
     
     def get_environment_name(self):
         return 'Inverted Pendulum'
+    
+    def generate_vector_field_plot(self, dx_model = None):
+        if dx_model is not None:
+            if not hasattr(self, 'secondary_vector_fig'):
+                self.secondary_vector_fig = plt.figure()
+            fig = self.secondary_vector_fig
+        else:
+            if not hasattr(self, 'vector_fig'):
+                self.vector_fig = plt.figure()
+            fig = self.vector_fig 
+        x = np.arange(-np.pi, np.pi, 0.1)
+        y = np.arange(-2.5, 2.5, 0.1)
+        #xx, yy = np.meshgrid(x, y, sparse = True)
+        z = []
+        xx = []
+        yy = []
+        for i in range(x.size): #NOTE: are we...really doing this? YES
+            for j in range(y.size): #REALLY. nested for loops instead of vect.
+                xx.append(x[i])
+                yy.append(y[j])
+                if dx_model is not None:
+                    dx = dx_model.update(np.array([x[i], y[j]]))[0]
+                    if len(dx.shape) > 1:
+                        z.append(dx) #linear / Jacobian
+                    else:
+                        z.append(np.diag(dx)) #vector rep. transition
+                else:
+                    z.append(np.diag(self.dx(np.array([x[i], y[j]]))))
+                    #z.append(self.d_dx(np.array([x[i], y[j]])))
+                    #z.append(np.array([[np.sin(x[i]), 0], [0, np.cos(y[j])]]))
+        z = np.array(z)
+        #print("Z: ", z.shape)
+        eig = np.linalg.eig(np.array(z))
+        #print("Eig: ", len(eig))
+        #print("EIG[0]: ", eig[0][:,:])
+        #print("Eig[0][0,0]:", eig[0][0,0])
+        #print("Eig[0][0, 1]:", eig[0][0,1])
+        if dx_model is not None: #temporary measure, we have TOO MANY figures
+            plt.figure(54)
+        else:
+            plt.figure(55)
+        plt.clf()
+        plt.quiver(xx, yy, eig[0][:,0], eig[0][:,1])
+        plt.title("%s Quiver Plot" % (self.get_environment_name()))
+        plt.xlabel("Radians")
+        plt.ylabel("Radians / s")
+        if True:
+            history = self.state_history
+            x = [s[0] for s in history]
+            y = [s[1] for s in history]
+            plt.plot(x, y)
+        plt.draw()
+        plt.pause(0.01)
+        
 
     def generate_plots(self):
         super().generate_plots()
         self.generate_state_history_plot()
+        self.generate_vector_field_plot()
 
 class CartpoleEnvironment(ControlEnvironment):
     def __init__(self, mc = 1, mp = 0.5, L = 1, g=9.8,
@@ -499,11 +558,6 @@ class CartpoleEnvironment(ControlEnvironment):
     def get_action_constraints(self):
         return [np.ndarray([-2]), np.ndarray([2])]
 
-    def generate_plots(self):
-        self.generate_theta_phase_plot()
-        self.generate_cart_phase_plot()
-        super().generate_plots()
-
     def generate_theta_phase_plot(self, history = None):
         if history is None:
             if not hasattr(self, 'theta_fig'):
@@ -558,6 +612,51 @@ class CartpoleEnvironment(ControlEnvironment):
         plt.draw()
         plt.pause(0.01)
 
+    def generate_theta_vector_field_plot(self):
+        if not hasattr(self, 'vector_fig'):
+            self.vector_fig = plt.figure()
+        fig = self.vector_fig 
+        t = np.arange(-2*np.pi, 2*np.pi, 0.1)
+        t_dx = np.arange(-8, 8, 0.1)
+        #xx, yy = np.meshgrid(x, y, sparse = True)
+        z = []
+        xx = []
+        yy = []
+        for i in range(t.size): #NOTE: are we...really doing this? YES
+            for j in range(t_dx.size): #REALLY. nested for loops instead of vect.
+                xx.append(t[i])
+                yy.append(t_dx[j])
+                z.append(np.diag(self.dx(np.array([0, 0, t[i], t_dx[j]]))))
+                #z.append(self.d_dx(np.array([x[i], y[j]])))
+                #z.append(np.array([[np.sin(x[i]), 0], [0, np.cos(y[j])]]))
+        z = np.array(z)
+        #print("Z: ", z.shape)
+        eig = np.linalg.eig(np.array(z))
+        #print("Eig: ", len(eig))
+        #print("EIG[0]: ", eig[0][:,:])
+        #print("Eig[0][0,0]:", eig[0][0,0])
+        #print("Eig[0][0, 1]:", eig[0][0,1])
+        plt.figure(fig.number)
+        plt.quiver(xx, yy, eig[0][:,2], eig[0][:,3])
+        plt.title("%s Quiver Plot" % (self.get_environment_name()))
+        plt.xlabel("Radians")
+        plt.ylabel("Radians / s")
+        if True:
+            history = self.state_history
+            x = [s[2] for s in history]
+            y = [s[3] for s in history]
+            plt.plot(x, y)
+        plt.draw()
+        plt.pause(0.01)
+    
+    def generate_plots(self):
+        self.generate_theta_phase_plot()
+        self.generate_cart_phase_plot()
+        self.generate_theta_vector_field_plot()
+        input()
+        super().generate_plots()
+
+
     def get_reward(self):
         '''Reward = -Cost and vise-versa'''
         return 0
@@ -583,18 +682,29 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    TEST_INVERTED_PENDULUM = False
-    TEST_CARTPOLE = True
+    TEST_INVERTED_PENDULUM = True
+    TEST_CARTPOLE = False
 
     if TEST_CARTPOLE:
-        horizon = 3
+        horizon = 4
         mc = 1
         mp = 0.1
-        L = 0.5
+        L = 0.3
         g = 9.8
         dt = 1e-2
+        ARCTAN = True
+        TSSMC = False
+        #ucoeff = 1.5
+        ucoeff = 2
+        umin = -1.0e1
+        umax = 1.0e1
+        sigma = np.array([[1e0, 1e0, 10e0, 1e0]]).T #sliding surface definition
+        if ARCTAN:
+            switch = lambda s: np.arctan(s) * 2/np.pi
+        else:
+            switch = lambda s: np.sign(s)
         target = np.array([0.0, 0, 0.0, 0])
-        x0 = np.array([-0, 0, 0.4, -0.3])
+        x0 = np.array([-0, -.0, -np.pi/2, -0.0])
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
                 mc, mp, L, g,
@@ -608,11 +718,11 @@ if __name__ == '__main__':
         env.state = x0.copy()
         smc_lyap = []
         lyap = []
+        d_du = []
         v = 0 #for TSSMC
         integrated = np.zeros(env.state.shape) #integral-error
         if len(integrated.shape) < 2:
             integrated = integrated[..., np.newaxis]
-        sigma = np.array([[1e0, 1e0, 30, 5e0]]).T #sliding surface definition
         x = env.state
         x_ = x - np.array([x[0], x[1], target[2], x[3]])
         #x_ = x - target
@@ -632,7 +742,6 @@ if __name__ == '__main__':
             #x = x_ #to see if it makes a difference
             print("State: ", x)
             print("Target: %s \n Error: %s"%(target, x_))
-            TSSMC = False
             ##Linearizing Feedback Controls
 
             ## Sliding Mode Controls
@@ -644,21 +753,18 @@ if __name__ == '__main__':
             #x' = h(x) + g(x)u
             hx = np.array([x[1], ddx/x_denom, x[3],ddtheta/(L*x_denom)])
             gx = np.array([0, 1/x_denom, 0, -np.cos(x[2])/L * 1/x_denom])
+            print("sigma * h", np.dot(sigma.T, hx))
+            print("sigma * g", np.dot(sigma.T, gx))
             
-            ucoeff = 1.5
-            ucoeff = 2
-            umin = -1.0e1
-            umax = 1.0e1
             ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)
             #ucomp = 1
             
-            ARCTAN = True
             ## FOSMC
             sx = np.dot(sigma.T, x_)
-            if ARCTAN:
-                u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * (np.arctan(sx) * 2/np.pi)
-            else:
-                u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * np.sign(sx)
+            u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * switch(sx)
+            du_ds = lambda sigma, x : -ucoeff * (gx / hx) * 1/(1+(np.dot(sigma.T, x))**2) * x
+            print("du/ds: ", du_ds(sigma, x_))
+            d_du.append(du_ds(sigma, x_))
             #u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(dx)) * np.sign(sx)
             control = np.clip(u(sigma, x_), umin, umax)
             #control = u(sigma, x_)
@@ -673,16 +779,10 @@ if __name__ == '__main__':
                 lamb = 2
                 #vi = np.clip(v, -1, 1)
                 vi = v
-                if ARCTAN:
-                    u = control + np.clip(-lamb * np.abs(sx)**(0.5) * (np.arctan(sx) * 2 / np.pi) + vi, umin, umax)
-                else:
-                    u = control + np.clip(-lamb * np.abs(sx)**(0.5) * np.sign(sx) + vi, umin, umax)
+                u = control + np.clip(-lamb * np.abs(sx)**(0.5) * switch(sx) + vi, umin, umax)
 
                 if np.abs(v) < 1:
-                    if ARCTAN:
-                        v += (-c2 * (np.arctan(sx)) * 2/np.pi) * dt
-                    else:
-                        v += (-c2 * np.sign(sx)) * dt
+                    v += (-c2 * switch(sx)) * dt
                 else:
                     v += -v * dt
                 #vi = np.clip(v + (-c2 * np.sign(sx)) * dt, -1, 1)
@@ -706,6 +806,15 @@ if __name__ == '__main__':
             env.step(control)
             #env.step(np.zeros(1))
         env.generate_plots()
+        #if len(d_du) > 0:
+        #    plt.figure(10) #eh
+        #    x = range(len(d_du))
+        #    plt.plot(x,smc_lyap, label='parametric curve')
+        #    plt.title("SMC Control Derivative")
+        #    plt.xlabel("Timestep")
+        #    plt.ylabel("u'(x, sigma)")
+        #    plt.draw()
+        #    plt.pause(0.01)
         #if len(smc_lyap) > 0:
         #    plt.figure(10) #eh
         #    x = range(len(smc_lyap))
@@ -729,9 +838,9 @@ if __name__ == '__main__':
 
     if TEST_INVERTED_PENDULUM:
         noisy_init = True
-        target = np.array([np.pi, 0])
         target = np.array([0, 0])
-        horizon = 5
+        #target = np.array([0, 0])
+        horizon = 10
         friction = 0.0
         env = retrieve_control_environment('inverted', 
                 friction = friction,  
@@ -741,9 +850,11 @@ if __name__ == '__main__':
                 target = target)
         env.reset()
         #env.state = np.array([0.0, 0.0])
-        env.state = np.array([np.pi, 0.0])
+        env.state = np.array([np.pi, -1e-1])
         gamma = 0.7
         wn = 20
+        umax = 2
+        ARCTAN = True
         while not env.episode_is_done():
             print("STEP ", env.steps)
             x = env.state
@@ -756,7 +867,6 @@ if __name__ == '__main__':
             dw = np.array([[0,0],[4*np.cos(x[0]) - wn**2, friction - 2*gamma*wn]])
             #dw = np.array([4*np.cos(x[0]) - wn**2, 0.1 - 2*gamma*wn])
             #dw = np.zeros(1)
-            #dw = np.ones(1)
             #print("dW: ", dw)
             #print("U: ", target - w)
             #env.step(target + dw)
@@ -766,12 +876,15 @@ if __name__ == '__main__':
 
             ## Sliding Mode Controls
             sigma = np.array([1, 1]) #sliding surface definition
-            umax = 2
-            u = lambda sigma, x: umax * -(np.abs(-x[1] - np.cos(x[0]) + friction * x[1])) * np.sign(np.dot(sigma.T,  x))
+            if ARCTAN:
+                u = lambda sigma, x: umax * -(np.abs(-x[1] - np.cos(x[0]) + friction * x[1])) * (2/np.pi * np.arctan(np.dot(sigma.T,  x)))
+            else:
+                u = lambda sigma, x: umax * -(np.abs(-x[1] - np.cos(x[0]) + friction * x[1])) * np.sign(np.dot(sigma.T,  x))
             print("Sliding Surface: ", np.dot(sigma.T, x)) 
             #control = u(sigma, x)
             control = u(sigma, x_)
-            print("Control: ", control)
+            #control = np.zeros(1)
+            #print("Control: ", control)
             #env.step(u(sigma, x_))
             env.step(control)
         env.generate_plots()

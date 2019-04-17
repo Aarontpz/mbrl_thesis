@@ -233,6 +233,7 @@ class RandomAgent(Agent):
         self.random = True
     
     def step(self, obs):
+        print("ObservatioN: ", obs)
         obs = self.transform_observation(obs)
         return super(RandomAgent, self).step(obs)
 
@@ -1360,6 +1361,7 @@ class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
         self.g.resize(self.module.b_shape)
         print("f: ", self.f.shape)
         print("g: ", self.g.shape)
+        return self.f, self.g
 
 class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
     '''Note: Output of PyTorchModel is FLATTENED A/B'''
@@ -1404,4 +1406,5 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
         self.B.resize(self.module.b_shape)
         print("A: ", self.A.shape)
         print("B: ", self.B.shape)
+        return self.A, self.B
 
