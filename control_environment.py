@@ -398,6 +398,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
                     #z.append(np.array([[np.sin(x[i]), 0], [0, np.cos(y[j])]]))
         z = np.array(z)
         #print("Z: ", z.shape)
+        #eig = z
         eig = np.linalg.eig(np.array(z))
         #print("Eig: ", len(eig))
         #print("EIG[0]: ", eig[0][:,:])

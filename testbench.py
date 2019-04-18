@@ -444,20 +444,29 @@ def create_pytorch_agnostic_mbrl(cost,
                     terminal_penalty = 0.0, 
                     policy_entropy_history = True, 
                     energy_penalty_history = True)
-    criterion = torch.nn.MSELoss() 
-    module = agent.mpc_ddp.model.module
-    optimizer = optim.Adam(module.parameters(), lr = lr, betas = ADAM_BETAS)
-    #optimizer = optim.SGD(module.parameters(), lr = lr, momentum = MOMENTUM)
-    scheduler = None
-    #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
+    if hasattr(agent.mpc_ddp.model, 'module'):
+        criterion = torch.nn.MSELoss() 
+        module = agent.mpc_ddp.model.module
+        optimizer = optim.Adam(module.parameters(), lr = lr, betas = ADAM_BETAS)
+        #optimizer = optim.SGD(module.parameters(), lr = lr, momentum = MOMENTUM)
+        scheduler = None
+        #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
 
-    trainer = PyTorchDynamicsTrainer(system_model, 
-            dataset, 
-            criterion,
-            batch_size, collect_forward_loss, device,
-            optimizer, scheduler = None, agent = agent, env = env,
-            replay = replays, max_traj_len = None, gamma=0.98, 
-            num_episodes = 1) 
+        trainer = PyTorchDynamicsTrainer(system_model, 
+                dataset, 
+                criterion,
+                batch_size, collect_forward_loss, device,
+                optimizer, scheduler = None, agent = agent, env = env,
+                replay = replays, max_traj_len = None, gamma=0.98, 
+                num_episodes = 1) 
+    else:
+        trainer = SKLearnDynamicsTrainer(system_model, 
+                dataset, 
+                agent = agent, env = env,
+                replay = replays, max_traj_len = None, gamma=0.98, 
+                num_episodes = 1) 
+        #in the case of local-linear models relying on
+        #non-PyTorch methods. This code is getting unmanageable. 
     return agent, trainer
         
 
@@ -654,13 +663,13 @@ TASK_NAME = 'stand'
 #TASK_NAME = 'walk'
 #TASK_NAME = 'stand'
 
-EPS = 7e-2
-EPS_MIN = 0.5e-2
-EPS_DECAY = 1e-7
-GAMMA = 0.99
-ENV_TYPE = 'cartpole'
-TASK_NAME = 'swingup'
-#TASK_NAME = 'balance'
+#EPS = 7e-2
+#EPS_MIN = 0.5e-2
+#EPS_DECAY = 1e-7
+#GAMMA = 0.99
+#ENV_TYPE = 'cartpole'
+#TASK_NAME = 'swingup'
+##TASK_NAME = 'balance'
 
 MAXMIN_NORMALIZATION = False
 TRAIN_AUTOENCODER = False
@@ -692,19 +701,19 @@ TRAIN_AUTOENCODER = False
 #ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
 #TASK_NAME = 'point'
 
-LIB_TYPE = 'control'
-PRETRAINED = False
-RUN_ANYWAYS = True
-MAXMIN_NORMALIZATION = False
-TRAIN_AUTOENCODER = False
-EPS = 0.5e-1
-EPS_MIN = 2e-2
-EPS_DECAY = 1e-6
-GAMMA = 0.98
-ENV_TYPE = 'inverted'
-ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
-        'target':np.array([0, 0])}
-TASK_NAME = 'point'
+#LIB_TYPE = 'control'
+#PRETRAINED = False
+#RUN_ANYWAYS = True
+#MAXMIN_NORMALIZATION = False
+#TRAIN_AUTOENCODER = False
+#EPS = 0.5e-1
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
+#GAMMA = 0.98
+#ENV_TYPE = 'inverted'
+#ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
+#        'target':np.array([0, 0])}
+#TASK_NAME = 'point'
 
 MA_LEN = -1
 MA_LEN = 15
@@ -874,11 +883,25 @@ if __name__ == '__main__':
             #EPS_MIN = 2e-2
             #EPS_DECAY = 1e-7
             DDP_MODE = 'ismc'
+            #DDP_MODE = 'ilqg'
             ## 
+
+            ## MODEL-SPECIFIC PARAMETERS
+            LOCAL_LINEAR_MODEL = True
+            pytorch_class = PyTorchLinearSystemDynamicsLinearModule
+            pytorch_model = PyTorchLinearSystemModel 
+            #pytorch_class = PyTorchForwardDynamicsLinearModule
+            #pytorch_model = PyTorchForwardDynamicsModel 
+
             
             ## SMC-SPECIFIC ARGS
             SURFACE_BASE = None
             SMC_SWITCHING_FUNCTION = 'arctan'
+                
+                
+            #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
+            surface = np.eye(obs_size, M=action_size)
+            #surface = np.ones([obs_size, action_size])
 
             ## DDP-SPECIFIC ARGS 
             LQG_FULL_ITERATIONS = True
@@ -890,24 +913,29 @@ if __name__ == '__main__':
             K_SHOOTS = 1
             UPDATE_DDP_MODEL = True
             ILQG_SMC = False
-            REUSE_SHOOTS = True if DDP_MODE == 'ilqg' else False
+            REUSE_SHOOTS = False if DDP_MODE == 'ilqg' else False
             mlp_activations = [None, 'relu', None] #+1 for outdim activation, remember extra action/value modules
             mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
             mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
             #mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
             #mlp_hdims = [obs_size * WIDENING_CONST] 
             #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
-            pytorch_class = PyTorchLinearSystemDynamicsLinearModule
-            pytorch_model = PyTorchLinearSystemModel 
-            #pytorch_class = PyTorchForwardDynamicsLinearModule
-            #pytorch_model = PyTorchForwardDynamicsModel 
-            if pytorch_class == PyTorchForwardDynamicsLinearModule:
-                pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
-                    activations = mlp_activations, initializer = mlp_initializer).to(device)
-            elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
-                pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
-                    activations = mlp_activations, initializer = mlp_initializer).to(device)
-            system_model = pytorch_model(pytorch_module, DT) 
+
+            if LOCAL_LINEAR_MODEL: 
+                system_model = LinearBirchLocalModel(
+                        (obs_size, obs_size), (obs_size, action_size),
+                        threshold = 0.5,
+                        branching_factor = 50, n_clusters = 100,
+                        compute_labels = True, 
+                        dt = DT)
+            else:
+                if pytorch_class == PyTorchForwardDynamicsLinearModule:
+                    pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                        activations = mlp_activations, initializer = mlp_initializer).to(device)
+                elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
+                    pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                        activations = mlp_activations, initializer = mlp_initializer).to(device)
+                system_model = pytorch_model(pytorch_module, DT) 
 
             #TODO TODO: Neural Network generation of quadratic cost
             #function, using RL
@@ -1019,10 +1047,9 @@ if __name__ == '__main__':
                         update_model = UPDATE_DDP_MODEL
                         )
                 if ILQG_SMC == True:
-                    surface = np.eye(obs_size, M=action_size)
-                    #surface = np.ones([obs_size, action_size])
                     print("Surface Function: ", surface)
                     smc = SMC(surface,
+                            target, diff_func,
                             SMC_SWITCHING_FUNCTION,
                             obs_space, obs_size,
                             [1, action_size], action_size,
@@ -1039,9 +1066,6 @@ if __name__ == '__main__':
             elif DDP_MODE == 'ismc':
                 print("Obs Size: ", obs_size)
                 print("Action Size: ", action_size)
-                #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
-                surface = np.eye(obs_size, M=action_size)
-                #surface = np.ones([obs_size, action_size])
                 print("Surface Function: ", surface)
                 ddp = SMC(surface,
                         target, diff_func,
@@ -1057,9 +1081,10 @@ if __name__ == '__main__':
                         update_model = UPDATE_DDP_MODEL
                         )
             
-            DATASET_RECENT_PROB = 0.7
+            DATASET_RECENT_PROB = 0.5
             
-            dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
+            #dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
+            dataset = Dataset(aggregate_examples = False, shuffle = True)
             
             agent, trainer =  create_pytorch_agnostic_mbrl(cost, 
                 ddp, REUSE_SHOOTS,
@@ -1119,7 +1144,7 @@ if __name__ == '__main__':
                                 action = action.cpu().numpy()
                             #print("Observation: ", observation)
                             #action = agent(timestep)
-                            #print("Action: ", action)
+                            print("Action: ", action)
                             agent.store_reward(reward)
                             timestep = env.step(action)
                             #print("Reward: %s" % (timestep.reward))
@@ -1161,10 +1186,10 @@ if __name__ == '__main__':
                         print("(stored) max: %s\n min: %s\n"%(new_mx, new_mn))
                         store_max_min(new_mx, new_mn, LIB_TYPE, ENV_TYPE, norm_dir = 'norm') 
                 
-                if 'MB' in AGENT_TYPE: #look for model-based. Disgusting
-                    env.generate_vector_field_plot(agent.mpc_ddp.model)
                 if LIB_TYPE == 'control':
-                    env.generate_vector_field_plot()
+                    if 'MB' in AGENT_TYPE: #look for model-based. Disgusting
+                        env.generate_vector_field_plot()
+                        env.generate_vector_field_plot(agent.mpc_ddp.model)
 
                 agent.reset_histories()
                 if AGENT_TYPE == 'policy' and not PRETRAINED:
@@ -1173,6 +1198,7 @@ if __name__ == '__main__':
                 print("Agent Net Reward: ", agent.net_reward_history[-1])
                 #i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
+                    input("Displaying history")
                     try:
                         if LIB_TYPE == 'control' and TRAIN_AUTOENCODER and i > 5:
                             #TODO: encapsulate this AE testing...and all else
@@ -1208,7 +1234,7 @@ if __name__ == '__main__':
                         #graph.set_ydata([r for r in total_reward_history])
                         #plt.scatter(range(len(total_reward_history)), [r.numpy()[0] for r in total_reward_history])
                         plt.xlim(0, len(agent.net_reward_history))
-                        plt.ylim(0, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
+                        plt.ylim(min(agent.net_reward_history) - min(agent.net_reward_history) / 2, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
                         plt.ylabel("Net \n Reward")
                         plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.5, c='b')
                         if MA_LEN > 0 and len(agent.net_reward_history) > 0:

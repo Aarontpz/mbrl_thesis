@@ -545,6 +545,60 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
             plt.xlabel("Timestep")
             plt.scatter(range(len(self.net_loss_history)), [r.numpy()[0] for r in self.net_loss_history], s=1.0)
 
+class SKLearnDynamicsTrainer(Trainer):
+    '''Relying on SKLearn dynamics models to construct a model of a system. 
+
+    Since SKLearn abstracts away a lot of the computation, the main loop (step) 
+    of this algorithm should just call model.fit on some subsection of the dataset.
+
+    That...should be sufficient.
+    "Have a nice day ;) "'''
+    def __init__(self, model,
+            dataset,
+            *args, **kwargs):
+        #TODO: While we're using SKLearn tools, implement K-fold CV?
+        super().__init__(*args, **kwargs)
+        self.model = model
+        self.dataset = dataset
+
+        self.net_loss_history = [] #net loss history
+        self.forward_loss_history = [] #loss for MOST RECENT iteration 
+        #independent of dataset
+    
+    def step(self):
+        self.dataset.trainer_step(self) 
+        #sample = dataset.sample(self.batch_size)  #ONLY works with non-aggregative methods?
+        samples = self.dataset.samples #we're using ALL the samples
+        #print("SAMPLES: ", samples)
+        states = [self.get_sample_s(s) for s in samples]
+        states_ = [self.get_sample_s_(s) for s in samples]
+        states = np.array(states)
+        states_ = np.array(states_)
+        self.model.fit(states, states_)
+        self.agent.net_loss_history.append(0.0) #TODO: implement SKLearn score(X, y) here
+    
+    def plot_loss_histories(self):
+        pass
+        #if self.collect_forward_loss:
+        #    raise Exception("Do it now, I'm busy ;)")
+        #else:
+        #    plt.figure(5)
+        #    plt.title("Dynamics Model Loss History")
+        #    plt.xlim(0, len(self.net_loss_history))
+        #    plt.ylim(0, max(self.net_loss_history)+1)
+        #    plt.ylabel("Net \n Dynamic Model Loss")
+        #    plt.xlabel("Timestep")
+        #    plt.scatter(range(len(self.net_loss_history)), [r.numpy()[0] for r in self.net_loss_history], s=1.0)
+    
+    #TODO: create superclass to PyTorchTrainer, have this class inherit from that 
+    def get_sample_s(self, s):
+        return s[0]
+    def get_sample_a(self, s):
+        return s[1]
+    def get_sample_r(self, s):
+        return s[2]
+    def get_sample_s_(self, s):
+        return s[3]
 
 #class PyTorchSystemDynamicsModelTrainer(PyTorchDynamicsTrainer):
 #    '''Updates parameterized (PyTorch) module to approximate
@@ -565,15 +619,6 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
 #    def compute_model_loss(s, a, r, s_, *args, **kwargs):
 #        pass
 
-
-class PyTorchPreTrainer(PyTorchTrainer):
-    def __init__(self, trainer, *args, **kwargs):
-        super(PyTorchPreTrainer).__init__(*args, **kwargs)
-        self.trainer = trainer       
-
-    @abc.abstractmethod
-    def training_criteria(self) -> bool:
-        return False
 
 
 class PyTorchNeuralDynamicsMPCTrainer(PyTorchTrainer):

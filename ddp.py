@@ -200,7 +200,7 @@ class LQC_Controlled(LQC):
 class LinearSystemModel(Model):
     '''Model a system as a linear relationship in the state-transition
     equation'''
-    def __init__(self, A : np.ndarray, B : np.ndarray):
+    def __init__(self, A : np.ndarray = None, B : np.ndarray = None):
         self.A = A
         self.B = B
     def d_dx(self, xt, ut=None, dt=None, *args, **kwargs):
@@ -251,27 +251,27 @@ class GeneralSystemModel(Model):
         size dt'''
         raise Exception("This needs to be considered carefully.")
         assert(dt is not None)
-        return self.A * dt
+        return self.f * dt
     def d_du(self, xt = None, ut=None, dt=None, *args, **kwargs):
         '''Calculate df/dx, given timestep
         size dt'''
         assert(dt is not None)
         assert(ut is not None)
-        return self.B * dt
-    def __call__(self, xt, ut, dt=None, A = None, B = None, *args, **kwargs):
+        return self.g * dt
+    def __call__(self, xt, ut, dt=None, f = None, g = None, *args, **kwargs):
         f = f if f is not None else self.f
         g = g if g is not None else self.g
         print("g: %s ut: %s" % (g.shape, ut.shape))
-        if len(ut.shape) == 1 and len(B.shape) == 1:
+        if len(ut.shape) == 1 and len(g.shape) == 1:
             gu = g * ut
         else:
             gu = np.dot(g, ut)
         if len(f.shape) < 2:
             f = f[..., np.newaxis]
-        if len(bu.shape) < 2:
+        if len(gu.shape) < 2:
             gu = gu[..., np.newaxis]
-        print("f shape: ",ax.shape)
-        print("g shape: ",bu.shape)
+        print("f shape: ",f.shape)
+        print("g shape: ",gu.shape)
         print("f + g*u: ",(f+gu).shape)
         return f + gu
     
@@ -873,38 +873,38 @@ class SMC(DDP):
             ds_dx = self.get_surface_d_dx(xt)
             #print("ds_dx: %s Sign: %s" % (ds_dx, sign))
             #print("ds_dx.T: ",  (ds_dx.T.shape))
-            print("B: ", self.model.B)
-            print("DOT: ", np.linalg.det(np.dot(ds_dx.T, self.model.B)))
+            #print("B: ", self.model.B)
+            #print("DOT: ", np.linalg.det(np.dot(ds_dx.T, self.model.B)))
             magnitude = -(2 * np.linalg.inv(np.dot(ds_dx.T, self.model.B))) #TODO: Verify this step
             magnitude *= np.dot(ds_dx.T, np.dot(self.model.A, xt))
             if len(sign.shape) < 2:
                 sign = sign[..., np.newaxis]
-            print("mag: ", magnitude.shape)
-            print("sign: ", sign.shape)
+            print("mag: ", magnitude)
+            #print("sign: ", sign.shape)
             #out = magnitude * sign
             out = np.dot(magnitude, sign)
             #if len(out.shape) < 2:
             #    out = out[..., np.newaxis]
-            print("OUT SHAPE: ", out.shape)
+            #print("OUT SHAPE: ", out.shape)
             np.clip(out, -1e2, 1e2, out = out)
             return out 
         elif (issubclass(type(self.model), GeneralSystemModel)):
             sign = self.compute_switch(xt)
             ds_dx = self.get_surface_d_dx(xt)
-            print("g: ", self.model.g)
+            #print("g: ", self.model.g)
             #print("DOT: ", np.linalg.det(np.dot(ds_dx.T, self.model.g)))
-            print("DOT: ", (np.dot(ds_dx.T, self.model.g)))
+            #print("DOT: ", (np.dot(ds_dx.T, self.model.g)))
             magnitude = -(2 * np.linalg.inv(np.dot(ds_dx.T, self.model.g))) #TODO: Verify this step
             magnitude *= np.dot(ds_dx.T, self.model.f)
             if len(sign.shape) < 2:
                 sign = sign[..., np.newaxis]
-            print("mag: ", magnitude)
-            print("sign: ", sign)
+            #print("mag: ", magnitude)
+            #print("sign: ", sign)
             #out = magnitude * sign
             out = np.dot(magnitude, sign)
             #if len(out.shape) < 2:
             #    out = out[..., np.newaxis]
-            print("OUT SHAPE: ", out)
+            #print("OUT SHAPE: ", out)
             np.clip(out, -1e2, 1e2, out = out)
             return out 
         else:

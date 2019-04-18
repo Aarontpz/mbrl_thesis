@@ -17,6 +17,11 @@ from functools import reduce
 
 from ddp import *
 
+import sklearn.neighbors as neighbors 
+from sklearn import linear_model
+from sklearn.cluster import Birch
+
+
 class Agent:
     __metaclass__ = abc.ABCMeta
     '''Convention: Call step, store_reward, and if applicable, terminate_episode'''
@@ -662,17 +667,17 @@ class DDPMPCAgent(MPCAgent):
         self.eps_decay = eps_decay
 
     def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
-        if isinstance(self.mpc_ddp, SMC):
-            _, action = self.mpc_ddp.step(obs) 
-            return action.flatten(), None, None
         if random.random() < self.eps:
             self.eps = max(self.eps_min, self.eps - self.eps_decay)
-            #print("ACTION: ", self.sample_action(obs))
+            print("EPS ACTION: ", self.sample_action(obs))
             #flush stored state/action pairs
             self.prev_states = []
             self.prev_actions = []
             return self.sample_action(obs), None, None
         else:
+            if isinstance(self.mpc_ddp, SMC):
+                _, action = self.mpc_ddp.step(obs) 
+                return action.flatten(), None, None
             action = None
             if not self.reuse_shoots:
                 return super().evaluate(obs, *args, **kwargs)
@@ -1333,6 +1338,123 @@ class PyTorchModel(Model):
             #xt = xt.transpose(0, 1)
         return xt + dt * self.forward(xt, ut, *self.module(xt, ut)) 
     #resnet style <3
+
+class LocalModel(Model):
+    '''LocalModel for local (linear) models, for use with DDP/SMC
+    solutions, instead of global (neural network) nonlinear models. 
+    '''
+    def __init__(self, dt = 0.001, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dt = dt
+        self.models = {}
+
+    @abc.abstractmethod
+    def get_local_model(self, x):
+        '''Return local model corresponding to state x, based on 
+        local partitioning of state space.'''
+        pass
+
+    @abc.abstractmethod
+    def fit(self, X):
+        '''Fit data from state-space ("s" in dataset's samples, of form
+        s, a, r, s_) in online fashion. This should produce new regions
+        as necessary.'''
+        pass
+
+#class PyTorchLocalModel(LocalModel):
+#    def copy_pytorch_model(self, m):
+#        clone = copy.deepcopy(m)
+#        clone.module = copy.deepcopy(m.module).to(m.module.device)
+#        return clone
+
+class LinearBirchLocalModel(LocalModel, LinearSystemModel):
+    '''Utilize online clustering algorithm (Birch clustering,
+    which is proposed as an alternative to mini-batch k-means)
+    to group points spatially, apply linear fit to each cluster
+    in order to create piecewise-linear model of system dynamics.'''
+    #TODO: technically this shouldn't be a child of PYTORCHLocalModel,
+    #since by default it doesn't utilize any PyTorch modules
+    def __init__(self, a_shape, b_shape, threshold = 0.5, 
+            branching_factor = 50, n_clusters = 200,
+            compute_labels = True,
+            *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.birch = Birch(threshold = threshold, 
+                branching_factor = branching_factor,
+                n_clusters = n_clusters, 
+                compute_labels = compute_labels)
+        
+        self.a_shape = a_shape
+        self.b_shape = b_shape
+
+        self.region_s = {} #label : [s]
+        self.region_s_ = {} #label : [s_]
+
+    def update(self, xt):
+        if len(xt.shape) < 2:
+            xt = xt.reshape(-1, xt.size)
+        if len(self.models) == 0:
+            #self.A = np.ndarray(self.a_shape)
+            #self.B = np.ndarray(self.b_shape)
+            self.initialize_model_free_arrays()
+        else:
+            model = self.get_local_model(xt)
+            if model is None: #TODO: temporary measure
+                print("INVALED xt (no label / no matching model)")
+                #self.A = np.ndarray(self.a_shape)
+                #self.B = np.ndarray(self.b_shape)
+                self.initialize_model_free_arrays()
+            else:
+                print("MODEL RETRIEVED!")
+                self.A = model.coef_
+                #self.B = model.intercept_
+        self.A.resize(self.a_shape)
+        #print("B (pre-resize): ", self.B)
+        #self.B.resize(self.b_shape)
+        print("A: ", self.A)
+        #print("B: ", self.B)
+        return self.A, self.B
+
+    def initialize_model_free_arrays(self):
+        self.A = np.random.rand(*self.a_shape)
+        self.B = np.random.rand(*self.b_shape)
+        #self.B = np.ones(self.b_shape)
+
+
+
+    def get_local_model(self, x):
+        label = self.birch.predict(x)[0]
+        #print("LABEL: ", label)
+        #print("Models: ", self.models.keys())
+        if label in self.models.keys():
+            return self.models[label]
+        else:
+            print("Invalid Label: ", label)
+            return None
+
+    def fit(self, X, X_):
+        '''Fit data into existing model, updating clusters and 
+        linear models as necessary. If only least-squares approximation
+        (via sklearn) is used, no need to run trainer in this step.
+        ''' #TODO: PyTorch least-squares regression
+        print("X: ", X)
+        self.birch.partial_fit(X) #online clustering step
+        self.birch.partial_fit()
+        labels = self.birch.predict(X)
+        print("LABELS: ", labels)
+        for i in range(len(X)):
+            self.region_s.setdefault(labels[i], []).append(X[i])
+            self.region_s_.setdefault(labels[i], []).append(X_[i])
+            #^ in order to store s and s' (t and t+1 states)
+        for r in self.region_s.keys():
+            print("Adding region r keys: ", r)
+            self.models[r] = linear_model.LinearRegression()
+            self.models[r].fit(self.region_s[r], self.region_s_[r])
+            print("region r model: ", self.models[r])
+        #TODO: re-sort / verify existing models after this step?
+        #this should be all "Online", not brute-forcey
+        return labels
 
 class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
     def forward(self, xt, ut, f, g):
