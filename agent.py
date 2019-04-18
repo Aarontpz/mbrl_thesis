@@ -1433,7 +1433,7 @@ class LinearBirchLocalModel(LocalModel, LinearSystemModel):
             print("Invalid Label: ", label)
             return None
 
-    def fit(self, X, X_):
+    def fit(self, X, A, X_):
         '''Fit data into existing model, updating clusters and 
         linear models as necessary. If only least-squares approximation
         (via sklearn) is used, no need to run trainer in this step.
@@ -1450,6 +1450,7 @@ class LinearBirchLocalModel(LocalModel, LinearSystemModel):
         for r in self.region_s.keys():
             print("Adding region r keys: ", r)
             self.models[r] = linear_model.LinearRegression()
+            system = []
             self.models[r].fit(self.region_s[r], self.region_s_[r])
             print("region r model: ", self.models[r])
         #TODO: re-sort / verify existing models after this step?

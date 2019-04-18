@@ -616,7 +616,7 @@ LIB_TYPE = 'dm'
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
-AGENT_TYPE = 'agnostic_MBRL'
+#AGENT_TYPE = 'agnostic_MBRL'
 REPLAYS = 20
 horizon = 50
 #EPISODES_BEFORE_TRAINING = 3
@@ -654,14 +654,14 @@ ENV_TYPE = 'humanoid'
 #TASK_NAME = 'walk'
 TASK_NAME = 'stand'
 
-#EPS = 5e-2
-#EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.99
-#ENV_TYPE = 'walker'
-##TASK_NAME = 'run'
-#TASK_NAME = 'walk'
-#TASK_NAME = 'stand'
+EPS = 5e-2
+EPS_MIN = 2e-2
+EPS_DECAY = 1e-6
+GAMMA = 0.99
+ENV_TYPE = 'walker'
+#TASK_NAME = 'run'
+TASK_NAME = 'walk'
+TASK_NAME = 'stand'
 
 #EPS = 7e-2
 #EPS_MIN = 0.5e-2
@@ -701,19 +701,19 @@ TRAIN_AUTOENCODER = False
 #ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
 #TASK_NAME = 'point'
 
-#LIB_TYPE = 'control'
-#PRETRAINED = False
-#RUN_ANYWAYS = True
-#MAXMIN_NORMALIZATION = False
-#TRAIN_AUTOENCODER = False
-#EPS = 0.5e-1
-#EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.98
-#ENV_TYPE = 'inverted'
-#ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
-#        'target':np.array([0, 0])}
-#TASK_NAME = 'point'
+LIB_TYPE = 'control'
+PRETRAINED = False
+RUN_ANYWAYS = True
+MAXMIN_NORMALIZATION = False
+TRAIN_AUTOENCODER = False
+EPS = 0.5e-1
+EPS_MIN = 2e-2
+EPS_DECAY = 1e-6
+GAMMA = 0.98
+ENV_TYPE = 'inverted'
+ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
+        'target':np.array([0, 0])}
+TASK_NAME = 'point'
 
 MA_LEN = -1
 MA_LEN = 15
@@ -887,7 +887,7 @@ if __name__ == '__main__':
             ## 
 
             ## MODEL-SPECIFIC PARAMETERS
-            LOCAL_LINEAR_MODEL = True
+            LOCAL_LINEAR_MODEL = False
             pytorch_class = PyTorchLinearSystemDynamicsLinearModule
             pytorch_model = PyTorchLinearSystemModel 
             #pytorch_class = PyTorchForwardDynamicsLinearModule
@@ -1198,7 +1198,6 @@ if __name__ == '__main__':
                 print("Agent Net Reward: ", agent.net_reward_history[-1])
                 #i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
-                    input("Displaying history")
                     try:
                         if LIB_TYPE == 'control' and TRAIN_AUTOENCODER and i > 5:
                             #TODO: encapsulate this AE testing...and all else
@@ -1223,13 +1222,14 @@ if __name__ == '__main__':
                                 
                         plt.figure(1)
                         plt.subplot(2, 1, 1)
-                        plt.title("Algorithm:%s \n\
-                                Activations: %s  Hdims: %s Outdims: %s\n\
-                                lr=%s betas=%s eps=%s min_eps=%s eps_decay=%s\n\
-                                gamma = %s"\
-                                %(TRAINER_TYPE, mlp_activations,
-                                mlp_hdims, mlp_outdim, 
-                                lr, ADAM_BETAS, EPS, EPS_MIN, EPS_DECAY, GAMMA))
+                        #plt.title("Algorithm:%s \n\
+                        #        Activations: %s  Hdims: %s Outdims: %s\n\
+                        #        lr=%s betas=%s eps=%s min_eps=%s eps_decay=%s\n\
+                        #        gamma = %s"\
+                        #        %(TRAINER_TYPE, mlp_activations,
+                        #        mlp_hdims, mlp_outdim, 
+                        #        lr, ADAM_BETAS, EPS, EPS_MIN, EPS_DECAY, GAMMA))
+                        plt.title("Agent reward / loss history")
                         #graph.set_xdata(range(len(total_reward_history)))
                         #graph.set_ydata([r for r in total_reward_history])
                         #plt.scatter(range(len(total_reward_history)), [r.numpy()[0] for r in total_reward_history])
@@ -1251,7 +1251,10 @@ if __name__ == '__main__':
                             print("MA Reward: ", val)
                         plt.subplot(2, 1, 2)
                         plt.ylabel("Net \n Loss")
-                        plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
+                        if type(agent.net_loss_history[0]) == float:
+                            plt.scatter(range(len(agent.net_loss_history)), [r for r in agent.net_loss_history], s=1.5)
+                        else:
+                            plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
                         if DISPLAY_AV_LOSS is True:
                             plt.figure(2)
                             plt.clf()
@@ -1264,8 +1267,8 @@ if __name__ == '__main__':
                             plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
                             plt.draw()
                         plt.pause(0.01)
-                    except:
-                        pass
+                    except Exception as e:
+                        print("ERROR: ", e)
                 i += 1
         else:
             launch_viewer(env, agent)
