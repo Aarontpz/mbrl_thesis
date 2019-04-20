@@ -19,7 +19,7 @@ from ddp import *
 
 import sklearn.neighbors as neighbors 
 from sklearn import linear_model
-from sklearn.cluster import Birch
+from sklearn.cluster import MiniBatchKMeans, Birch
 
 
 class Agent:
@@ -810,6 +810,8 @@ class PyTorchMLP(torch.nn.Module):
 
 
     def forward(self, x, value_input = None):
+        if len(x.shape) > 1:
+            x = x.flatten()
         for l in range(len(self.layers)):
             x = self.layers[l](x)
         return x
@@ -1367,29 +1369,33 @@ class LocalModel(Model):
 #        clone.module = copy.deepcopy(m.module).to(m.module.device)
 #        return clone
 
-class LinearBirchLocalModel(LocalModel, LinearSystemModel):
+class LinearClusterLocalModel(LocalModel, LinearSystemModel):
     '''Utilize online clustering algorithm (Birch clustering,
     which is proposed as an alternative to mini-batch k-means)
     to group points spatially, apply linear fit to each cluster
     in order to create piecewise-linear model of system dynamics.'''
     #TODO: technically this shouldn't be a child of PYTORCHLocalModel,
     #since by default it doesn't utilize any PyTorch modules
-    def __init__(self, a_shape, b_shape, threshold = 0.5, 
-            branching_factor = 50, n_clusters = 200,
+    def __init__(self, a_shape, b_shape, 
+            n_clusters = 200,
             compute_labels = True,
             *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.birch = Birch(threshold = threshold, 
-                branching_factor = branching_factor,
-                n_clusters = n_clusters, 
-                compute_labels = compute_labels)
+        #self.cluster = Birch(threshold = threshold, 
+        #        branching_factor = branching_factor,
+        #        n_clusters = n_clusters, 
+        #        compute_labels = compute_labels)
+        self.cluster = MiniBatchKMeans(n_clusters = n_clusters)
         
         self.a_shape = a_shape
         self.b_shape = b_shape
 
         self.region_s = {} #label : [s]
+        self.region_u = {} #label : [a]
         self.region_s_ = {} #label : [s_]
+
+        self.fit_b = True
 
     def update(self, xt):
         if len(xt.shape) < 2:
@@ -1401,19 +1407,27 @@ class LinearBirchLocalModel(LocalModel, LinearSystemModel):
         else:
             model = self.get_local_model(xt)
             if model is None: #TODO: temporary measure
-                print("INVALED xt (no label / no matching model)")
+                print("INVALID xt (no label / no matching model)")
+                #raise Exception("REEEE fix this") #TODO TODO TODO TODO
                 #self.A = np.ndarray(self.a_shape)
                 #self.B = np.ndarray(self.b_shape)
                 self.initialize_model_free_arrays()
             else:
                 print("MODEL RETRIEVED!")
                 self.A = model.coef_
-                #self.B = model.intercept_
-        self.A.resize(self.a_shape)
+                print("Coef: ", self.A)
+                if len(self.region_u) > 0:
+                    A = self.A[:self.a_shape[0], :self.a_shape[1]]
+                    B = self.A[:self.a_shape[0], self.a_shape[1]:]
+                    self.A = A / self.dt
+                    self.B = B / self.dt
+        #self.A.resize(self.a_shape)
         #print("B (pre-resize): ", self.B)
         #self.B.resize(self.b_shape)
-        print("A: ", self.A)
-        #print("B: ", self.B)
+        print("B: ", self.B.shape)
+        print("A: ", self.A.shape)
+        self.A += np.random.rand(*self.A.shape) * 1e-2
+        self.B += np.random.rand(*self.B.shape) * 1e-2
         return self.A, self.B
 
     def initialize_model_free_arrays(self):
@@ -1424,8 +1438,10 @@ class LinearBirchLocalModel(LocalModel, LinearSystemModel):
 
 
     def get_local_model(self, x):
-        label = self.birch.predict(x)[0]
-        #print("LABEL: ", label)
+        x = x.T
+        print("X shape (glm): ", x.shape)
+        label = self.cluster.predict(x)[0]
+        print("LABEL: ", label)
         #print("Models: ", self.models.keys())
         if label in self.models.keys():
             return self.models[label]
@@ -1433,26 +1449,49 @@ class LinearBirchLocalModel(LocalModel, LinearSystemModel):
             print("Invalid Label: ", label)
             return None
 
-    def fit(self, X, A, X_):
+    def fit(self, X, X_, U = None):
         '''Fit data into existing model, updating clusters and 
         linear models as necessary. If only least-squares approximation
         (via sklearn) is used, no need to run trainer in this step.
         ''' #TODO: PyTorch least-squares regression
-        print("X: ", X)
-        self.birch.partial_fit(X) #online clustering step
-        self.birch.partial_fit()
-        labels = self.birch.predict(X)
+        self.cluster.partial_fit(X) #online clustering step
+        #self.cluster.partial_fit() #global clustering step
+        labels = self.cluster.predict(X)
         print("LABELS: ", labels)
-        for i in range(len(X)):
+        for i in range(len(X)): #add samples to each region's dicts
             self.region_s.setdefault(labels[i], []).append(X[i])
+            self.region_u.setdefault(labels[i], []).append(U[i])
             self.region_s_.setdefault(labels[i], []).append(X_[i])
             #^ in order to store s and s' (t and t+1 states)
-        for r in self.region_s.keys():
-            print("Adding region r keys: ", r)
-            self.models[r] = linear_model.LinearRegression()
-            system = []
-            self.models[r].fit(self.region_s[r], self.region_s_[r])
-            print("region r model: ", self.models[r])
+        for r in self.region_s.keys(): #update each region's model
+            if len(self.region_s[r]) > 1: #cannot fit on empty/1 samples
+                print("Adding region r keys: ", r)
+                self.models[r] = linear_model.LinearRegression(fit_intercept = False)
+                #self.models[r] = linear_model.LinearRegression(normalize = True)
+                #print("State Samples shape: ", self.region_s[r].shape)
+                #print("Action Samples shape: ", self.region_u[r].shape)
+                #print("NextState Samples shape: ", self.region_s_[r].shape)
+                system = []
+                if self.fit_b:
+                    assert(U is not None)
+                    for i in range(len(self.region_s[r])):
+                        system.append(np.concatenate((self.region_s[r][i], self.region_u[r][i])))
+                else:
+                    system = self.region_s[r]
+                system = np.array(system)
+                print("System shape: ", system.shape)
+                print("System[-1]: ", system[-1])
+
+                ##Randomly sample some points in region
+                print("Len: ", len(system))
+                indices = random.sample(range(len(system) - 1), min(256, len(system) - 1))
+                print("INDICES: ", indices)
+                sample_sa = system[indices]
+                sample_s_ = [self.region_s_[r][i] for i in indices]
+                print("Sample s_: ", sample_s_)
+
+                self.models[r].fit(sample_sa, sample_s_) #TODO: use ALL points in reg.
+                print("region r model: ", self.models[r])
         #TODO: re-sort / verify existing models after this step?
         #this should be all "Online", not brute-forcey
         return labels

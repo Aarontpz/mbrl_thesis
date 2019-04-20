@@ -232,17 +232,18 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                 replay_starts.append(e + 1)
         else:
             replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
-        print("REPLAY STARTS: ", replay_starts)
-        print("ENDS: ", ends)
         for start in replay_starts:
             end = self.get_trajectory_end(start, end = None)
-            print("END: ", end)
+            #print("END: ", end)
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
             net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
             net_value_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
             rewards = self.get_discounted_rewards(self.agent.reward_history[start:end], scale = True).to(device)
-            print("START: %s END: %s" % (start, end))
-            for ind in range(start, end): #-1 because terminal state doesn't matter?
+            #print("START: %s END: %s" % (start, end))
+            for ind in range(start, end - 1): #-1 because terminal state doesn't matter?
+                #print("Rewards: ", len(rewards))
+                #print("Ind: ", ind)
+                #print("End: ", end)
                 #if module.lstm_size > 0:
                 #    obs = get_observation_tensor(state_history[i])
                 #    _ = module.forward(obs)
@@ -578,7 +579,8 @@ class SKLearnDynamicsTrainer(Trainer):
         states_ = [self.get_sample_s_(s) for s in samples]
         states = np.array(states)
         states_ = np.array(states_)
-        self.model.fit(states, actions, states_)
+        actions = np.array(actions)
+        self.model.fit(states, states_, actions)
         self.agent.net_loss_history.append(0.0) #TODO: implement SKLearn score(X, y) here
     
     def plot_loss_histories(self):

@@ -616,7 +616,7 @@ LIB_TYPE = 'dm'
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
-#AGENT_TYPE = 'agnostic_MBRL'
+AGENT_TYPE = 'agnostic_MBRL'
 REPLAYS = 20
 horizon = 50
 #EPISODES_BEFORE_TRAINING = 3
@@ -701,19 +701,19 @@ TRAIN_AUTOENCODER = False
 #ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
 #TASK_NAME = 'point'
 
-LIB_TYPE = 'control'
-PRETRAINED = False
-RUN_ANYWAYS = True
-MAXMIN_NORMALIZATION = False
-TRAIN_AUTOENCODER = False
-EPS = 0.5e-1
-EPS_MIN = 2e-2
-EPS_DECAY = 1e-6
-GAMMA = 0.98
-ENV_TYPE = 'inverted'
-ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
-        'target':np.array([0, 0])}
-TASK_NAME = 'point'
+#LIB_TYPE = 'control'
+#PRETRAINED = False
+#RUN_ANYWAYS = True
+#MAXMIN_NORMALIZATION = False
+#TRAIN_AUTOENCODER = False
+#EPS = 0.5e-1
+#EPS_MIN = 2e-2
+#EPS_DECAY = 1e-6
+#GAMMA = 0.98
+#ENV_TYPE = 'inverted'
+#ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
+#        'target':np.array([0, 0])}
+#TASK_NAME = 'point'
 
 MA_LEN = -1
 MA_LEN = 15
@@ -763,8 +763,8 @@ if __name__ == '__main__':
         # to benefit from MPC AND model-free agent sampling, since value functions are ubiquitous
 
         elif AGENT_TYPE == 'policy':
-            mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [obs_size * WIDENING_CONST] 
+            mlp_activations = [None, 'relu', None] #+1 for outdim activation, remember extra action/value modules
+            mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
             if DISCRETE_AGENT:
                 mlp_base = PyTorchDiscreteACMLP
             else:
@@ -897,11 +897,9 @@ if __name__ == '__main__':
             ## SMC-SPECIFIC ARGS
             SURFACE_BASE = None
             SMC_SWITCHING_FUNCTION = 'arctan'
-                
-                
             #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
-            surface = np.eye(obs_size, M=action_size)
-            #surface = np.ones([obs_size, action_size])
+            #surface = np.eye(obs_size, M=action_size)
+            surface = np.ones([obs_size, action_size])
 
             ## DDP-SPECIFIC ARGS 
             LQG_FULL_ITERATIONS = True
@@ -922,10 +920,9 @@ if __name__ == '__main__':
             #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
 
             if LOCAL_LINEAR_MODEL: 
-                system_model = LinearBirchLocalModel(
+                system_model = LinearClusterLocalModel(
                         (obs_size, obs_size), (obs_size, action_size),
-                        threshold = 0.5,
-                        branching_factor = 50, n_clusters = 100,
+                        n_clusters = 30,
                         compute_labels = True, 
                         dt = DT)
             else:
@@ -1007,7 +1004,9 @@ if __name__ == '__main__':
                     Q = np.eye(obs_size) * 1e2
                     Qf = Q * 1e2
                     R = np.eye(action_size) * 1e1
-
+            print("TARGET: ", target)
+            if len(target.shape) < 2:
+                target = target[..., np.newaxis]
             priority_cost = True
             if priority_cost:
                 for i in range(obs_size):
@@ -1064,6 +1063,11 @@ if __name__ == '__main__':
                     ddp.set_smc(smc)
 
             elif DDP_MODE == 'ismc':
+                #The idea is to make surface non-uniform (singular) 
+                #across control variables, but also to construct
+                #a generally good surface (target * 1e1 to focus emphasis
+                #on target variables)
+                surface = surface + target * 1e1 + np.random.rand(*surface.shape) * 1e-2
                 print("Obs Size: ", obs_size)
                 print("Action Size: ", action_size)
                 print("Surface Function: ", surface)

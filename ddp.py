@@ -851,10 +851,14 @@ class SMC(DDP):
         self.diff_func = diff_func
 
     def step(self, xt):
+        if len(xt.shape) < 2:
+            xt = xt[..., np.newaxis]
+        print('Target: %s Xt: %s' % (self.target.shape, xt.shape))
         xt = self.diff_func(self.target, xt)
         if self.update_model:
-            if len(xt.shape) > 1:
-                xt = xt.flatten()
+            print("UPDATING MODEL")
+            #if len(xt.shape) > 1:
+            #    xt = xt.flatten()
             self.model.update(xt)
         if self.cost is not None and self.cost.target is not None:
             xt = xt - self.cost.target
@@ -871,12 +875,17 @@ class SMC(DDP):
         if (issubclass(type(self.model), LinearSystemModel)):
             sign = self.compute_switch(xt)
             ds_dx = self.get_surface_d_dx(xt)
-            #print("ds_dx: %s Sign: %s" % (ds_dx, sign))
-            #print("ds_dx.T: ",  (ds_dx.T.shape))
-            #print("B: ", self.model.B)
-            #print("DOT: ", np.linalg.det(np.dot(ds_dx.T, self.model.B)))
-            magnitude = -(2 * np.linalg.inv(np.dot(ds_dx.T, self.model.B))) #TODO: Verify this step
-            magnitude *= np.dot(ds_dx.T, np.dot(self.model.A, xt))
+            dB = np.dot(ds_dx.T, self.model.B)
+            dA = np.dot(ds_dx.T, np.dot(self.model.A, xt))
+            print("ds_dx: %s \nSign: %s" % (ds_dx, sign))
+            print("ds_dx.T: ",  (ds_dx.T.shape))
+            print("B: ", self.model.B)
+            print("A: ", self.model.A)
+            print("xt: ", xt)
+            print("DOT: ", (dB))
+            print("|DOT|: ", np.linalg.det(dB))
+            magnitude = -(2 * np.linalg.inv(dB)) #TODO: Verify this step
+            magnitude *= dA
             if len(sign.shape) < 2:
                 sign = sign[..., np.newaxis]
             print("mag: ", magnitude)
@@ -886,8 +895,6 @@ class SMC(DDP):
             #if len(out.shape) < 2:
             #    out = out[..., np.newaxis]
             #print("OUT SHAPE: ", out.shape)
-            np.clip(out, -1e2, 1e2, out = out)
-            return out 
         elif (issubclass(type(self.model), GeneralSystemModel)):
             sign = self.compute_switch(xt)
             ds_dx = self.get_surface_d_dx(xt)
@@ -905,10 +912,10 @@ class SMC(DDP):
             #if len(out.shape) < 2:
             #    out = out[..., np.newaxis]
             #print("OUT SHAPE: ", out)
-            np.clip(out, -1e2, 1e2, out = out)
-            return out 
         else:
             raise Exception("Unsupported Model for SMC")
+        np.clip(out, -1e1, 1e1, out = out)
+        return out 
 
     def compute_switch(self, xt) -> int: 
         #print("X: %s Surface: %s " % (xt, self.surface))
