@@ -549,7 +549,7 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
             plt.xlabel("Timestep")
             plt.scatter(range(len(self.net_loss_history)), [r.numpy()[0] for r in self.net_loss_history], s=1.0)
 
-class SKLearnDynamicsTrainer(Trainer):
+class LocalDynamicsTrainer(Trainer):
     '''Relying on SKLearn dynamics models to construct a model of a system. 
 
     Since SKLearn abstracts away a lot of the computation, the main loop (step) 

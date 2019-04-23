@@ -459,12 +459,14 @@ def create_pytorch_agnostic_mbrl(cost,
                 optimizer, scheduler = None, agent = agent, env = env,
                 replay = replays, max_traj_len = None, gamma=0.98, 
                 num_episodes = 1) 
-    else:
-        trainer = SKLearnDynamicsTrainer(system_model, 
+    else: #local models?
+        #if isinstance(system_model, SKLearnLinearClusterLocalModel):
+        trainer = LocalDynamicsTrainer(system_model, 
                 dataset, 
                 agent = agent, env = env,
                 replay = replays, max_traj_len = None, gamma=0.98, 
                 num_episodes = 1) 
+        #elif isinstance(system_model, PyTorchLinearClusterLocalModel):
         #in the case of local-linear models relying on
         #non-PyTorch methods. This code is getting unmanageable. 
     return agent, trainer
@@ -507,12 +509,13 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                         action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True, 
                         encode_inputs = encode_inputs, encoder = encoder_clone)
-                elif (issubclass(type(agent), DDPMPCAgent)) and (hasattr(agent.mpc_ddp.model, 'module')):
+                elif (issubclass(type(agent), DDPMPCAgent)):
                     clone = copy.deepcopy(agent)
                     #clone.cost = copy.deepcopy(agent.cost)
                     print("Clone: ", clone)
-                    clone.mpc_ddp.model.module = copy.deepcopy(agent.mpc_ddp.model.module).to(device)
-                    clone.mpc_ddp.model.module.device = device
+                    if hasattr(clone.mpc_ddp.model, 'module'):
+                        clone.mpc_ddp.model.module = copy.deepcopy(agent.mpc_ddp.model.module).to(device)
+                        clone.mpc_ddp.model.module.device = device
                     launch_viewer(env, clone)    
                 else:
                     clone = create_agent(PyTorchAgent, LIB_TYPE, env_type, device, [1, obs_size], 
@@ -581,7 +584,7 @@ MAX_ITERATIONS = 10000
 MAX_TIMESTEPS = 100000
 VIEW_END = True
 
-WIDENING_CONST = 50 #indim * WIDENING_CONST = hidden layer size
+WIDENING_CONST = 20 #indim * WIDENING_CONST = hidden layer size
 mlp_initializer = None
 DISCRETE_AGENT = False
 
@@ -617,17 +620,18 @@ LIB_TYPE = 'dm'
 AGENT_TYPE = 'policy'
 
 AGENT_TYPE = 'agnostic_MBRL'
+WIDENING_CONST = 50 #indim * WIDENING_CONST = hidden layer size
 REPLAYS = 20
 horizon = 50
 #EPISODES_BEFORE_TRAINING = 3
 #max_traj_len = SMALL_TRAJECTORY_LENGTH
-replay_iterations = 5
+replay_iterations = 10
 
 AGENT_RANDOM_BASELINE = False 
-AGENT_RANDOM_BASELINE = True 
+#AGENT_RANDOM_BASELINE = True 
 
 TRAINER_TYPE = 'AC'
-#TRAINER_TYPE = 'PPO'
+TRAINER_TYPE = 'PPO'
 #EPISODES_BEFORE_TRAINING = 3
 #max_traj_len = SMALL_TRAJECTORY_LENGTH
 #replay_iterations = 6
@@ -671,7 +675,7 @@ TASK_NAME = 'stand'
 #TASK_NAME = 'swingup'
 ##TASK_NAME = 'balance'
 
-MAXMIN_NORMALIZATION = False
+MAXMIN_NORMALIZATION = True
 TRAIN_AUTOENCODER = False
 
 ###CONTROL ENVIRONMENTS
@@ -714,6 +718,11 @@ TRAIN_AUTOENCODER = False
 #ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
 #        'target':np.array([0, 0])}
 #TASK_NAME = 'point'
+
+if AGENT_RANDOM_BASELINE == True:
+    EPS = 1e0
+    EPS_MIN = 1e0
+    EPS_DECAY = 1e-6
 
 MA_LEN = -1
 MA_LEN = 15
@@ -878,6 +887,8 @@ if __name__ == '__main__':
             BATCH_SIZE = 64 
             COLLECT_FORWARD_LOSS = False
             DT = 1e-2 
+            if LIB_TYPE == 'dm':
+                DT = env.control_timestep()
             #HORIZON = 0.8e-1
             #EPS_BASE = 1.5e-1
             #EPS_MIN = 2e-2
@@ -885,18 +896,29 @@ if __name__ == '__main__':
             DDP_MODE = 'ismc'
             #DDP_MODE = 'ilqg'
             ## 
+            
+            DATASET_RECENT_PROB = 0.7
+            
+            dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
+            #dataset = Dataset(aggregate_examples = False, shuffle = True)
 
             ## MODEL-SPECIFIC PARAMETERS
-            LOCAL_LINEAR_MODEL = False
-            pytorch_class = PyTorchLinearSystemDynamicsLinearModule
-            pytorch_model = PyTorchLinearSystemModel 
-            #pytorch_class = PyTorchForwardDynamicsLinearModule
-            #pytorch_model = PyTorchForwardDynamicsModel 
+            LOCAL_LINEAR_MODEL = 'sklearn'
+            LOCAL_LINEAR_MODEL = 'pytorch'
+            #LOCAL_LINEAR_MODEL = None 
+
+            if LOCAL_LINEAR_MODEL is not None:
+                dataset = Dataset(aggregate_examples = False, shuffle = True)
+            #pytorch_class = PyTorchLinearSystemDynamicsLinearModule
+            #pytorch_model = PyTorchLinearSystemModel 
+            pytorch_class = PyTorchForwardDynamicsLinearModule
+            pytorch_model = PyTorchForwardDynamicsModel 
 
             
             ## SMC-SPECIFIC ARGS
             SURFACE_BASE = None
             SMC_SWITCHING_FUNCTION = 'arctan'
+            #SMC_SWITCHING_FUNCTION = 'sign'
             #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
             #surface = np.eye(obs_size, M=action_size)
             surface = np.ones([obs_size, action_size])
@@ -912,17 +934,23 @@ if __name__ == '__main__':
             UPDATE_DDP_MODEL = True
             ILQG_SMC = False
             REUSE_SHOOTS = False if DDP_MODE == 'ilqg' else False
-            mlp_activations = [None, 'relu', None] #+1 for outdim activation, remember extra action/value modules
+            mlp_activations = ['relu', None, None] #+1 for outdim activation, remember extra action/value modules
             mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
             mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
             #mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
             #mlp_hdims = [obs_size * WIDENING_CONST] 
             #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
 
-            if LOCAL_LINEAR_MODEL: 
-                system_model = LinearClusterLocalModel(
+            if LOCAL_LINEAR_MODEL == 'sklearn': 
+                system_model = SKLearnLinearClusterLocalModel(
                         (obs_size, obs_size), (obs_size, action_size),
-                        n_clusters = 30,
+                        n_clusters = 200,
+                        compute_labels = True, 
+                        dt = DT)
+            elif LOCAL_LINEAR_MODEL == 'pytorch': 
+                system_model = PyTorchLinearClusterLocalModel(device,
+                        (obs_size, obs_size), (obs_size, action_size),
+                        n_clusters = 200,
                         compute_labels = True, 
                         dt = DT)
             else:
@@ -1068,6 +1096,7 @@ if __name__ == '__main__':
                 #a generally good surface (target * 1e1 to focus emphasis
                 #on target variables)
                 surface = surface + target * 1e1 + np.random.rand(*surface.shape) * 1e-2
+                #surface = surface + target * 1e1
                 print("Obs Size: ", obs_size)
                 print("Action Size: ", action_size)
                 print("Surface Function: ", surface)
@@ -1085,10 +1114,6 @@ if __name__ == '__main__':
                         update_model = UPDATE_DDP_MODEL
                         )
             
-            DATASET_RECENT_PROB = 0.5
-            
-            #dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
-            dataset = Dataset(aggregate_examples = False, shuffle = True)
             
             agent, trainer =  create_pytorch_agnostic_mbrl(cost, 
                 ddp, REUSE_SHOOTS,
@@ -1137,6 +1162,7 @@ if __name__ == '__main__':
                             #print("TIMESTEP %s: %s" % (step, timestep))
                             observation = timestep.observation
                             observation = agent.transform_observation(observation)
+                            #print("OBS: ", observation)
                             if MAXMIN_NORMALIZATION:
                                 if type(observation) == torch.Tensor:
                                     observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)

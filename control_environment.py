@@ -683,8 +683,8 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    TEST_INVERTED_PENDULUM = True
-    TEST_CARTPOLE = False
+    TEST_INVERTED_PENDULUM = False
+    TEST_CARTPOLE = True
 
     if TEST_CARTPOLE:
         horizon = 4

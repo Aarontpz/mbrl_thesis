@@ -1372,12 +1372,9 @@ class LocalModel(Model):
 class LinearClusterLocalModel(LocalModel, LinearSystemModel):
     '''Utilize online clustering algorithm (Birch clustering,
     which is proposed as an alternative to mini-batch k-means)
-    to group points spatially, apply linear fit to each cluster
-    in order to create piecewise-linear model of system dynamics.'''
-    #TODO: technically this shouldn't be a child of PYTORCHLocalModel,
-    #since by default it doesn't utilize any PyTorch modules
+    to group points spatially.'''
     def __init__(self, a_shape, b_shape, 
-            n_clusters = 200,
+            n_clusters = 50,
             compute_labels = True,
             *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1388,13 +1385,13 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
         #        compute_labels = compute_labels)
         self.cluster = MiniBatchKMeans(n_clusters = n_clusters)
         
-        self.a_shape = a_shape
-        self.b_shape = b_shape
-
         self.region_s = {} #label : [s]
-        self.region_u = {} #label : [a]
+        self.region_a = {} #label : [a]
         self.region_s_ = {} #label : [s_]
 
+        self.a_shape = a_shape
+        self.b_shape = b_shape
+        
         self.fit_b = True
 
     def update(self, xt):
@@ -1409,33 +1406,15 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
             if model is None: #TODO: temporary measure
                 print("INVALID xt (no label / no matching model)")
                 #raise Exception("REEEE fix this") #TODO TODO TODO TODO
-                #self.A = np.ndarray(self.a_shape)
-                #self.B = np.ndarray(self.b_shape)
                 self.initialize_model_free_arrays()
             else:
-                print("MODEL RETRIEVED!")
-                self.A = model.coef_
-                print("Coef: ", self.A)
-                if len(self.region_u) > 0:
-                    A = self.A[:self.a_shape[0], :self.a_shape[1]]
-                    B = self.A[:self.a_shape[0], self.a_shape[1]:]
-                    self.A = A / self.dt
-                    self.B = B / self.dt
-        #self.A.resize(self.a_shape)
-        #print("B (pre-resize): ", self.B)
-        #self.B.resize(self.b_shape)
-        print("B: ", self.B.shape)
-        print("A: ", self.A.shape)
-        self.A += np.random.rand(*self.A.shape) * 1e-2
-        self.B += np.random.rand(*self.B.shape) * 1e-2
+                self.A, self.B = self.get_linear_model(model)
         return self.A, self.B
 
     def initialize_model_free_arrays(self):
         self.A = np.random.rand(*self.a_shape)
         self.B = np.random.rand(*self.b_shape)
         #self.B = np.ones(self.b_shape)
-
-
 
     def get_local_model(self, x):
         x = x.T
@@ -1449,25 +1428,65 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
             print("Invalid Label: ", label)
             return None
 
+    def fit_cluster(self, X, X_, U = None):
+        self.cluster.partial_fit(X) #online clustering step
+        #self.cluster.partial_fit() #global clustering step
+
+
+    def predict_cluster(self, X) -> np.ndarray:
+        '''Predict cluster for each entry in given set of states X.'''
+        labels = self.cluster.predict(X)
+        return labels
+    
+    @abc.abstractmethod
+    def fit_model(self, X, X_, U = None):
+        pass     
+
+    @abc.abstractmethod
+    def get_linear_model(self, model) -> (np.ndarray, np.ndarray):
+        '''Retrieve local parameters from local model'''
+        pass
+
     def fit(self, X, X_, U = None):
         '''Fit data into existing model, updating clusters and 
         linear models as necessary. If only least-squares approximation
         (via sklearn) is used, no need to run trainer in this step.
-        ''' #TODO: PyTorch least-squares regression
-        self.cluster.partial_fit(X) #online clustering step
-        #self.cluster.partial_fit() #global clustering step
-        labels = self.cluster.predict(X)
-        print("LABELS: ", labels)
+        ''' 
+        self.fit_cluster(X, X_, U)
+        labels = self.predict_cluster(X)
         for i in range(len(X)): #add samples to each region's dicts
             self.region_s.setdefault(labels[i], []).append(X[i])
-            self.region_u.setdefault(labels[i], []).append(U[i])
+            self.region_a.setdefault(labels[i], []).append(U[i])
             self.region_s_.setdefault(labels[i], []).append(X_[i])
             #^ in order to store s and s' (t and t+1 states)
+        print("LABELS: ", labels)
+        self.fit_model(X, X_, U)
+        #TODO: re-sort / verify existing models after this step?
+        #this should be all "Online", not brute-forcey
+        return labels
+
+class SKLearnLinearClusterLocalModel(LinearClusterLocalModel):
+    '''Utilize online clustering algorithm (Birch clustering,
+    which is proposed as an alternative to mini-batch k-means)
+    to group points spatially, apply linear fit (via SKLearn) to each cluster
+    in order to create piecewise-linear model of system dynamics.'''
+    def get_linear_model(self, model):
+        #print("MODEL RETRIEVED!")
+        augmented = model.coef_ #[A|B] coeff
+        #print("Coef: ", self.A)
+        if len(self.region_a) > 0:
+            A = augmented[:self.a_shape[0], :self.a_shape[1]]
+            B = augmented[:self.a_shape[0], self.a_shape[1]:]
+        A += np.random.rand(*self.A.shape) * 1e-2
+        B += np.random.rand(*self.B.shape) * 1e-2
+        return A, B
+    
+    def fit_model(self, X, X_, U = None):
         for r in self.region_s.keys(): #update each region's model
+            print("KEY: ", r)
             if len(self.region_s[r]) > 1: #cannot fit on empty/1 samples
-                print("Adding region r keys: ", r)
-                self.models[r] = linear_model.LinearRegression(fit_intercept = False)
-                #self.models[r] = linear_model.LinearRegression(normalize = True)
+                #self.models[r] = linear_model.LinearRegression(fit_intercept = False)
+                self.models[r] = linear_model.LinearRegression(normalize = True)
                 #print("State Samples shape: ", self.region_s[r].shape)
                 #print("Action Samples shape: ", self.region_u[r].shape)
                 #print("NextState Samples shape: ", self.region_s_[r].shape)
@@ -1475,7 +1494,7 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
                 if self.fit_b:
                     assert(U is not None)
                     for i in range(len(self.region_s[r])):
-                        system.append(np.concatenate((self.region_s[r][i], self.region_u[r][i])))
+                        system.append(np.concatenate((self.region_s[r][i], self.region_a[r][i])))
                 else:
                     system = self.region_s[r]
                 system = np.array(system)
@@ -1483,18 +1502,89 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
                 print("System[-1]: ", system[-1])
 
                 ##Randomly sample some points in region
-                print("Len: ", len(system))
-                indices = random.sample(range(len(system) - 1), min(256, len(system) - 1))
-                print("INDICES: ", indices)
+                #print("Len: ", len(system))
+                indices = random.sample(range(len(system) - 1), min(512, len(system) - 1))
+                #print("INDICES: ", indices)
                 sample_sa = system[indices]
                 sample_s_ = [self.region_s_[r][i] for i in indices]
-                print("Sample s_: ", sample_s_)
+                #print("Sample s_: ", sample_s_)
 
                 self.models[r].fit(sample_sa, sample_s_) #TODO: use ALL points in reg.
-                print("region r model: ", self.models[r])
-        #TODO: re-sort / verify existing models after this step?
-        #this should be all "Online", not brute-forcey
-        return labels
+                #print("region r model: ", self.models[r])
+
+
+
+class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
+    '''Utilize online clustering algorithm (Birch clustering,
+    which is proposed as an alternative to mini-batch k-means)
+    to group points spatially, apply linear fit (SINGLE
+    LAYER PERCEPTRON, representing linear function) 
+    to each cluster in order to create piecewise-linear 
+    model of system dynamics.'''
+    def __init__(self, device, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.device = device
+
+    def get_linear_model(self, model):
+        '''Assumes local models are "forward dynamics", where F 
+        and G and calculated seperately and are represented by
+        properly-sized matrices.'''
+        A = model.a_layer.weight.detach().numpy()
+        B = model.b_layer.weight.detach().numpy()
+        return A,B 
+
+    def construct_model(self):
+        class PyTorchLinearModel(torch.nn.Module):
+            def __init__(self, device, dt, obs_size, action_size):
+                super().__init__()
+                self.device = device
+                self.a_layer = torch.nn.Linear(obs_size, obs_size, bias = False)
+                self.b_layer = torch.nn.Linear(action_size, obs_size, bias = False)
+                self.dt = dt
+
+            def forward(self, x, u):
+                ax = self.a_layer(x)
+                bu = self.b_layer(u)
+                return ax + bu
+
+            def forward_predict(self, x, u):
+                '''Return x' = x + dt(Ax + Bu)'''
+                return x + self.dt * (self.forward(x, u))
+
+            def fit(self, X, X_, U):
+                '''We're being sloppy here. This is a training step to
+                allow this to work with the existing SKLearnLocal trainer
+                '''
+                criterion = torch.nn.MSELoss()
+                optimizer = torch.optim.Adam(self.parameters(), lr = 1e-3, betas = (0.9, 0.999))
+                for ii in range(1): #we're overfitting...intentionally?
+                    loss = torch.tensor([0.0], requires_grad = False)
+                    for i in range(len(X)):
+                        s_ = torch.tensor(X_[i]).float()
+                        s = torch.tensor(X[i]).float()
+                        a = torch.tensor(U[i]).float()
+                        prediction = self.forward_predict(s, a)
+                        loss += criterion(s_, prediction)    
+                    loss.backward()
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+
+        return PyTorchLinearModel(self.device, self.dt, self.a_shape[0], self.b_shape[1]) 
+    
+    def fit_model(self, X, X_, U = None):
+        for r in self.region_s.keys(): #update each region's model
+            print("KEY: ", r)
+            if len(self.region_s[r]) > 1: #cannot fit on empty/1 samples
+                if r not in self.models.keys():
+                    self.models[r] = self.construct_model()
+                ##Randomly sample some points in region
+                indices = random.sample(range(len(self.region_s[r]) - 1), min(512, len(self.region_s[r]) - 1))
+                sample_s = [self.region_s[r][i] for i in indices]
+                sample_a = [self.region_a[r][i] for i in indices]
+                sample_s_ = [self.region_s_[r][i] for i in indices]
+                self.models[r].fit(sample_s, sample_s_, sample_a) #TODO: use ALL points in reg.
+
 
 class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
     def forward(self, xt, ut, f, g):

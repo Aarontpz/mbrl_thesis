@@ -853,15 +853,13 @@ class SMC(DDP):
     def step(self, xt):
         if len(xt.shape) < 2:
             xt = xt[..., np.newaxis]
-        print('Target: %s Xt: %s' % (self.target.shape, xt.shape))
+        #print('Target: %s Xt: %s' % (self.target.shape, xt.shape))
         xt = self.diff_func(self.target, xt)
         if self.update_model:
-            print("UPDATING MODEL")
+            #print("UPDATING MODEL")
             #if len(xt.shape) > 1:
             #    xt = xt.flatten()
             self.model.update(xt)
-        if self.cost is not None and self.cost.target is not None:
-            xt = xt - self.cost.target
         self.update_surface(xt)
         return None, self.compute_control(xt) #TODO: make this NOT a subclass of DDP so we don't need this janky None returnval?
 
@@ -877,13 +875,14 @@ class SMC(DDP):
             ds_dx = self.get_surface_d_dx(xt)
             dB = np.dot(ds_dx.T, self.model.B)
             dA = np.dot(ds_dx.T, np.dot(self.model.A, xt))
-            print("ds_dx: %s \nSign: %s" % (ds_dx, sign))
-            print("ds_dx.T: ",  (ds_dx.T.shape))
-            print("B: ", self.model.B)
-            print("A: ", self.model.A)
-            print("xt: ", xt)
-            print("DOT: ", (dB))
-            print("|DOT|: ", np.linalg.det(dB))
+            #print("ds_dx: %s \nSign: %s" % (ds_dx, sign))
+            print("Sign: %s" % (sign))
+            #print("ds_dx.T: ",  (ds_dx.T.shape))
+            #print("B: ", self.model.B)
+            #print("A: ", self.model.A)
+            #print("xt: ", xt)
+            #print("DOT: ", (dB))
+            #print("|DOT|: ", np.linalg.det(dB))
             magnitude = -(2 * np.linalg.inv(dB)) #TODO: Verify this step
             magnitude *= dA
             if len(sign.shape) < 2:
@@ -922,7 +921,8 @@ class SMC(DDP):
         if self.switching_function == 'sign':
             return np.sign(np.dot(self.surface.T, xt))
         elif self.switching_function == 'arctan':
-            return np.arctan(np.dot(self.surface.T, xt))
+            return np.arctan(np.dot(self.surface.T, xt)) * 2 / np.pi
+            return np.arctan(np.dot(self.surface.T, xt)) * 2 / np.pi
 
     def update_surface(self, xt):
         pass
