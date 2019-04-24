@@ -649,7 +649,7 @@ value_coeff = 9e-2
 energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
 #energy_penalty_coeff = 0 #zero, to not penalize at all
 
-EPS = 1.5e-1
+EPS = 1.0e-1
 EPS_MIN = 1e-2
 EPS_DECAY = 1e-8
 GAMMA = 0.999
@@ -906,6 +906,10 @@ if __name__ == '__main__':
             LOCAL_LINEAR_MODEL = 'sklearn'
             LOCAL_LINEAR_MODEL = 'pytorch'
             #LOCAL_LINEAR_MODEL = None 
+            N_CLUSTERS = 999 
+            #N_CLUSTERS = 500
+            #N_CLUSTERS = 250
+            #N_CLUSTERS = 50
 
             if LOCAL_LINEAR_MODEL is not None:
                 dataset = Dataset(aggregate_examples = False, shuffle = True)
@@ -944,13 +948,13 @@ if __name__ == '__main__':
             if LOCAL_LINEAR_MODEL == 'sklearn': 
                 system_model = SKLearnLinearClusterLocalModel(
                         (obs_size, obs_size), (obs_size, action_size),
-                        n_clusters = 200,
+                        n_clusters = N_CLUSTERS,
                         compute_labels = True, 
                         dt = DT)
             elif LOCAL_LINEAR_MODEL == 'pytorch': 
                 system_model = PyTorchLinearClusterLocalModel(device,
                         (obs_size, obs_size), (obs_size, action_size),
-                        n_clusters = 200,
+                        n_clusters = N_CLUSTERS,
                         compute_labels = True, 
                         dt = DT)
             else:
@@ -1095,7 +1099,7 @@ if __name__ == '__main__':
                 #across control variables, but also to construct
                 #a generally good surface (target * 1e1 to focus emphasis
                 #on target variables)
-                surface = surface + target * 1e1 + np.random.rand(*surface.shape) * 1e-2
+                surface = surface + target * 1e1 + np.eye(obs_size, M = action_size) * 1e-2
                 #surface = surface + target * 1e1
                 print("Obs Size: ", obs_size)
                 print("Action Size: ", action_size)
