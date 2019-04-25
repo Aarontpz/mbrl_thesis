@@ -514,7 +514,7 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 #update gain matrices, to be used to get delta-u
                 #as a linear function of delta-x
                 print("Quu: %s Qu: %s " % (Quu_inv.shape, Qu.shape))
-                input()
+                #input()
                 k[i] = -np.dot(Quu_inv, Qu)
                 K[i] = -np.dot(Quu_inv, Qxu)
                 #print("ki: %s \n Ki: %s " % (k[i], K[i]))

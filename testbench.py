@@ -24,6 +24,54 @@ import collections
 
 import argparse
 
+parser = argparse.ArgumentParser()
+
+parser.add_argument("--lib-type", type=str, help="Library type (DM, GYM, Control)", default='dm')
+parser.add_argument("--env-type", type=str, help="Environment type (walker, cartpole, humanoid, swimmer,...)", default = 'walker')
+parser.add_argument("--task-type", type=str, help="Environment-specific task (walk, stand, balance, swingup,...)", default = 'stand')
+
+parser.add_argument("--agent_type", type=str, help="Specify agent algorithm (policy [policy gradient], mbrl [model-based RL])", default = 'policy')
+parser.add_argument("--random_baseline", type=int, default = 0, help="Sample actions uniformly if agent is eps-greedy and this argument != 0")
+parser.add_argument("--eps-base", type=float, default=5e-2)
+parser.add_argument("--eps-min", type=float, default=1e-2)
+parser.add_argument("--eps-decay", type=float, default=1e-7)
+
+parser.add_argument("--maxmin-normalization", type=int, default = 1, help="Boolean for maxmin-normalization. True if != 0")
+
+parser.add_argument("--dataset-recent-prob", type=float, default=0.5, help="Sets ratio of selecting recent samples vs stored samples.")
+
+##** MBRL-specific arguments
+parser.add_argument("--ddp-mode", type=str, help="Determines 'DDP' / control method (ismc, ilqg)", default = 'ismc')
+parser.add_argument("--local-linear-model", type=str, help="Specifies local-linear model type (if any)", default = 'pytorch')
+parser.add_argument("--local-clusters", type=int, help="Number of clusters for local model", default = 100)
+parser.add_argument("--global-model", type=str, help="Specifies glocal model, if any", default = None)
+
+parser.add_argument("--smc-switching-function", type=str, default='arctan')
+
+##** PG-specific arguments
+parser.add_argument("--gamma", type=float, default = 0.98, help="Reward discount factor for reinforcement learning methods")
+parser.add_argument("--trainer-type", type=str, default = 'AC', help="Specify the policy-gradient algorithm to train policy network on (AC, PPO)")
+parser.add_argument("--value-coeff", type=float, default = 9e-2, help="Coeff to multiply value loss by before training policy/value network.")
+parser.add_argument("--entropy-coeff", type=float, default = 5e-3, help="Coeff to multiply entropy loss by before training policy/value network.")
+parser.add_argument("--train_autoencoder", type=int, default = 0, help="If != 0, uses autoencoder to transform inputs before inputting to policy network.")
+
+#important that we retain the ability to have differnet Policy/Value nets
+parser.add_argument('--value-mlp-activations')
+parser.add_argument('--value-mlp-hdims')
+parser.add_argument('--value-mlp-outdim')
+parser.add_argument('--value-lr', type=float, default=1e-3, help="NN Learning Rate")
+parser.add_argument('--value-momentum', type=float, default=1e-4)
+
+
+##** NN-specific arguments (agent INDEPENDENT, IMPORTANT!)
+parser.add_argument('--mlp-activations', nargs='+', type=str, default=[None])
+parser.add_argument('--mlp-hdims', nargs='*', type=int, default=[])
+parser.add_argument('--mlp-outdim', type=int, default = 500)
+parser.add_argument('--lr', type=float, default=1e-3, help="NN Learning Rate")
+parser.add_argument('--momentum', type=float, default=1e-4)
+#parser.add_argument('--betas', type=tuple, default=(0.9, 0.999))
+
+
 class DMEnvMPCWalkerAgent(DMEnvMPCAgent):
     def transform_observation(self, obs) -> Variable:
         '''Converts ordered-dictionary of position and velocity into
@@ -275,11 +323,11 @@ def initialize_dm_environment(env_type, task_name, *args, **kwargs):
     tmp_env = suite.load(domain_name = env_type, task_name = task_name)  
     action_space = env.action_spec()
     obs_space = env.observation_spec()
-    if ENV_TYPE == 'walker':
+    if env_type == 'walker':
         obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0] + 1 #+1 for height
-    elif ENV_TYPE == 'cartpole':
+    elif env_type == 'cartpole':
         obs_size = obs_space['position'].shape[0] + obs_space['velocity'].shape[0]
-    elif ENV_TYPE == 'humanoid':
+    elif env_type == 'humanoid':
         obs_size = obs_space['joint_angles'].shape[0] + obs_space['extremities'].shape[0]
         obs_size = obs_size + obs_space['velocity'].shape[0]
         obs_size = obs_size + obs_space['com_velocity'].shape[0]
@@ -310,8 +358,8 @@ def initialize_gym_environment(env_type, task_name, *args, **kwargs):
     return env, tmp_env, obs_space, obs_size, action_size, action_constraints
 
 def initialize_control_environment(env_type, task_name, *args, **kwargs):
-    env = retrieve_control_environment(ENV_TYPE, **kwargs)
-    tmp_env = retrieve_control_environment(ENV_TYPE, **kwargs)
+    env = retrieve_control_environment(env_type, **kwargs)
+    tmp_env = retrieve_control_environment(env_type, **kwargs)
     action_size = env.get_action_size()
     action_constraints = env.get_action_constraints()
     obs_size = env.get_observation_size()
@@ -332,9 +380,9 @@ def initialize_environment(lib_type, env_type, task_name, *args, **kwargs):
     '''
     if lib_type == 'dm':
         return initialize_dm_environment(env_type, task_name, *args, **kwargs)
-    elif LIB_TYPE == 'gym':
+    elif lib_type == 'gym':
         return initialize_gym_environment(env_type, task_name, *args, **kwargs)
-    elif LIB_TYPE == 'control':
+    elif lib_type == 'control':
         return initialize_control_environment(env_type, task_name, *args, **kwargs)
 
 
@@ -348,16 +396,16 @@ def create_pytorch_mpc_agent(env_type, lib_type,
     k_shoots = 20,
     discrete_actions = False, 
     has_value_function = False) -> (Agent, Trainer): 
-    agent = create_agent(PyTorchMPCAgent, LIB_TYPE, ENV_TYPE, 
+    agent = create_agent(PyTorchMPCAgent, lib_type, env_type, 
                 NUM_PROCESSES, HORIZON, K_SHOOTS,  #num_processes, #horizon, k_shoots
                 device, 
                 [1, obs_size], action_size, discrete_actions = DISCRETE_AGENT, 
                 action_constraints = action_constraints, has_value_function = False)
-    if ENV_TYPE == 'walker':
+    if env_type == 'walker':
         random_agent = RandomWalkerAgent([1, obs_size], action_size, 
                 discrete_actions = DISCRETE_AGENT, 
                 action_constraints = action_constraints, has_value_function = False)
-    elif ENV_TYPE == 'cartpole':
+    elif env_type == 'cartpole':
         random_agent = RandomCartpoleAgent([1, obs_size], action_size, 
                 discrete_actions = DISCRETE_AGENT, 
                 action_constraints = action_constraints, has_value_function = False)
@@ -372,21 +420,21 @@ def create_pytorch_mpc_agent(env_type, lib_type,
     trainer = PyTorchNeuralDynamicsMPCTrainer(agent, random_agent, optimizer,
             512, 1.0, 0.05, 0.5, 700, 700, #batch_size, starting rand, rand_decay, rand min, max steps, max iter        
             device, value_coeff, entropy_coeff,
-            agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+            agent, env, optimizer, replay = replay_iterations, max_traj_len = max_traj_len, gamma = args.gamma,
             num_episodes = EPISODES_BEFORE_TRAINING) 
     return agent, trainer
 
 def create_pytorch_policy_agent(env, obs_size, 
         action_size, action_constraints,
-        mlp_hdims, mlp_activations, mlp_base,
+        mlp_hdims, mlp_activations, mlp_outdim, mlp_base,
         lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
         discrete_actions = False, 
         has_value_function = False) -> (Agent, Trainer): 
     mlp_indim = obs_size
-    mlp_outdim = mlp_indim * WIDENING_CONST #based on state size (approximation)
+    #mlp_outdim = mlp_indim * WIDENING_CONST #based on state size (approximation)
     print("MLP INDIM: %s HDIM: %s OUTDIM: %s " % (obs_size, mlp_hdims, mlp_outdim))
     print("MLP ACTIVATIONS: ", mlp_activations)
-    agent = create_agent(PyTorchAgent, LIB_TYPE, ENV_TYPE, device, [1, obs_size], 
+    agent = create_agent(PyTorchAgent, args.lib_type, args.env_type, device, [1, obs_size], 
                 action_size, discrete_actions = DISCRETE_AGENT, 
                 action_constraints = action_constraints, has_value_function = True,
                 terminal_penalty = 0.0, 
@@ -403,17 +451,19 @@ def create_pytorch_policy_agent(env, obs_size,
     #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
     scheduler = None
     #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
-    if TRAINER_TYPE == 'AC':
-        trainer = PyTorchACTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, energy_penalty_coeff,
+    if args.trainer_type == 'AC':
+        trainer = PyTorchACTrainer(args.value_coeff, args.entropy_coeff, 
+                0, 0, #entropy_coeff, energy_loss
                 device, optimizer, scheduler,   
                 agent, env, 
-                replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+                replay = replay_iterations, max_traj_len = max_traj_len, gamma = args.gamma,
                 num_episodes = EPISODES_BEFORE_TRAINING) 
-    elif TRAINER_TYPE == 'PPO':
-        trainer = PyTorchPPOTrainer(value_coeff, entropy_coeff, ENTROPY_BONUS, energy_penalty_coeff,
+    elif args.trainer_type == 'PPO':
+        trainer = PyTorchPPOTrainer(args.value_coeff, args.entropy_coeff, 
+                0, 0, #entropy_coeff, energy_loss
                 device, optimizer, scheduler, 
                 agent, env, 
-                replay = replay_iterations, max_traj_len = max_traj_len, gamma = GAMMA,
+                replay = replay_iterations, max_traj_len = max_traj_len, gamma = args.gamma,
                 num_episodes = EPISODES_BEFORE_TRAINING) 
     return agent, trainer
 
@@ -505,7 +555,7 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                 encode_inputs = encoder is not None
                 if encode_inputs:
                     encoder_clone = copy.deepcopy(encoder).to(device)
-                    clone = create_agent(PyTorchAgent, LIB_TYPE, env_type, device, [1, obs_size], 
+                    clone = create_agent(PyTorchAgent, args.lib_type, env_type, device, [1, obs_size], 
                         action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True, 
                         encode_inputs = encode_inputs, encoder = encoder_clone)
@@ -518,7 +568,7 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                         clone.mpc_ddp.model.module.device = device
                     launch_viewer(env, clone)    
                 else:
-                    clone = create_agent(PyTorchAgent, LIB_TYPE, env_type, device, [1, obs_size], 
+                    clone = create_agent(PyTorchAgent, args.lib_type, env_type, device, [1, obs_size], 
                         action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True, 
                         encode_inputs = None, encoder = None)
@@ -609,139 +659,38 @@ else:
 
 
 
-
-PRETRAINED = False
-RUN_ANYWAYS = False
-
-LIB_TYPE = 'dm'
-#LIB_TYPE = 'gym'
-
-#AGENT_TYPE = 'mpc'
-AGENT_TYPE = 'policy'
-
-#AGENT_TYPE = 'agnostic_MBRL'
-#WIDENING_CONST = 50 #indim * WIDENING_CONST = hidden layer size
-#REPLAYS = 20
-#horizon = 50
-##EPISODES_BEFORE_TRAINING = 3
-##max_traj_len = SMALL_TRAJECTORY_LENGTH
-#replay_iterations = 10
-
-AGENT_RANDOM_BASELINE = False 
-#AGENT_RANDOM_BASELINE = True 
-
-TRAINER_TYPE = 'AC'
-TRAINER_TYPE = 'PPO'
-#EPISODES_BEFORE_TRAINING = 3
-#max_traj_len = SMALL_TRAJECTORY_LENGTH
-#replay_iterations = 6
-
-lr = 0.1e-3
 ADAM_BETAS = (0.9, 0.999)
-MOMENTUM = 1e-4
-#MOMENTUM = 0
-entropy_coeff = 5e-3
-#entropy_coeff = 0 
-ENTROPY_BONUS = False
-value_coeff = 9e-2
+PRETRAINED = False #this has lost its meaning, remove?!
+RUN_ANYWAYS = True
 
-#energy_penalty_coeff = 5e-2 #HIGH, if energy is a consideration
-energy_penalty_coeff = 5e-4 #low, if energy isn't a consideration
-#energy_penalty_coeff = 0 #zero, to not penalize at all
-
-EPS = 1.0e-1
-EPS_MIN = 1e-2
-EPS_DECAY = 1e-8
-GAMMA = 0.999
-ENV_TYPE = 'humanoid'
-#TASK_NAME = 'run'
-#TASK_NAME = 'walk'
-TASK_NAME = 'stand'
-
-EPS = 5e-2
-EPS_MIN = 2e-2
-EPS_DECAY = 1e-6
-GAMMA = 0.99
-ENV_TYPE = 'walker'
-#TASK_NAME = 'run'
-TASK_NAME = 'walk'
-TASK_NAME = 'stand'
-
-#EPS = 7e-2
-#EPS_MIN = 0.5e-2
-#EPS_DECAY = 1e-7
-#GAMMA = 0.99
-#ENV_TYPE = 'cartpole'
-#TASK_NAME = 'swingup'
-##TASK_NAME = 'balance'
-
-MAXMIN_NORMALIZATION = True
-TRAIN_AUTOENCODER = False
-
-###CONTROL ENVIRONMENTS
-#LIB_TYPE = 'control'
-#PRETRAINED = True
-#RUN_ANYWAYS = True
-#MAXMIN_NORMALIZATION = False
-#TRAIN_AUTOENCODER = True
-#EPS = 0.5e-1
-#EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.98
-#ENV_TYPE = 'rossler'
-#ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
-#TASK_NAME = 'point'
-
-#LIB_TYPE = 'control'
-#PRETRAINED = False
-#RUN_ANYWAYS = True
-#MAXMIN_NORMALIZATION = False
-#TRAIN_AUTOENCODER = False
-#EPS = 0.5e-1
-#EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.98
-#ENV_TYPE = 'cartpole'
-#ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
-#TASK_NAME = 'point'
-
-#LIB_TYPE = 'control'
-#PRETRAINED = False
-#RUN_ANYWAYS = True
-#MAXMIN_NORMALIZATION = False
-#TRAIN_AUTOENCODER = False
-#EPS = 0.5e-1
-#EPS_MIN = 2e-2
-#EPS_DECAY = 1e-6
-#GAMMA = 0.98
-#ENV_TYPE = 'inverted'
-#ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
-#        'target':np.array([0, 0])}
-#TASK_NAME = 'point'
-
-if AGENT_RANDOM_BASELINE == True:
-    EPS = 1e0
-    EPS_MIN = 1e0
-    EPS_DECAY = 1e-6
 
 MA_LEN = -1
 MA_LEN = 15
 
-
-
-
-
-
 if __name__ == '__main__':
-    #raise Exception("It is time...for...asynchronous methods. I think. Investigate??")
-    #raise Exception("It is time...for...preprocessing. I think. INVESTIGATE?!")
-    #raise Exception("It is time...for...minibatches (vectorized) training. I think. INVESTIGATE?!")
-    args = []
+    args = parser.parse_args() 
+    print("Lib: ", args.lib_type)
+    print("Env: ", args.env_type)
+    print("Task: ", args.task_type)
+    if args.random_baseline != 0:
+        EPS = 1e0
+        EPS_MIN = 1e0
+        EPS_DECAY = 1e-6
+    else:
+        EPS = args.eps_base
+        EPS_MIN = args.eps_min
+        EPS_DECAY = args.eps_decay
+    print("Eps: %s Eps min: %s Eps decay: %s" % (EPS, EPS_MIN, EPS_DECAY))
     kwargs = {}
-    if LIB_TYPE == 'control':
+    if args.lib_type == 'control':
         kwargs = ENV_KWARGS
-    env, tmp_env, obs_space, obs_size, action_size, action_constraints = initialize_environment(LIB_TYPE, ENV_TYPE, TASK_NAME, *args, **kwargs)
+    env, tmp_env, obs_space, obs_size, action_size, action_constraints = initialize_environment(args.lib_type, args.env_type, args.task_type, **kwargs)
     
+
+    mlp_hdims = args.mlp_hdims
+    mlp_activations = args.mlp_activations
+    mlp_outdim = args.mlp_outdim
+
     MA = 0
     averages = []
 
@@ -753,7 +702,7 @@ if __name__ == '__main__':
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         #device = torch.device("cpu") 
          
-        if AGENT_TYPE == 'mpc': 
+        if args.agent_type == 'mpc': 
             agent, trainer = create_pytorch_mpc_agent(env_type, lib_type, 
                     env, obs_size, action_size, action_constraints,
                     mlp_hdims, mlp_activations, 
@@ -771,16 +720,16 @@ if __name__ == '__main__':
         #TODO TODO:^this could include a value function too?! SEPERATE VALUE FUNCTION
         # to benefit from MPC AND model-free agent sampling, since value functions are ubiquitous
 
-        elif AGENT_TYPE == 'policy':
-            mlp_activations = [None, 'relu', None] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
+        elif args.agent_type == 'policy':
+            #mlp_activations = [None, 'relu', None] #+1 for outdim activation, remember extra action/value modules
+            #mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
             if DISCRETE_AGENT:
                 mlp_base = PyTorchDiscreteACMLP
             else:
                 mlp_base = PyTorchContinuousGaussACMLP
             agent, trainer = create_pytorch_policy_agent(env, obs_size, 
                 action_size, action_constraints,
-                mlp_hdims, mlp_activations, mlp_base,
+                mlp_hdims, mlp_activations, mlp_outdim, mlp_base,
                 lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
                 discrete_actions = False, 
                 has_value_function = False) 
@@ -814,7 +763,7 @@ if __name__ == '__main__':
 
             AE_BATCHES = 64
             AE_REPLAYS = 10
-            DATASET_RECENT_PROB = 0.5
+            #DATASET_RECENT_PROB = 0.5
             if action_size > 1:
                 forward_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + math.floor(action_size * REDUCTION_FACTOR**DEPTH)
             else:
@@ -835,7 +784,7 @@ if __name__ == '__main__':
                         hdims = forward_hdims, activations = forward_activations, 
                         initializer = mlp_initializer).to(device)   
 
-            if TRAIN_AUTOENCODER == True:
+            if args.train_autoencoder != 0:
 
                 AUTOENCODER_DATASET = Dataset(aggregate_examples = False, shuffle = True)
                 #AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
@@ -852,7 +801,7 @@ if __name__ == '__main__':
                         autoencoder, AUTOENCODER_DATASET, AE_BATCHES, TRAIN_FORWARD, TRAIN_ACTION,
                         device, ae_optimizer, ae_scheduler, 
                         agent, env, 
-                        replay = AE_REPLAYS, max_traj_len = max_traj_len, gamma = GAMMA,
+                        replay = AE_REPLAYS, max_traj_len = max_traj_len, gamma = args.gamma,
                         num_episodes = EPISODES_BEFORE_TRAINING)
                 if PREAGENT and not COUPLED_SA:
                     print("Feeding ENCODED state information into PolicyGradient agent!")
@@ -874,7 +823,7 @@ if __name__ == '__main__':
                     agent.encode_inputs = True
                     agent.encoder = autoencoder
                     print("Post-encoder Module: ", agent.module)
-                    optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+                    optimizer = optim.Adam(agent.module.parameters(), lr = args.lr, betas = ADAM_BETAS)
                     #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
                     scheduler = None
                     #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 200, gamma = 0.85)
@@ -883,45 +832,48 @@ if __name__ == '__main__':
                 else:
                     agent.encode_inputs = False
         
-        elif AGENT_TYPE == 'agnostic_MBRL':
+        elif args.agent_type == 'mbrl':
             BATCH_SIZE = 64 
             COLLECT_FORWARD_LOSS = False
             DT = 1e-2 
-            if LIB_TYPE == 'dm':
+            if args.lib_type == 'dm':
                 DT = env.control_timestep()
             #HORIZON = 0.8e-1
             #EPS_BASE = 1.5e-1
             #EPS_MIN = 2e-2
             #EPS_DECAY = 1e-7
-            DDP_MODE = 'ismc'
+            #DDP_MODE = 'ismc'
             #DDP_MODE = 'ilqg'
             ## 
             
-            DATASET_RECENT_PROB = 0.7
+            #DATASET_RECENT_PROB = 0.7
             
-            dataset = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
             #dataset = Dataset(aggregate_examples = False, shuffle = True)
 
             ## MODEL-SPECIFIC PARAMETERS
-            LOCAL_LINEAR_MODEL = 'sklearn'
-            LOCAL_LINEAR_MODEL = 'pytorch'
+            #LOCAL_LINEAR_MODEL = 'sklearn'
+            #LOCAL_LINEAR_MODEL = 'pytorch'
             #LOCAL_LINEAR_MODEL = None 
-            N_CLUSTERS = 999 
+            #N_CLUSTERS = 999 
             #N_CLUSTERS = 500
             #N_CLUSTERS = 250
             #N_CLUSTERS = 50
-
-            if LOCAL_LINEAR_MODEL is not None:
+            print("Local Linear Model: ", args.local_linear_model)
+            print("Global Model: ", args.global_model)
+            dataset = DAgger(recent_prob = args.dataset_recent_prob, aggregate_examples = False, shuffle = True)
+            if args.local_linear_model is not None:
                 dataset = Dataset(aggregate_examples = False, shuffle = True)
-            #pytorch_class = PyTorchLinearSystemDynamicsLinearModule
-            #pytorch_model = PyTorchLinearSystemModel 
-            pytorch_class = PyTorchForwardDynamicsLinearModule
-            pytorch_model = PyTorchForwardDynamicsModel 
+            if args.global_model == 'linear':
+                pytorch_class = PyTorchLinearSystemDynamicsLinearModule
+                pytorch_model = PyTorchLinearSystemModel 
+            else:
+                pytorch_class = PyTorchForwardDynamicsLinearModule
+                pytorch_model = PyTorchForwardDynamicsModel 
 
             
             ## SMC-SPECIFIC ARGS
             SURFACE_BASE = None
-            SMC_SWITCHING_FUNCTION = 'arctan'
+            #SMC_SWITCHING_FUNCTION = 'arctan'
             #SMC_SWITCHING_FUNCTION = 'sign'
             #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
             #surface = np.eye(obs_size, M=action_size)
@@ -937,24 +889,24 @@ if __name__ == '__main__':
             K_SHOOTS = 1
             UPDATE_DDP_MODEL = True
             ILQG_SMC = False
-            REUSE_SHOOTS = False if DDP_MODE == 'ilqg' else False
-            mlp_activations = ['relu', None, None] #+1 for outdim activation, remember extra action/value modules
-            mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
-            mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
+            REUSE_SHOOTS = False if args.ddp_mode == 'ilqg' else False
+            #mlp_activations = ['relu', None, None] #+1 for outdim activation, remember extra action/value modules
+            #mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
+            #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
             #mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
             #mlp_hdims = [obs_size * WIDENING_CONST] 
             #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
 
-            if LOCAL_LINEAR_MODEL == 'sklearn': 
+            if args.local_linear_model == 'sklearn': 
                 system_model = SKLearnLinearClusterLocalModel(
                         (obs_size, obs_size), (obs_size, action_size),
-                        n_clusters = N_CLUSTERS,
+                        n_clusters = args.local_clusters,
                         compute_labels = True, 
                         dt = DT)
-            elif LOCAL_LINEAR_MODEL == 'pytorch': 
+            elif args.local_linear_model == 'pytorch': 
                 system_model = PyTorchLinearClusterLocalModel(device,
                         (obs_size, obs_size), (obs_size, action_size),
-                        n_clusters = N_CLUSTERS,
+                        n_clusters = args.local_clusters,
                         compute_labels = True, 
                         dt = DT)
             else:
@@ -969,9 +921,9 @@ if __name__ == '__main__':
             #TODO TODO: Neural Network generation of quadratic cost
             #function, using RL
             cost = None
-            if LIB_TYPE == 'dm':
+            if args.lib_type == 'dm':
                 target_inds = []
-                if ENV_TYPE == 'humanoid':
+                if args.env_type == 'humanoid':
                     target = np.zeros(obs_size)
                     head_height_ind = 60 + 3 #61 from angle+extrem+vel
                     #torso_vertx_ind = 0
@@ -996,7 +948,7 @@ if __name__ == '__main__':
                     Q = np.eye(obs_size) * 1e8
                     Qf = Q
                     R = np.eye(action_size) * 1e3
-                if ENV_TYPE == 'walker':
+                if args.env_type == 'walker':
                     #cost is manually set as walker height and
                     #center-of-mass horizontal velocity, conditioned
                     #on task type
@@ -1011,7 +963,7 @@ if __name__ == '__main__':
                     Q = np.eye(obs_size) * 1e8
                     Qf = Q
                     R = np.eye(action_size) * 1e3
-                if ENV_TYPE == 'cartpole':
+                if args.env_type == 'cartpole':
                     #cost is manually set as deviation from pole upright
                     #position.
                     print("ENV TYPE IS CARTPOLE")
@@ -1023,8 +975,8 @@ if __name__ == '__main__':
                     Q = np.eye(obs_size) * 1e8
                     Qf = Q
                     R = np.eye(action_size) * 1e3
-            elif LIB_TYPE == 'control':
-                if ENV_TYPE == 'inverted':
+            elif args.lib_type == 'control':
+                if args.env_type == 'inverted':
                     #cost is manually set as deviation from pole upright
                     #position.
                     print("ENV TYPE IS INVERTED PENDULUM (control environment)")
@@ -1061,10 +1013,10 @@ if __name__ == '__main__':
             print("Q: ", Q)
             cost = LQC(Q, R, Qf, target = target, 
                     diff_func = diff_func)
-            if LIB_TYPE == 'control':
+            if args.lib_type == 'control':
                 env.cost = cost #to get meaningful reward data
             ddp = None
-            if DDP_MODE == 'ilqg':
+            if args.ddp_mode == 'ilqg':
                 ddp = ILQG(LQG_FULL_ITERATIONS,
                         LAMB_FACTOR, LAMB_MAX, DDP_INIT,
                         obs_space, obs_size,
@@ -1081,7 +1033,7 @@ if __name__ == '__main__':
                     print("Surface Function: ", surface)
                     smc = SMC(surface,
                             target, diff_func,
-                            SMC_SWITCHING_FUNCTION,
+                            args.smc_switching_function,
                             obs_space, obs_size,
                             [1, action_size], action_size,
                             system_model, cost,
@@ -1094,7 +1046,7 @@ if __name__ == '__main__':
                             )
                     ddp.set_smc(smc)
 
-            elif DDP_MODE == 'ismc':
+            elif args.ddp_mode == 'ismc':
                 #The idea is to make surface non-uniform (singular) 
                 #across control variables, but also to construct
                 #a generally good surface (target * 1e1 to focus emphasis
@@ -1106,7 +1058,7 @@ if __name__ == '__main__':
                 print("Surface Function: ", surface)
                 ddp = SMC(surface,
                         target, diff_func,
-                        SMC_SWITCHING_FUNCTION,
+                        args.smc_switching_function,
                         obs_space, obs_size,
                         [1, action_size], action_size,
                         system_model, cost,
@@ -1126,18 +1078,18 @@ if __name__ == '__main__':
                 DT, HORIZON, K_SHOOTS,
                 BATCH_SIZE, COLLECT_FORWARD_LOSS, 
                 replay_iterations, None,
-                LIB_TYPE, ENV_TYPE,
+                args.lib_type, args.env_type,
                 env, obs_size, action_size, action_constraints,
                 mlp_hdims, mlp_activations, 
-                lr = lr, adam_betas = ADAM_BETAS, momentum = MOMENTUM, 
+                lr = args.lr, adam_betas = ADAM_BETAS, momentum = args.momentum, 
                 discrete_actions = False, 
                 has_value_function = False) 
        
 
 
-        if MAXMIN_NORMALIZATION: 
-            print(get_max_min_path(LIB_TYPE, ENV_TYPE))
-            mx, mn = retrieve_max_min([obs_size],[obs_size],LIB_TYPE, ENV_TYPE, norm_dir = 'norm')
+        if args.maxmin_normalization: 
+            print(get_max_min_path(args.lib_type, args.env_type))
+            mx, mn = retrieve_max_min([obs_size],[obs_size],args.lib_type, args.env_type, norm_dir = 'norm')
             print("CURRENT MX: %s \n MN: %s \n" % (mx, mn))
             new_mx, new_mn = mx, mn #copy them for updating
 
@@ -1147,7 +1099,7 @@ if __name__ == '__main__':
         if (not PRETRAINED) or (RUN_ANYWAYS):
             ## set up listener for user input
             lock = threading.Lock()
-            console_args = (tmp_env, agent, lock, LIB_TYPE, ENV_TYPE, agent.encoder)
+            console_args = (tmp_env, agent, lock, args.lib_type, args.env_type, agent.encoder)
             console_thread = threading.Thread(target = console, args = console_args)
             console_thread.daemon = True
             console_thread.start()
@@ -1157,7 +1109,7 @@ if __name__ == '__main__':
                 print("ITERATION: ", i)
                 # Exploration / evaluation step
                 for episode in range(EPISODES_BEFORE_TRAINING):
-                    if LIB_TYPE == 'dm':
+                    if args.lib_type == 'dm':
                         timestep = env.reset()        
                         while not timestep.last() and step < MAX_TIMESTEPS:
                             reward = timestep.reward
@@ -1167,7 +1119,7 @@ if __name__ == '__main__':
                             observation = timestep.observation
                             observation = agent.transform_observation(observation)
                             #print("OBS: ", observation)
-                            if MAXMIN_NORMALIZATION:
+                            if args.maxmin_normalization:
                                 if type(observation) == torch.Tensor:
                                     observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
                                 else:
@@ -1182,18 +1134,18 @@ if __name__ == '__main__':
                             agent.store_reward(reward)
                             timestep = env.step(action)
                             #print("Reward: %s" % (timestep.reward))
-                    elif LIB_TYPE == 'gym':
+                    elif args.lib_type == 'gym':
                         env.reset()
                         observation, reward, done, info = env.step(env.action_space.sample())
                         while not done and step < MAX_TIMESTEPS:
-                            if MAXMIN_NORMALIZATION:
+                            if args.maxmin_normalization:
                                 observation = agent.transform_observation(observation)
                                 observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
                             action = agent.step(observation).cpu().numpy()
                             env.render()
                             observation, reward, done, info = env.step(action)
                             agent.store_reward(reward)
-                    elif LIB_TYPE == 'control':
+                    elif args.lib_type == 'control':
                         env.reset()
                         while not env.episode_is_done() and step < MAX_TIMESTEPS:
                             obs = env.get_state()
@@ -1204,36 +1156,36 @@ if __name__ == '__main__':
                             reward = env.get_reward()
                             agent.store_reward(reward)
 
-                    if MAXMIN_NORMALIZATION:
+                    if args.maxmin_normalization:
                         new_mx, new_mn = update_max_min(observation, new_mx, new_mn)
                     agent.terminate_episode() #oops forgot this lmao
                 # Update step
                 if not PRETRAINED:
                     trainer.step()
                     print("Agent Net Loss: ", agent.net_loss_history[-1])
-                if TRAIN_AUTOENCODER == True:
+                if args.train_autoencoder != 0:
                     autoencoder_trainer.step()
                     autoencoder_trainer.plot_loss_histories()
                 if i % 50 == 0: #periodic tasks
                     print("Performing Periodic Tasks")
-                    if MAXMIN_NORMALIZATION: 
+                    if args.maxmin_normalization: 
                         print("(stored) max: %s\n min: %s\n"%(new_mx, new_mn))
-                        store_max_min(new_mx, new_mn, LIB_TYPE, ENV_TYPE, norm_dir = 'norm') 
+                        store_max_min(new_mx, new_mn, args.lib_type, args.env_type, norm_dir = 'norm') 
                 
-                if LIB_TYPE == 'control':
-                    if 'MB' in AGENT_TYPE: #look for model-based. Disgusting
+                if args.lib_type == 'control':
+                    if 'MB' in args.agent_type: #look for model-based. Disgusting
                         env.generate_vector_field_plot()
                         env.generate_vector_field_plot(agent.mpc_ddp.model)
 
                 agent.reset_histories()
-                if AGENT_TYPE == 'policy' and not PRETRAINED:
+                if args.agent_type == 'policy' and not PRETRAINED:
                     print("Agent Net Action loss: ", agent.value_loss_history[i])
                     print("Agent Net Value loss: ", agent.action_loss_history[i])
                 print("Agent Net Reward: ", agent.net_reward_history[-1])
                 #i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
                     try:
-                        if LIB_TYPE == 'control' and TRAIN_AUTOENCODER and i > 5:
+                        if args.lib_type == 'control' and args.train_autoencoder and i > 5:
                             #TODO: encapsulate this AE testing...and all else
                             #we now display forward dynamics to compare with 
                             #control trajectory

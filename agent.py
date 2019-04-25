@@ -1528,7 +1528,7 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
 
             def fit(self, X, X_, U):
                 '''We're being sloppy here. This is a training step to
-                allow this to work with the existing SKLearnLocal trainer
+                allow this to work with the existing LocalLinearModel trainer
                 '''
                 criterion = torch.nn.MSELoss()
                 optimizer = torch.optim.SGD(self.parameters(), lr = 1e-3, momentum = 1e-4)
