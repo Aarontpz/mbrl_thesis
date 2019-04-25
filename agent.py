@@ -1405,6 +1405,9 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
                 self.initialize_model_free_arrays()
             else:
                 self.A, self.B = self.get_linear_model(model)
+        #print("A: ", self.A.shape)
+        #print("B: ", self.B.shape)
+        #input()
         return self.A, self.B
 
 
@@ -1528,7 +1531,8 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                 allow this to work with the existing SKLearnLocal trainer
                 '''
                 criterion = torch.nn.MSELoss()
-                optimizer = torch.optim.Adam(self.parameters(), lr = 5e-3, betas = (0.9, 0.999))
+                optimizer = torch.optim.SGD(self.parameters(), lr = 1e-3, momentum = 1e-4)
+                #optimizer = torch.optim.Adam(self.parameters(), lr = 1e-3, betas = (0.9, 0.999))
                 for ii in range(1): #we're overfitting...intentionally?
                     loss = torch.tensor([0.0], requires_grad = False)
                     for i in range(len(X)):

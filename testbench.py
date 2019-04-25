@@ -22,7 +22,7 @@ import threading
 import pickle
 import collections
 
-VIEWING = False
+import argparse
 
 class DMEnvMPCWalkerAgent(DMEnvMPCAgent):
     def transform_observation(self, obs) -> Variable:
@@ -619,13 +619,13 @@ LIB_TYPE = 'dm'
 #AGENT_TYPE = 'mpc'
 AGENT_TYPE = 'policy'
 
-AGENT_TYPE = 'agnostic_MBRL'
-WIDENING_CONST = 50 #indim * WIDENING_CONST = hidden layer size
-REPLAYS = 20
-horizon = 50
-#EPISODES_BEFORE_TRAINING = 3
-#max_traj_len = SMALL_TRAJECTORY_LENGTH
-replay_iterations = 10
+#AGENT_TYPE = 'agnostic_MBRL'
+#WIDENING_CONST = 50 #indim * WIDENING_CONST = hidden layer size
+#REPLAYS = 20
+#horizon = 50
+##EPISODES_BEFORE_TRAINING = 3
+##max_traj_len = SMALL_TRAJECTORY_LENGTH
+#replay_iterations = 10
 
 AGENT_RANDOM_BASELINE = False 
 #AGENT_RANDOM_BASELINE = True 

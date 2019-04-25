@@ -177,7 +177,10 @@ class LQC(CostModel):
         if dt is None:
             dt = 1.0
         if self.target is not None:
-            xt = self.diff_func(self.target, xt)
+            target = self.target
+            if len(target.shape) > 1:
+                target = target.flatten()
+            xt = self.diff_func(target, xt)
         else:
             raise Exception("You need a target atm. Deal with it.")
         if self.terminal:
@@ -188,6 +191,9 @@ class LQC(CostModel):
             return 0.5 * self.Qf(xt) 
             #return self.Qf(xt) * dt
         #return (self.Q(xt) + self.R(ut)) 
+        #print("xt shape: ", xt.shape)
+        #print("ut shape: ", ut.shape)
+        #input()
         #print("Q(xt): %s \n R(ut): %s" % (self.Q(xt), self.R(ut)))
         #print(self.Q(xt))
         #print(self.R(ut))
@@ -388,6 +394,8 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
 
 
     def step(self, xt) -> (np.ndarray, np.ndarray):
+        #if len(xt.shape) < 2:
+        #    xt = xt[..., np.newaxis]
         if self.full_iterations:
             return self._step_full_iterations(xt)
         else:
@@ -505,6 +513,8 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 
                 #update gain matrices, to be used to get delta-u
                 #as a linear function of delta-x
+                print("Quu: %s Qu: %s " % (Quu_inv.shape, Qu.shape))
+                input()
                 k[i] = -np.dot(Quu_inv, Qu)
                 K[i] = -np.dot(Quu_inv, Qxu)
                 #print("ki: %s \n Ki: %s " % (k[i], K[i]))
@@ -608,7 +618,6 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
             if len(diff.shape) < 2:
                 diff = diff[..., np.newaxis]
             print("Diff: ", diff)
-            print("Qf: ", Qf)
             v[-1] = np.dot(self.cost.Qf.Q, diff)
             #v[-1] = cost.copy()
             print("VN: ", v[-1])
@@ -784,6 +793,8 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 traj = (xt_, u)
                 self.model.update(traj[0])
             dx = self.model(xt_, u)
+            if len(xt_) > 1:
+                xt_ = xt_.flatten()
             if len(dx) > 1:
                 dx = dx.flatten()
             print("Xt_ : ", xt_.shape)
@@ -804,6 +815,7 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 self.cost.normal_mode()
             else:
                 assert(self.cost.terminal is False)
+                print("Cost: ", self.cost(X[i], U[i], dt = self.dt))
                 if self.cost(X[i], U[i], dt = self.dt) < 0:
                     assert("Negative cost - something's wrong!")
                 cost += self.cost(X[i], U[i], dt = self.dt)
@@ -1012,9 +1024,9 @@ def create_MPCController(control_base, *args, **kwargs):
 
 if __name__ == '__main__':
     LINEARIZED_PENDULUM_TEST = False
-    NONLINEAR_PENDULUM_TEST = True
+    NONLINEAR_PENDULUM_TEST = False
     
-    NONLINEAR_CARTPOLE_TEST = False
+    NONLINEAR_CARTPOLE_TEST = True
 
     ##NONLINEAR CARTPOLE TEST
     if NONLINEAR_CARTPOLE_TEST:
@@ -1050,7 +1062,7 @@ if __name__ == '__main__':
         SMC_SWITCHING_FUNCTION = 'arctan'
 
         update_model = False
-        FULL_ITERATIONS = False
+        FULL_ITERATIONS = True
         
         #
         
