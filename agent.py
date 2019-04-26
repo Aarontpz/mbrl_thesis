@@ -1475,6 +1475,8 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
         ''' 
         self.fit_cluster(X, X_, U)
         labels = self.predict_cluster(X)
+        #raise Exception("Update clusters NEEDS to be a param?")
+        #raise Exception("KNN vs Cluster fitting??")
         if self.update_clusters is True:
             self.update_cluster()
         for i in range(len(X)): #add samples to each region's dicts
