@@ -250,7 +250,7 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                 R = rewards[ind - start]
                 action_loss = self.compute_action_loss(R, ind)
                 value_loss = self.compute_value_loss(R, ind)
-                if self.entropy_coeff > 0.0 and not self.entropy_bonus:
+                if self.entropy_coeff > 0.0 and not self.entropy_bonus and self.agent.module.sigma_head:
                     entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
                     action_loss += entropy_loss #WEIGHTED
                 #if self.agent.module.value_module is not False:

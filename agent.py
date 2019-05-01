@@ -1159,7 +1159,7 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
             action_sigma = self.action_sigma_module(mlp_out)
             action_sigma = self.action_sigma_softplus(action_sigma) + 0.01 #from 1602.01783 appendix 9
         else: #assume sigma is currently zeros
-            action_sigma = torch.ones([1, self.action_space], dtype=torch.float32) * 0.0001
+            action_sigma = torch.ones([1, self.action_space], dtype=torch.float32) * 0.5
         if hasattr(self, 'value_mlp'):
             if self.seperate_value_module_input == True:
                 mlp_out = self.value_mlp.forward(value_input)
@@ -1214,12 +1214,12 @@ def EpsGreedyMLP(mlp_base, eps, eps_decay = 1e-3, eps_min = 0.0, action_constrai
                         self).forward(x, value_input)
                 if random.random() < self.eps: #randomize sigma values
                     self.update_eps()
-                    #mins = self.action_constraints[0]
-                    #maxs = self.action_constraints[1]
-                    #action_mu =  np.random.uniform(mins, maxs, (1, self.action_space))
+                    mins = self.action_constraints[0]
+                    maxs = self.action_constraints[1]
+                    action_mu =  np.random.uniform(mins, maxs, (self.action_space))
                     #action_sigma = np.random.random_integers(1, high = 2, size = (1, self.action_space))
                     #eps_sigma = np.random.uniform(low = 0.01, high = 3.0, size = (1, 1))
-                    #action_mu = torch.as_tensor(action_mu).float()
+                    action_mu = torch.as_tensor(action_mu).float()
                     #noise = action_sigma.clone().uniform_(0, 3)
                     noise = action_sigma.clone().uniform_(0, 3)
                     #print("Current sigma: ", action_sigma)
@@ -1367,7 +1367,7 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
     '''Utilize online clustering algorithm (Birch clustering,
     which is proposed as an alternative to mini-batch k-means)
     to group points spatially.'''
-    def __init__(self, a_shape, b_shape, 
+    def __init__(self, a_shape, b_shape, neighbors = 0,
             n_clusters = 50,
             compute_labels = True,
             *args, **kwargs):
@@ -1383,12 +1383,17 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
         self.region_a = {} #label : [a]
         self.region_s_ = {} #label : [s_]
 
+        self.max_points = 2000
+
         self.a_shape = a_shape
         self.b_shape = b_shape
         
         self.fit_b = True
 
         self.update_clusters = True
+        
+        self.neighbors = neighbors
+        self.region_knn = {}
 
     def update(self, xt):
         if len(xt.shape) < 2:
@@ -1417,7 +1422,8 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
         #self.B = np.ones(self.b_shape)
 
     def get_local_model(self, x):
-        x = x.T
+        if x.shape[0] > x.shape[1]: #this is a next-level disgusting hack
+            x = x.T
         print("X shape (glm): ", x.shape)
         label = self.cluster.predict(x)[0]
         print("LABEL: ", label)
@@ -1444,6 +1450,12 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
         This systematically (inefficiently) verifies the position of
         each element in each region.'''
         for r in self.region_s.keys(): #update each region's points 
+            if len(self.region_s[r]) > self.max_points:
+                num_remove = len(self.region_s[r]) - self.max_points
+                print("Region %s Has %s too many points!" % (r, num_remove))
+                self.region_s[r] = self.region_s[r][num_remove:]  
+                self.region_s_[r] = self.region_s_[r][num_remove:]  
+                self.region_a[r] = self.region_a[r][num_remove:]  
             if len(self.region_s[r]) > 0:
                 s = np.array(self.region_s[r])
                 if len(s.shape) < 2:
@@ -1451,11 +1463,13 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
                 labels = self.predict_cluster(s)
                 for i in reversed(range(len(labels))): 
                     if labels[i] != r: #we move s, a, s_ to appropriate region
-                        print("I: %s R: %s Label: %s" % (i, r, labels[i]))
+                        #print("I: %s R: %s Label: %s" % (i, r, labels[i]))
                         self.region_s[labels[i]].append(self.region_s[r].pop(i))
                         self.region_a[labels[i]].append(self.region_a[r].pop(i))
                         self.region_s_[labels[i]].append(self.region_s_[r].pop(i))
-
+            if self.neighbors > 0 and len(self.region_s[r]) > self.neighbors:
+                #print("Knn on : ", self.region_s[r])
+                self.region_knn[r] = neighbors.KDTree(self.region_s[r])
 
 
 
@@ -1484,7 +1498,7 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
             self.region_a.setdefault(labels[i], []).append(U[i])
             self.region_s_.setdefault(labels[i], []).append(X_[i])
             #^ in order to store s and s' (t and t+1 states)
-        print("LABELS: ", labels)
+        #print("LABELS: ", labels)
         self.fit_model(X, X_, U)
         #TODO: re-sort / verify existing models after this step?
         #this should be all "Online", not brute-forcey
@@ -1509,6 +1523,21 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
         A = model.a_layer.weight.detach().numpy()
         B = model.b_layer.weight.detach().numpy()
         return A,B 
+    
+    def get_local_model(self, x):
+        if x.shape[0] > x.shape[1]: #this is a next-level disgusting hack
+            x = x.T
+        model = super().get_local_model(x)
+        label = self.cluster.predict(x)[0]
+        if self.neighbors > 0 and label in self.region_knn.keys(): #train model on local neighbors
+            dist, ind = self.region_knn[label].query(x, k=self.neighbors)
+            ind = ind[0] #nested list for some reason...
+            X = [self.region_s[label][i] for i in ind]
+            X_ = [self.region_s_[label][i] for i in ind]
+            U = [self.region_a[label][i] for i in ind]
+            model.fit(X, X_, U, num_iters = 5, lr=1e-1) #overfit on neighbors
+        return model
+
 
     def construct_model(self):
         class PyTorchLinearModel(torch.nn.Module):
@@ -1528,14 +1557,14 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                 '''Return x' = x + dt(Ax + Bu)'''
                 return x + self.dt * (self.forward(x, u))
 
-            def fit(self, X, X_, U):
+            def fit(self, X, X_, U, num_iters = 20, lr=2e-3):
                 '''We're being sloppy here. This is a training step to
                 allow this to work with the existing LocalLinearModel trainer
                 '''
                 criterion = torch.nn.MSELoss()
-                optimizer = torch.optim.SGD(self.parameters(), lr = 1e-3, momentum = 1e-4)
+                optimizer = torch.optim.SGD(self.parameters(), lr = lr, momentum = 1e-4)
                 #optimizer = torch.optim.Adam(self.parameters(), lr = 1e-3, betas = (0.9, 0.999))
-                for ii in range(1): #we're overfitting...intentionally?
+                for ii in range(num_iters): #we're overfitting...intentionally?
                     loss = torch.tensor([0.0], requires_grad = False)
                     for i in range(len(X)):
                         s_ = torch.tensor(X_[i]).float()
@@ -1557,13 +1586,13 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                     self.models[r] = self.construct_model()
                 for training_iter in range(10):
                     ##Randomly sample some points in region
-                    num_samples = 512
+                    num_samples = 128
                     indices = random.sample(range(len(self.region_s[r]) - 1), min(num_samples, len(self.region_s[r]) - 1))
                     sample_s = [self.region_s[r][i] for i in indices]
                     sample_a = [self.region_a[r][i] for i in indices]
                     sample_s_ = [self.region_s_[r][i] for i in indices]
                     #raise Exception("Only train on recent samples from each region? Otherwise, as regions DEVELOP, samples which no longer are representitive are left????")
-                    self.models[r].fit(sample_s, sample_s_, sample_a) #TODO: use ALL points in reg.
+                    self.models[r].fit(sample_s, sample_s_, sample_a, num_iters = 40) #TODO: use ALL points in reg.
 
 
 

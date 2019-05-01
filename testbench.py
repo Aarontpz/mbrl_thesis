@@ -27,22 +27,23 @@ import argparse
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--load", type=str, help="Path to 'run directory', containing the model and details (arguments, etc) of run to load.", default = None)
-parser.add_argument("--save-rate", type=int, help="Iterations between saves", default = 2000)
-parser.add_argument("--save-location", type=str, help="Directory to save run details to.")
+parser.add_argument("--load", type=int, help="Load arguments/model in given run (requires lib-type, env-type, task-type, agent-type, and ITERATION corresponding to which 'milestone' of previous run to load)", default = 0)
+parser.add_argument("--load-iteration", type=str, help="Load arguments/model in given run (requires lib-type, env-type, task-type, agent-type, and ITERATION corresponding to which 'milestone' of previous run to load)", default = None)
+parser.add_argument("--save-rate", type=int, help="Iterations between saves", default = 500)
+#parser.add_argument("--save-location", type=str, help="Directory to save run details to.")
 
 parser.add_argument("--lib-type", type=str, help="Library type (DM, GYM, Control)", default='dm')
 parser.add_argument("--env-type", type=str, help="Environment type (walker, cartpole, humanoid, swimmer,...)", default = 'walker')
 parser.add_argument("--task-type", type=str, help="Environment-specific task (walk, stand, balance, swingup,...)", default = 'stand')
 
-parser.add_argument("--agent_type", type=str, help="Specify agent algorithm (policy [policy gradient], mbrl [model-based RL])", default = 'policy')
+parser.add_argument("--agent-type", type=str, help="Specify agent algorithm (policy [policy gradient], mbrl [model-based RL])", default = 'policy')
 parser.add_argument("--max-iterations", type=int, help="Maximum number of iterations to train / evaluate agent for.", default=5000)
-parser.add_argument("--random_baseline", type=int, default = 0, help="Sample actions uniformly if agent is eps-greedy and this argument != 0")
+parser.add_argument("--random-baseline", type=int, default = 0, help="Sample actions uniformly if agent is eps-greedy and this argument != 0")
 parser.add_argument("--eps-base", type=float, default=5e-2)
 parser.add_argument("--eps-min", type=float, default=1e-2)
 parser.add_argument("--eps-decay", type=float, default=1e-7)
 
-parser.add_argument("--maxmin-normalization", type=int, default = 1, help="Boolean for maxmin-normalization. True if != 0")
+parser.add_argument("--maxmin-normalization", type=int, default = 0, help="Boolean for maxmin-normalization. True if != 0")
 
 parser.add_argument("--dataset-recent-prob", type=float, default=0.5, help="Sets ratio of selecting recent samples vs stored samples.")
 
@@ -50,6 +51,7 @@ parser.add_argument("--dataset-recent-prob", type=float, default=0.5, help="Sets
 parser.add_argument("--ddp-mode", type=str, help="Determines 'DDP' / control method (ismc, ilqg)", default = 'ismc')
 parser.add_argument("--local-linear-model", type=str, help="Specifies local-linear model type (if any)", default = 'pytorch')
 parser.add_argument("--local-clusters", type=int, help="Number of clusters for local model", default = 100)
+parser.add_argument("--local-neighbors", type=int, help="Number of neighbors to overfit on for local model", default = 0)
 parser.add_argument("--global-model", type=str, help="Specifies glocal model, if any", default = None)
 
 parser.add_argument("--smc-switching-function", type=str, default='arctan')
@@ -78,6 +80,9 @@ parser.add_argument('--lr', type=float, default=1e-3, help="NN Learning Rate")
 parser.add_argument('--momentum', type=float, default=1e-4)
 #parser.add_argument('--betas', type=tuple, default=(0.9, 0.999))
 
+parser.add_argument('--sigma-head', type=int, default = 1,
+        help="Gauss Policy Sigma Head vs constant sigma")
+
 
 class DMEnvMPCWalkerAgent(DMEnvMPCAgent):
     def transform_observation(self, obs) -> Variable:
@@ -88,8 +93,6 @@ class DMEnvMPCWalkerAgent(DMEnvMPCAgent):
         #height = np.asarray([obs['height'],])
         #state = np.concatenate((orientation, vel, height))
         return orientation
-
-
 class PyTorchMPCCartpoleAgent(PyTorchMPCAgent):
     def __init__(self, *args, **kwargs):
         global env
@@ -162,6 +165,27 @@ def create_dm_walker_agent(agent_base, *args, **kwargs):
     return DMWalkerAgent(*args, **kwargs)
 
 
+def create_dm_acrobot_agent(agent_base, *args, **kwargs):
+    '''Helper function to implement "transform_observation", and, in the case of MPC agents,
+    a reward function, for the acrobot environment.'''
+    class DMAcrobotAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            if type(obs) == type(collections.OrderedDict()):
+                orientation = obs['orientations']
+                vel = obs['velocity']
+                state = np.concatenate((orientation, vel))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
+            #elif isinstance(obs, type(torch.tensor)):
+            elif type(obs) == type(torch.tensor([0])):
+                return obs
+            return Variable(torch.tensor(state).float(), requires_grad = True)
+    
+        def reward(self, st, at, *args, **kwargs):
+            return 0.0
+    return DMAcrobotAgent(*args, **kwargs)
 
 def create_gym_walker_agent(agent_base, *args, **kwargs):
     '''Helper function to implement "transform_observation", and, in the case of MPC agents,
@@ -272,6 +296,7 @@ def create_ddp_dm_walker_agent(agent_base, *args, **kwargs):
                 return 0.0
     
     return DDP_DMWalkerAgent(*args, **kwargs)
+
 def create_ddp_dm_cartpole_agent(agent_base, *args, **kwargs):
     '''Transform_observation transforms observation into Numpy array. '''
     class DDP_DMCartpoleAgent(agent_base):
@@ -293,14 +318,41 @@ def create_ddp_dm_cartpole_agent(agent_base, *args, **kwargs):
 
     return DDP_DMCartpoleAgent(*args, **kwargs) 
 
+def create_ddp_dm_acrobot_agent(env, agent_base, *args, **kwargs):
+    '''Helper function to implement "transform_observation", and, in the case of MPC agents,
+    a reward function, for the acrobot environment.'''
+    class DMAcrobotAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            if type(obs) == type(collections.OrderedDict()):
+                orientation = obs['orientations']
+                vel = obs['velocity']
+                state = np.concatenate((orientation, vel))
+                if True: #add extra "tip" information for DDP acrobot,
+                        #or this is basically impossible
+                    tip = self.env.physics.named.data.site_xpos['target']
+                    state = np.concatenate((state, tip))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
+            return state
+    
+        def reward(self, st, at, *args, **kwargs):
+            return 0.0
+    agent = DMAcrobotAgent(*args, **kwargs)
+    agent.env = env #necessary for DDP methods
+    return agent
+
 #NOTE: I really need to clean this initialization code up :(
-def create_ddp_agent(lib_type, env_type, agent_base = DDPMPCAgent, *args, **kwargs):
+def create_ddp_agent(lib_type, env_type, env, agent_base = DDPMPCAgent, *args, **kwargs):
     agent = None
     if lib_type == 'dm':
         if env_type == 'humanoid':
             agent = create_ddp_dm_humanoid_agent(agent_base, *args, **kwargs)   
         elif env_type == 'walker':
             agent = create_ddp_dm_walker_agent(DDPMPCAgent, *args, **kwargs) 
+        elif env_type == 'acrobot':
+            agent = create_ddp_dm_acrobot_agent(env, DDPMPCAgent, *args, **kwargs) #requires access to additional state in order to function
         elif env_type == 'cartpole':
             agent = create_ddp_dm_cartpole_agent(DDPMPCAgent, *args, **kwargs) 
     else:
@@ -319,19 +371,25 @@ def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwar
             return create_dm_walker_agent(agent_base, *args, **kwargs)
         elif env_type == 'cartpole':
             return create_dm_cartpole_agent(agent_base, *args, **kwargs)
+        elif env_type == 'acrobot':
+            return create_dm_acrobot_agent(agent_base, *args, **kwargs)
         elif env_type == 'humanoid':
             return create_dm_humanoid_agent(agent_base, *args, **kwargs)
     else:
         return create_numpy_agent(agent_base, *args, **kwargs)
     return agent
 
-def initialize_dm_environment(env_type, task_name, *args, **kwargs):
+def initialize_dm_environment(env_type, task_name, agent_type, *args, **kwargs):
     env = suite.load(domain_name = env_type, task_name = task_name)  
     tmp_env = suite.load(domain_name = env_type, task_name = task_name)  
     action_space = env.action_spec()
     obs_space = env.observation_spec()
     if env_type == 'walker':
         obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0] + 1 #+1 for height
+    if env_type == 'acrobot':
+        obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0]
+        if agent_type in ['mbrl']: #add "tip" information. Just the tip
+            obs_size += env.physics.named.data.site_xpos['tip'].shape[0]
     elif env_type == 'cartpole':
         obs_size = obs_space['position'].shape[0] + obs_space['velocity'].shape[0]
     elif env_type == 'humanoid':
@@ -373,7 +431,7 @@ def initialize_control_environment(env_type, task_name, *args, **kwargs):
     obs_space = [1, obs_size]
     return env, tmp_env, obs_space, obs_size, action_size, action_constraints
 
-def initialize_environment(lib_type, env_type, task_name, *args, **kwargs):
+def initialize_environment(lib_type, env_type, task_name, agent_type, *args, **kwargs):
     ''' 
         @args: 
 
@@ -386,7 +444,7 @@ def initialize_environment(lib_type, env_type, task_name, *args, **kwargs):
             * action_constraints - (optional, else None) constraints for action outputs.
     '''
     if lib_type == 'dm':
-        return initialize_dm_environment(env_type, task_name, *args, **kwargs)
+        return initialize_dm_environment(env_type, task_name, agent_type, *args, **kwargs)
     elif lib_type == 'gym':
         return initialize_gym_environment(env_type, task_name, *args, **kwargs)
     elif lib_type == 'control':
@@ -450,7 +508,7 @@ def create_pytorch_policy_agent(env, obs_size,
             action_size, 
             seperate_value_module = None, seperate_value_module_input = False,
             value_head = True,
-            action_bias = True, value_bias = True, sigma_head = True, 
+            action_bias = True, value_bias = True, sigma_head = sigma_head, 
             device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
             activations = mlp_activations, initializer = mlp_initializer).to(device)
     
@@ -490,7 +548,7 @@ def create_pytorch_agnostic_mbrl(cost,
         has_value_function = False, ) -> (Agent, Trainer): 
     #NOTE: I'm going insane with this pseudoOOP it's compulsive right now D:
     #NOTE: I really need to clean this initialization code up :(
-    agent = create_ddp_agent(lib_type, env_type, DDPMPCAgent, ddp, 
+    agent = create_ddp_agent(lib_type, env_type, env, DDPMPCAgent, ddp, 
                     reuse_shoots, 
                     eps_base, eps_min, eps_decay, 
                     horizon, k_shoots, 
@@ -677,6 +735,9 @@ else:
 
 
 
+
+
+
 ADAM_BETAS = (0.9, 0.999)
 PRETRAINED = False #this has lost its meaning, remove?!
 RUN_ANYWAYS = True
@@ -687,6 +748,30 @@ MA_LEN = 15
 
 if __name__ == '__main__':
     args = parser.parse_args() 
+    dirname = os.getcwd()
+    taskdir = os.path.join(dirname, 'history/%s_%s'%(args.env_type, args.task_type))
+    if not os.path.exists(taskdir): 
+        os.mkdir(taskdir)
+    if args.load != 0:  #load previous run HERE
+        run = tmp_args.load #corresponds to "[agent_type]_run" dir
+        loaddir = os.path.join(taskdir, '%s_%s'%(args.agent_type, run))
+        argspath = os.path.join(rundir, 'args')
+        if os.path.exists(loaddir):
+            rundir = loaddir
+            num_runs = run #so we don't attempt to create rundir again
+            with open(argspath, 'rb') as f:
+                args = pickle.load(f)
+        else:
+            raise Exception("Directory/Run to load does not exist!")
+    else:
+        runs = [dI for dI in os.listdir(taskdir) if os.path.isdir(os.path.join(taskdir,dI)) and args.agent_type in dI]
+        num_runs = len(runs)
+        rundir = os.path.join(taskdir, '%s_%s'%(args.agent_type, num_runs))
+    print("Rundir: ", rundir)
+    print("TASKDIR: ", taskdir)
+    print("DIRNAME: ", dirname)
+
+
     print("Lib: ", args.lib_type)
     print("Env: ", args.env_type)
     print("Task: ", args.task_type)
@@ -701,22 +786,27 @@ if __name__ == '__main__':
     print("Eps: %s Eps min: %s Eps decay: %s" % (EPS, EPS_MIN, EPS_DECAY))
     kwargs = {}
     if args.lib_type == 'control':
+        if args.env_type == 'rossler':
+            ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
+            args.task_type = 'point'
+        elif args.env_type == 'cartpole':
+
+            ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
+            args.task_type = 'point'
+        elif args.env_type == 'inverted':
+            ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
+                    'target':np.array([0, 0])}
+            args.task_type = 'point'
         kwargs = ENV_KWARGS
-    env, tmp_env, obs_space, obs_size, action_size, action_constraints = initialize_environment(args.lib_type, args.env_type, args.task_type, **kwargs)
+    env, tmp_env, obs_space, obs_size, action_size, action_constraints = initialize_environment(args.lib_type, args.env_type, args.task_type, args.agent_type, **kwargs)
     
+    sigma_head = True if args.sigma_head else False
+    print("Sigma Head: ", sigma_head)
 
     mlp_hdims = args.mlp_hdims
     mlp_activations = args.mlp_activations
     mlp_outdim = args.mlp_outdim
 
-    dirname = os.getcwd()
-    taskdir = os.path.join(dirname, 'history/%s_%s'%(args.env_type, args.task_type))
-    runs = [dI for dI in os.listdir(taskdir) if os.path.isdir(os.path.join(taskdir,dI)) and args.agent_type in dI]
-    num_runs = len(runs)
-    rundir = os.path.join(taskdir, '%s_%s'%(args.agent_type, num_runs))
-    print("Rundir: ", rundir)
-    print("TASKDIR: ", taskdir)
-    print("DIRNAME: ", dirname)
 
 
     MA = 0
@@ -728,7 +818,7 @@ if __name__ == '__main__':
     trainer = None 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if args.load is not None:
+    if args.load != 0:
         print("Loading agent from: %s" % (args.load))
     else:
         print("Creating agent!")
@@ -850,7 +940,7 @@ if __name__ == '__main__':
                             seperate_value_module = value_module, 
                             seperate_value_module_input = PREAGENT_VALUE_INPUT,
                             value_head = not PREAGENT_VALUE_FUNC, 
-                            action_bias = True, value_bias = True, sigma_head = True, 
+                            action_bias = True, value_bias = True, sigma_head = sigma_head, 
                             device = device, indim = mlp_indim, outdim = action_size, hdims = mlp_hdims,
                             activations = mlp_activations, initializer = mlp_initializer,
                             ).to(device)
@@ -872,26 +962,7 @@ if __name__ == '__main__':
             DT = 1e-2 
             if args.lib_type == 'dm':
                 DT = env.control_timestep()
-            #HORIZON = 0.8e-1
-            #EPS_BASE = 1.5e-1
-            #EPS_MIN = 2e-2
-            #EPS_DECAY = 1e-7
-            #DDP_MODE = 'ismc'
-            #DDP_MODE = 'ilqg'
-            ## 
             
-            #DATASET_RECENT_PROB = 0.7
-            
-            #dataset = Dataset(aggregate_examples = False, shuffle = True)
-
-            ## MODEL-SPECIFIC PARAMETERS
-            #LOCAL_LINEAR_MODEL = 'sklearn'
-            #LOCAL_LINEAR_MODEL = 'pytorch'
-            #LOCAL_LINEAR_MODEL = None 
-            #N_CLUSTERS = 999 
-            #N_CLUSTERS = 500
-            #N_CLUSTERS = 250
-            #N_CLUSTERS = 50
             print("Local Linear Model: ", args.local_linear_model)
             print("Global Model: ", args.global_model)
             dataset = DAgger(recent_prob = args.dataset_recent_prob, aggregate_examples = False, shuffle = True)
@@ -907,11 +978,9 @@ if __name__ == '__main__':
             
             ## SMC-SPECIFIC ARGS
             SURFACE_BASE = None
-            #SMC_SWITCHING_FUNCTION = 'arctan'
-            #SMC_SWITCHING_FUNCTION = 'sign'
             #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
             #surface = np.eye(obs_size, M=action_size)
-            surface = np.ones([obs_size, action_size])
+            surface = np.ones([obs_size, action_size]) * 0.5
 
             ## DDP-SPECIFIC ARGS 
             LQG_FULL_ITERATIONS = True
@@ -924,12 +993,6 @@ if __name__ == '__main__':
             UPDATE_DDP_MODEL = True
             ILQG_SMC = False
             REUSE_SHOOTS = False if args.ddp_mode == 'ilqg' else False
-            #mlp_activations = ['relu', None, None] #+1 for outdim activation, remember extra action/value modules
-            #mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
-            #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
-            #mlp_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
-            #mlp_hdims = [obs_size * WIDENING_CONST] 
-            #mlp_outdim = obs_size * WIDENING_CONST #based on state size (approximation)
 
             if args.local_linear_model == 'sklearn': 
                 system_model = SKLearnLinearClusterLocalModel(
@@ -940,7 +1003,8 @@ if __name__ == '__main__':
             elif args.local_linear_model == 'pytorch': 
                 system_model = PyTorchLinearClusterLocalModel(device,
                         (obs_size, obs_size), (obs_size, action_size),
-                        n_clusters = args.local_clusters,
+                        n_clusters = args.local_clusters, 
+                        neighbors = args.local_neighbors,
                         compute_labels = True, 
                         dt = DT)
             else:
@@ -975,9 +1039,9 @@ if __name__ == '__main__':
                     target[com_velx_ind] = target_com_velx_val
                     target_inds = [head_height_ind, torso_vertz_ind, com_velx_ind]
                     
-                    if TASK_NAME == 'walk':
+                    if args.task_type == 'walk':
                         target_com_velx_val = 1
-                    elif TASK_NAME == 'run':
+                    elif args.task_type == 'run':
                         target_com_velx_val = 10
                     Q = np.eye(obs_size) * 1e8
                     Qf = Q
@@ -990,10 +1054,14 @@ if __name__ == '__main__':
                     target = np.zeros(obs_size)
                     upright_ind = 0 #1st "orientation" corresponds
                     height_ind = 14 #height field corresponds
-                    com_vel_ind = 30 #NO obs directly corresponds to com velocity
-                    target[height_ind] = 2.0
-                    target[upright_ind] = 1.0 #TODO: confirm this
-                    target_inds = [height_ind, upright_ind, com_vel_ind]
+                    if args.task_type == 'stand':
+                        target[height_ind] = 2.0
+                        target[upright_ind] = 1.0 #TODO: confirm this
+                        target_inds = [height_ind, upright_ind]
+                    else:
+                        raise Exception("Extract COM for this env.")
+                        #com_vel_ind = 30 #NO obs directly corresponds to com velocity
+                        #target_inds = [height_ind, upright_ind, com_vel_ind]
                     Q = np.eye(obs_size) * 1e8
                     Qf = Q
                     R = np.eye(action_size) * 1e3
@@ -1006,6 +1074,18 @@ if __name__ == '__main__':
                     target_theta = -0.0 #target pole position
                     target[theta_ind] = target_theta
                     target_inds = [theta_ind]
+                    Q = np.eye(obs_size) * 1e8
+                    Qf = Q
+                    R = np.eye(action_size) * 1e3
+                if args.env_type == 'acrobot':
+                    #cost is manually set as deviation from upright position
+                    print("ENV TYPE IS ACROBOT")
+                    target = np.zeros(obs_size)
+                    tip_target_start = 6
+                    tip_target = env.physics.named.data.site_xpos['target']
+                    target[tip_target_start:] = tip_target
+                    target_inds = [tip_target_start + i for i in range(tip_target.shape[0])]
+                    #target_inds = [tip_target_start + (tip_target.shape[0]) - 1]
                     Q = np.eye(obs_size) * 1e8
                     Qf = Q
                     R = np.eye(action_size) * 1e3
@@ -1085,7 +1165,10 @@ if __name__ == '__main__':
                 #across control variables, but also to construct
                 #a generally good surface (target * 1e1 to focus emphasis
                 #on target variables)
-                surface = surface + target * 1e1 + np.eye(obs_size, M = action_size) * 1e-2
+                target_vars = np.zeros((obs_size, 1)) #for guiding SMC
+                for i in target_inds:
+                    target_vars[i] = 1
+                surface = surface + target_vars * 5e0 + np.eye(obs_size, M = action_size) * 1e-2
                 #surface = surface + target * 1e1
                 print("Obs Size: ", obs_size)
                 print("Action Size: ", action_size)
@@ -1126,8 +1209,7 @@ if __name__ == '__main__':
         mx, mn = retrieve_max_min([obs_size],[obs_size],args.lib_type, args.env_type, norm_dir = 'norm')
         print("CURRENT MX: %s \n MN: %s \n" % (mx, mn))
         new_mx, new_mn = mx, mn #copy them for updating
-
-    #input()
+    input()
     
     ## RUN AGENT / TRAINING
     if (not PRETRAINED) or (RUN_ANYWAYS):
@@ -1200,26 +1282,25 @@ if __name__ == '__main__':
             if args.train_autoencoder != 0:
                 autoencoder_trainer.step()
                 autoencoder_trainer.plot_loss_histories()
-            if i % 50 == 0: #periodic tasks
+            if i % 50 == 0 and i > 0: #periodic tasks
                 print("Performing Periodic Tasks")
                 if args.maxmin_normalization: 
                     print("(stored) max: %s\n min: %s\n"%(new_mx, new_mn))
                     store_max_min(new_mx, new_mn, args.lib_type, args.env_type, norm_dir = 'norm') 
             
             if args.lib_type == 'control':
-                if 'MB' in args.agent_type: #look for model-based. Disgusting
+                if 'mb' in args.agent_type: #look for model-based. Disgusting
                     env.generate_vector_field_plot()
                     env.generate_vector_field_plot(agent.mpc_ddp.model)
 
-            if i % args.save_rate == 0: #perform milestone save
+            if i % args.save_rate == 0 and i > 0: #perform milestone save
                 #create directory(s) (task / agent)
                 runs = [dI for dI in os.listdir(taskdir) if os.path.isdir(os.path.join(taskdir,dI)) and args.agent_type in dI]
                 cur_runs = len(runs)
 
                 modelpath = os.path.join(rundir, 'model_%s'%(i))
                 historypath = os.path.join(rundir, 'history_%s'%(i))
-                if not os.path.exists(taskdir): 
-                    os.mkdir(taskdir)
+                argspath = os.path.join(rundir, 'args')
                 if num_runs == cur_runs: #make rundir
                     if not os.path.exists(rundir): 
                         os.mkdir(rundir)
@@ -1234,6 +1315,9 @@ if __name__ == '__main__':
                 with open(historypath, 'wb') as f:
                     history_dict = {'reward':agent.net_reward_history, 'averages':averages}
                     pickle.dump(history_dict, f, pickle.HIGHEST_PROTOCOL)
+                if not os.path.exists(argspath):
+                    with open(argspath, 'wb') as f:
+                        pickle.dump(args, f, pickle.HIGHEST_PROTOCOL)
 
             agent.reset_histories()
             if args.agent_type == 'policy' and not PRETRAINED:

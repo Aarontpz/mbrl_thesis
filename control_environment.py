@@ -307,7 +307,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         #dx = self.d_dx(x, u, r) 
         #dx = np.array([x[1], -4*np.sin(x[0]) - 0.01*x[1]])
         #input("Self.friction: %s" % (self.friction))
-        dx = np.array([x[1], -1*np.sin(x[0]) - self.friction*x[1]])
+        dx = np.array([x[1], 1*np.cos(x[0]) - self.friction*x[1]])
         #dx = np.array([x[1], -4*np.sin(x[0])])
         if r is not None:
             #print("Ref: ", r) 
@@ -319,7 +319,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
             d_dx = dx + np.array([0, 1]) * (u)
             return d_dx
         du = np.array([0, 1]) * u
-        print("Dx: %s \n Du: %s" % (dx, du))
+        #print("Dx: %s \n Du: %s" % (dx, du))
         super().dx(x, u)
         return dx + du
 
@@ -327,7 +327,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
         #dx = np.array([[0, x[1]], [4*np.cos(x[0]), -0.1*x[1]]])
         print("INP: ", x)
-        dx = np.array([[0, 1], [-1*np.cos(x[0]), -self.friction]])
+        dx = np.array([[0, 1], [-1*np.sin(x[0]), -self.friction]])
         #dx = np.array([[0, 1], [-4*np.sin(x[0]), 0]])
         #dx = np.array([x[1], 4*np.sin(x[0]) - 0.001*x[1]]) #additional friction term
         return dx
@@ -418,6 +418,11 @@ class InvertedPendulumEnvironment(ControlEnvironment):
             x = [s[0] for s in history]
             y = [s[1] for s in history]
             plt.plot(x, y)
+            plt.plot(x[0], y[0], 'ro')
+            plt.plot(x[-1], y[-1], 'go')
+            if hasattr(self, 'target_point'):
+                target = self.target_point
+                plt.plot(target[0], target[1], 'b^')
         plt.draw()
         plt.pause(0.01)
         
@@ -683,8 +688,8 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    TEST_INVERTED_PENDULUM = False
-    TEST_CARTPOLE = True
+    TEST_INVERTED_PENDULUM = True
+    TEST_CARTPOLE = False
 
     if TEST_CARTPOLE:
         horizon = 4
@@ -693,7 +698,7 @@ if __name__ == '__main__':
         L = 0.3
         g = 9.8
         dt = 1e-2
-        ARCTAN = True
+        ARCTAN = False
         TSSMC = False
         #ucoeff = 1.5
         ucoeff = 2
@@ -854,38 +859,65 @@ if __name__ == '__main__':
         env.state = np.array([np.pi, -1e-1])
         gamma = 0.7
         wn = 20
-        umax = 2
-        ARCTAN = True
+        umax = 8e-1
+        ARCTAN = False
+        sigma_base = np.array([5, 1], dtype=np.float64) #sliding surface definition
         while not env.episode_is_done():
             print("STEP ", env.steps)
             x = env.state
+            #x_ = x - [target[0], x[1]]
             x_ = x - target
+            x = x_
             print("State: ", x)
             print("Target: %s \n Error: %s"%(target, x_))
-
-            ##Linearizing Feedback Controls
-            w = np.array([4*np.sin(x[0]) - wn**2 * x[0] + friction*x[1] - 2*gamma*wn*x[1]])
-            dw = np.array([[0,0],[4*np.cos(x[0]) - wn**2, friction - 2*gamma*wn]])
-            #dw = np.array([4*np.cos(x[0]) - wn**2, 0.1 - 2*gamma*wn])
-            #dw = np.zeros(1)
-            #print("dW: ", dw)
-            #print("U: ", target - w)
-            #env.step(target + dw)
-            #env.step(target + w)
-            #env.step(dw)
-            #env.step(w)
-
             ## Sliding Mode Controls
-            sigma = np.array([1, 1]) #sliding surface definition
-            if ARCTAN:
-                u = lambda sigma, x: umax * -(np.abs(-x[1] - np.cos(x[0]) + friction * x[1])) * (2/np.pi * np.arctan(np.dot(sigma.T,  x)))
+            g = np.array([0, 1]) #b vector
+            f = np.array([x[1], np.cos(x[0]) - friction * x[1]])
+            alpha = 1e-1
+            ISMC = True
+            if ISMC:
+                sigma = sigma_base.copy()
+                sign = None
+                mag = float('inf')
+                i = 0
+                while umax < mag and i < 20:
+                    s = np.dot(sigma.T, x)
+                    sign = np.sign(s)
+                    sf = -np.dot(sigma.T, f)
+                    sg = np.dot(sigma.T, g)
+                    mag = np.abs((sf / sg))
+                    if mag <= umax:
+                        break
+                    grad = np.dot(f, 1/sg) 
+                    grad += -np.dot(1/sg, np.dot(g, 1/sg)) * sf
+                    #print("sg: %s sf: %s" % (sg, sf))
+                    print("Grad: ", grad)
+                    sigma = sigma - alpha * grad
+                    sigma = np.clip(sigma, 1e-1, float('inf'))
+                    i += 1
+                    #input()
+                print("Final Sigma: ", sigma)
+                print("Final Mag: %s" % (mag))
+                s = np.dot(sigma.T, x)
+                sign = np.sign(s)
+                #control = -umax * mag * sign
+                control = -umax * sign
+                control = np.clip(control, -umax, umax)
             else:
-                u = lambda sigma, x: umax * -(np.abs(-x[1] - np.cos(x[0]) + friction * x[1])) * np.sign(np.dot(sigma.T,  x))
-            print("Sliding Surface: ", np.dot(sigma.T, x)) 
-            #control = u(sigma, x)
-            control = u(sigma, x_)
+                sigma = sigma_base.copy()
+                s = np.dot(sigma.T, x)
+                sign = np.sign(s)
+                if ARCTAN:
+                    u = lambda sigma, x: umax * -((-x[1] - np.cos(x[0]) + friction * x[1])) * (2/np.pi * np.arctan(np.dot(sigma.T,  x)))
+                else:
+                    u = lambda sigma, x: umax * -((-x[1] - np.cos(x[0]) + friction * x[1])) * np.sign(np.dot(sigma.T,  x))
+                print("Sliding Surface: ", np.dot(sigma.T, x)) 
+                #control = u(sigma, x)
+                control = -umax * sign
+                #control = u(sigma, x_)
+            #input()
             #control = np.zeros(1)
-            #print("Control: ", control)
+            print("Control: ", control)
             #env.step(u(sigma, x_))
             env.step(control)
         env.generate_plots()
