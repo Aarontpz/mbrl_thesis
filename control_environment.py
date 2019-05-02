@@ -161,10 +161,14 @@ class ControlEnvironment(ModelledEnvironment):
                 self.secondary_control_fig = plt.figure()
             fig = self.secondary_control_fig
         y = self.control_history 
-        if len(y[0].shape) >= 2:
+        if len(y[0].shape) >= 2: #reduce from array
+            #if type(y[0]) == float:
+            #y = [c for c in y]
+            #else:
             y = [c[0] for c in y]
-        length = len(self.control_history)
+        length = len(y)
         x = [i * self.ts for i in range(length)] 
+        #x = np.linspace(0, length * self.ts, self.ts)
         plt.figure(fig.number)
         plt.plot(x,y, label='parametric curve')
         plt.plot(x[0], y[0], 'ro')
@@ -658,9 +662,8 @@ class CartpoleEnvironment(ControlEnvironment):
     def generate_plots(self):
         self.generate_theta_phase_plot()
         self.generate_cart_phase_plot()
+        super().generate_plots() #order matters because quiver calls dx
         self.generate_theta_vector_field_plot()
-        input()
-        super().generate_plots()
 
 
     def get_reward(self):
@@ -688,29 +691,31 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    TEST_INVERTED_PENDULUM = True
-    TEST_CARTPOLE = False
+    TEST_INVERTED_PENDULUM = False
+    TEST_CARTPOLE = True
 
     if TEST_CARTPOLE:
-        horizon = 4
+        horizon = 8
         mc = 1
         mp = 0.1
-        L = 0.3
+        L = 1
         g = 9.8
         dt = 1e-2
         ARCTAN = False
         TSSMC = False
         #ucoeff = 1.5
         ucoeff = 2
-        umin = -1.0e1
         umax = 1.0e1
-        sigma = np.array([[1e0, 1e0, 10e0, 1e0]]).T #sliding surface definition
+        umin = -umax
+        sigma_base = np.array([[1e0, 1e0, 4e0, 1e0]]).T #sliding surface definition
+        sigma = sigma_base.copy() #sliding surface definition
         if ARCTAN:
             switch = lambda s: np.arctan(s) * 2/np.pi
         else:
             switch = lambda s: np.sign(s)
-        target = np.array([0.0, 0, 0.0, 0])
-        x0 = np.array([-0, -.0, -np.pi/2, -0.0])
+        target = np.array([[0.0, 0, 0.0, 0]]).T
+        #x0 = np.array([[-0, -.0, np.pi/4, -0.0]]).T
+        x0 = np.array([[-0, -.0, 0.0001, -1.8]]).T
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
                 mc, mp, L, g,
@@ -719,36 +724,41 @@ if __name__ == '__main__':
                 interval = horizon, ts = dt,
                 mode = 'point', 
                 target = target)
-        env.error_func = lambda x, t: ((x[2]-t[2]) + (x[3]-t[3]))
+        env.error_func = lambda x, t: (((x[2]-t[2])) + (x[3]-t[3]))
         env.reset()
         env.state = x0.copy()
         smc_lyap = []
         lyap = []
         d_du = []
-        v = 0 #for TSSMC
+        v = 0 #for TSSMC integrator
         integrated = np.zeros(env.state.shape) #integral-error
         if len(integrated.shape) < 2:
             integrated = integrated[..., np.newaxis]
-        x = env.state
-        x_ = x - np.array([x[0], x[1], target[2], x[3]])
+        #x = env.state.copy()
+        #if len(x.shape) > 1:
+        #    x = x.reshape(-1, x.size)
+        #if len(x.shape) < 2:
+        #    x = x[..., np.newaxis]
+        #x_ = x - np.array([x[0], x[1], target[2], x[3]])
         #x_ = x - target
-        if len(x_.shape) < 2:
-            x_ = x_[..., np.newaxis]
-        sx = np.dot(sigma.T, x_)
+        #sx = np.dot(sigma.T, x_)
         while not env.episode_is_done():
             print("STEP ", env.steps)
-            x = env.state
+            x = env.state.copy()
+            
+            #if len(x.shape) > 1:
+            #    x = x.reshape(-1, x.size)[0]
+            print("State: ", x)
             x_ = x - np.array([x[0], x[1], target[2], target[3]])
             #x_ = x - np.array([x[0], x[1], target[2], x[3]])
             #x_ = np.array([x[0], x[1], target[2], x[3]]) - x
             #x_ = x - target
             #x_ = target - x
+             
             if len(x_.shape) < 2:
                 x_ = x_[..., np.newaxis]
             #x = x_ #to see if it makes a difference
-            print("State: ", x)
             print("Target: %s \n Error: %s"%(target, x_))
-            ##Linearizing Feedback Controls
 
             ## Sliding Mode Controls
             x_denom = (mc + mp * (np.sin(x[2]))**2)
@@ -758,26 +768,68 @@ if __name__ == '__main__':
             dx = x[1] + (ddx) / x_denom + x[3] + (ddtheta) / (L * x_denom)
             #x' = h(x) + g(x)u
             hx = np.array([x[1], ddx/x_denom, x[3],ddtheta/(L*x_denom)])
-            gx = np.array([0, 1/x_denom, 0, -np.cos(x[2])/L * 1/x_denom])
-            print("sigma * h", np.dot(sigma.T, hx))
-            print("sigma * g", np.dot(sigma.T, gx))
-            
+            gx = np.array([[0, 1/x_denom, 0, -np.cos(x[2])/L * 1/x_denom]]).T
+            print("Hx: %s \nGx: %s" % (hx, gx)) 
             ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)
             #ucomp = 1
-            
-            ## FOSMC
-            sx = np.dot(sigma.T, x_)
-            u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * switch(sx)
-            du_ds = lambda sigma, x : -ucoeff * (gx / hx) * 1/(1+(np.dot(sigma.T, x))**2) * x
-            print("du/ds: ", du_ds(sigma, x_))
-            d_du.append(du_ds(sigma, x_))
-            #u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(dx)) * np.sign(sx)
-            control = np.clip(u(sigma, x_), umin, umax)
-            #control = u(sigma, x_)
-            print("Control: ", control)
 
-            ## TSSMC (twisted-surface)
-            ##integrated += x_
+            alpha = 1e-1
+            ISMC = False
+            if ISMC == True:
+                x = x_
+                sigma = sigma_base.copy()
+                sign = None
+                mag = float('inf')
+                i = 0
+                while umax < mag and i < 20:
+                    sf = -np.dot(sigma.T, hx)
+                    sg = np.dot(sigma.T, gx)
+                    if sf.size == 1 and sg.size == 1:
+                        sf = sf[0]
+                        sg = sg[0]
+                    print("Sf: %s \nSg: %s" % (sf, sg))
+                    mag = np.abs((sf / sg))
+                    print("Mag: %s" % (mag))
+                    if mag <= umax:
+                        break
+                    if sf.size == 1 and sg.size == 1:
+                        grad = hx * 1/sg 
+                        print("Grad: ", grad)
+                        grad += -(1/sg * gx * 1/sg) * sf
+                    else:
+                        grad = np.dot(hx, 1/sg) 
+                        grad += -np.dot(1/sg, np.dot(gx, 1/sg)) * sf
+                    print("Grad+: ", grad)
+                    #print("sg: %s sf: %s" % (sg, sf))
+                    #if len(grad.shape) < len(sigma.shape):
+                    #    grad = grad[..., np.newaxis]
+                    sigma = sigma - alpha * grad
+                    sigma = np.clip(sigma, 1e-1, float('inf'))
+                    i += 1
+                    #input()
+                print("Final Sigma: ", sigma)
+                print("Final Mag: %s" % (mag))
+                s = np.dot(sigma.T, x)
+                sign = np.sign(s)
+                #control = -umax * mag * sign
+                control = umax * sign
+                control = np.clip(control, -umax, umax)
+            else:
+                ## FOSMC
+                #sx = np.dot(sigma.T, x_)
+                #u = lambda sigma, x: -ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * switch(np.dot(sigma.T, x))
+                u = lambda sigma, x: umax * switch(np.dot(sigma.T, x))
+                #u = lambda sigma, x: umax * (1/(np.dot(sigma.T, gx))) * (np.abs(np.dot(sigma.T, hx))) * switch(np.dot(sigma.T, x))
+                #du_ds = lambda sigma, x : -ucoeff * (gx / hx) * 1/(1+(np.dot(sigma.T, x))**2) * x
+                #print("du/ds: ", du_ds(sigma, x_))
+                #d_du.append(du_ds(sigma, x_))
+                #u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(dx)) * np.sign(sx)
+                control = np.clip(u(sigma, x_), umin, umax)
+                #control = u(sigma, x_)
+                print("Control: ", control)
+
+                ## TSSMC (twisted-surface)
+                ##integrated += x_
             if TSSMC == True:
                 sx = np.dot(sigma.T, x_)
                 #sx = np.dot(sigma.T,x_ - integrated)
@@ -787,10 +839,10 @@ if __name__ == '__main__':
                 vi = v
                 u = control + np.clip(-lamb * np.abs(sx)**(0.5) * switch(sx) + vi, umin, umax)
 
-                if np.abs(v) < 1:
+                if np.abs(v) < 1: #v is a saturation integrator, with 1 as its saturation value
                     v += (-c2 * switch(sx)) * dt
-                else:
-                    v += -v * dt
+                #else:
+                #    v += -v * dt
                 #vi = np.clip(v + (-c2 * np.sign(sx)) * dt, -1, 1)
                 #print("Integrated: ", integrated)
                 print("Integral term: ", v)
@@ -801,16 +853,17 @@ if __name__ == '__main__':
                 #print("NEW sigma: ", sigma)
                 control = np.clip(u, umin, umax)
                 #control = u
-            
+                
             print("CONTROL: ", control)
-
+            
             print("Sliding Surface: ", np.dot(sigma.T, x_)) 
             print("(SMC) Lyapunov function: ", np.dot(sigma.T, x_).T * np.dot(sigma.T, x_))
             smc_lyap.append(np.dot(sigma.T, x_).T * np.dot(sigma.T, x_))
             lyap.append(np.linalg.norm(x_))
             print("(System) Lyapunov function: ", lyap[-1])
-            env.step(control)
+            #input()
             #env.step(np.zeros(1))
+            env.step(control)
         env.generate_plots()
         #if len(d_du) > 0:
         #    plt.figure(10) #eh
@@ -861,7 +914,9 @@ if __name__ == '__main__':
         wn = 20
         umax = 8e-1
         ARCTAN = False
-        sigma_base = np.array([5, 1], dtype=np.float64) #sliding surface definition
+        sigma_base = np.array([1, 1], dtype=np.float64) #sliding surface definition
+        sigma_history = []
+        record_sigma = True
         while not env.episode_is_done():
             print("STEP ", env.steps)
             x = env.state
@@ -873,7 +928,7 @@ if __name__ == '__main__':
             ## Sliding Mode Controls
             g = np.array([0, 1]) #b vector
             f = np.array([x[1], np.cos(x[0]) - friction * x[1]])
-            alpha = 1e-1
+            alpha = 5e-1
             ISMC = True
             if ISMC:
                 sigma = sigma_base.copy()
@@ -920,7 +975,23 @@ if __name__ == '__main__':
             print("Control: ", control)
             #env.step(u(sigma, x_))
             env.step(control)
+            if record_sigma:
+                sigma_history.append(sigma)
         env.generate_plots()
+        if record_sigma:
+            plt.figure(15) #eh
+            indices = [i for i in range(len(env.state_history)) if i % 10 == 0]
+            x = [env.state_history[i][0] for i in indices]
+            y = [env.state_history[i][1] for i in indices]
+            dx = [-sigma_history[i][0]/sigma_history[i][1] for i in indices]
+            dy = [1 for i in indices]
+            plt.quiver(x, y, dx, dy)
+            plt.title("Sliding Curve")
+            plt.xlabel("Theta")
+            plt.ylabel("dTheta/dt")
+            plt.draw()
+            plt.pause(0.01)
+
         input()
 
 
