@@ -707,15 +707,15 @@ if __name__ == '__main__':
         ucoeff = 2
         umax = 1.0e1
         umin = -umax
-        sigma_base = np.array([[1e0, 1e0, 4e0, 1e0]]).T #sliding surface definition
+        sigma_base = np.array([[1e0, 1e0, 1e2, 1e0]]).T #sliding surface definition
         sigma = sigma_base.copy() #sliding surface definition
         if ARCTAN:
             switch = lambda s: np.arctan(s) * 2/np.pi
         else:
             switch = lambda s: np.sign(s)
         target = np.array([[0.0, 0, 0.0, 0]]).T
-        #x0 = np.array([[-0, -.0, np.pi/4, -0.0]]).T
-        x0 = np.array([[-0, -.0, 0.0001, -1.8]]).T
+        x0 = np.array([[-0, -.0, np.pi/8, -0.0]]).T
+        #x0 = np.array([[-0, -.0, 0.0001, -1.8]]).T
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
                 mc, mp, L, g,
@@ -773,8 +773,8 @@ if __name__ == '__main__':
             ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)
             #ucomp = 1
 
-            alpha = 1e-1
-            ISMC = False
+            alpha = 1e0
+            ISMC = True
             if ISMC == True:
                 x = x_
                 sigma = sigma_base.copy()
