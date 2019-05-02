@@ -301,6 +301,19 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         self.state_history = []
         self.steps = 0
 
+    def step(self, action):
+        '''Utilize Euler Integration to update system "discretely"'''
+        state = self.state.copy()
+        target = self.get_target()
+        #state += (self.dx(state, action, target) * self.interval*self.ts)
+        state += (self.dx(state, action) * self.ts)
+        state[0] %= 2*np.pi
+        #state += (self.dx(state, action))
+        #state[0] = state[0] % np.pi
+        self.steps += self.ts
+        self.state_history.append(state.copy())
+        self.state = state.copy()
+
     def dx(self, x, u = None, r = None, *args) -> np.ndarray:
     #def dx(self, x, u, *args) -> np.ndarray:
         '''x' = dx * x + du * u'''
@@ -476,7 +489,7 @@ class CartpoleEnvironment(ControlEnvironment):
         #state += (self.dx(state, action, target) * self.interval*self.ts)
         state += (self.dx(state, action) * self.ts)
         #state += (self.dx(state, action))
-        #state[0] = state[0] % np.pi
+        state[2] %= 2*np.pi
         self.steps += self.ts
         self.state_history.append(state.copy())
         self.state = state.copy()
@@ -695,7 +708,7 @@ if __name__ == '__main__':
     TEST_CARTPOLE = True
 
     if TEST_CARTPOLE:
-        horizon = 8
+        horizon = 10
         mc = 1
         mp = 0.1
         L = 1
@@ -705,16 +718,16 @@ if __name__ == '__main__':
         TSSMC = False
         #ucoeff = 1.5
         ucoeff = 2
-        umax = 1.0e1
+        umax = 2.0e1
         umin = -umax
-        sigma_base = np.array([[1e0, 1e0, 1e2, 1e0]]).T #sliding surface definition
+        sigma_base = np.array([[1e0, 1e0, 1e0, 1e0]]).T #sliding surface definition
         sigma = sigma_base.copy() #sliding surface definition
         if ARCTAN:
             switch = lambda s: np.arctan(s) * 2/np.pi
         else:
             switch = lambda s: np.sign(s)
         target = np.array([[0.0, 0, 0.0, 0]]).T
-        x0 = np.array([[-0, -.0, np.pi/8, -0.0]]).T
+        x0 = np.array([[-0, -.0, np.pi/4, -0.0]]).T
         #x0 = np.array([[-0, -.0, 0.0001, -1.8]]).T
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
@@ -773,10 +786,10 @@ if __name__ == '__main__':
             ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)
             #ucomp = 1
 
-            alpha = 1e0
-            ISMC = True
+            alpha = 1e-2
+            ISMC = False
             if ISMC == True:
-                x = x_
+                #x = x_
                 sigma = sigma_base.copy()
                 sign = None
                 mag = float('inf')
@@ -899,7 +912,7 @@ if __name__ == '__main__':
         noisy_init = True
         target = np.array([0, 0])
         #target = np.array([0, 0])
-        horizon = 10
+        horizon = 8
         friction = 0.0
         env = retrieve_control_environment('inverted', 
                 friction = friction,  
@@ -909,10 +922,10 @@ if __name__ == '__main__':
                 target = target)
         env.reset()
         #env.state = np.array([0.0, 0.0])
-        env.state = np.array([np.pi, -1e-1])
+        env.state = np.array([1.9*np.pi, 3e0])
         gamma = 0.7
         wn = 20
-        umax = 8e-1
+        umax = 4e-1
         ARCTAN = False
         sigma_base = np.array([1, 1], dtype=np.float64) #sliding surface definition
         sigma_history = []
@@ -928,7 +941,7 @@ if __name__ == '__main__':
             ## Sliding Mode Controls
             g = np.array([0, 1]) #b vector
             f = np.array([x[1], np.cos(x[0]) - friction * x[1]])
-            alpha = 5e-1
+            alpha = 1e-2
             ISMC = True
             if ISMC:
                 sigma = sigma_base.copy()
