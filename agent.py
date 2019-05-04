@@ -1535,7 +1535,7 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
             X = [self.region_s[label][i] for i in ind]
             X_ = [self.region_s_[label][i] for i in ind]
             U = [self.region_a[label][i] for i in ind]
-            model.fit(X, X_, U, num_iters = 5, lr=1e-1) #overfit on neighbors
+            model.fit(X, X_, U, num_iters = 5, lr=1e0) #overfit on neighbors
         return model
 
 
@@ -1556,6 +1556,12 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
             def forward_predict(self, x, u):
                 '''Return x' = x + dt(Ax + Bu)'''
                 return x + self.dt * (self.forward(x, u))
+
+            def dx(self, x, u, create_graph = True):
+                return grad(self.a_layer, x, create_graph = create_graph)
+
+            def du(self, x, u, create_graph = True):
+                return grad(self.b_layer, u, create_graph = True)
 
             def fit(self, X, X_, U, num_iters = 20, lr=2e-3):
                 '''We're being sloppy here. This is a training step to

@@ -358,7 +358,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         theta_p = 0 
         s = np.array([theta, theta_p], dtype = np.float32)
         if noise:
-            s += np.random.uniform(low=0, high=0.1, size=2)
+            s += np.random.uniform(low=-.5, high=0.5, size=2)
         return s
 
     def episode_is_done(self):
@@ -393,8 +393,8 @@ class InvertedPendulumEnvironment(ControlEnvironment):
             if not hasattr(self, 'vector_fig'):
                 self.vector_fig = plt.figure()
             fig = self.vector_fig 
-        x = np.arange(-np.pi, np.pi, 0.1)
-        y = np.arange(-2.5, 2.5, 0.1)
+        x = np.arange(-0, 2*np.pi, 0.1)
+        y = np.arange(-3.5, 3.5, 0.1)
         #xx, yy = np.meshgrid(x, y, sparse = True)
         z = []
         xx = []
@@ -562,9 +562,9 @@ class CartpoleEnvironment(ControlEnvironment):
     def get_initial_state(self, noise = False):
         theta = 0 #OBJECTIVE is 180 degrees / pi / 2
         theta_p = 0 
-        s = np.array([theta, theta_p], dtype = np.float32)
+        s = np.array([0, 0, theta, theta_p], dtype = np.float32)
         if noise:
-            s += np.random.uniform(low=0, high=0.1, size=2)
+            s += np.random.uniform(low=-0.2, high=0.2, size=4)
         return s
 
     def episode_is_done(self):
@@ -579,7 +579,7 @@ class CartpoleEnvironment(ControlEnvironment):
         return 1
 
     def get_action_constraints(self):
-        return [np.ndarray([-2]), np.ndarray([2])]
+        return [np.array([-2]), np.array([2])]
 
     def generate_theta_phase_plot(self, history = None):
         if history is None:
@@ -635,12 +635,17 @@ class CartpoleEnvironment(ControlEnvironment):
         plt.draw()
         plt.pause(0.01)
 
-    def generate_theta_vector_field_plot(self):
-        if not hasattr(self, 'vector_fig'):
-            self.vector_fig = plt.figure()
-        fig = self.vector_fig 
+    def generate_theta_vector_field_plot(self, dx_model = None):
+        if dx_model is not None:
+            if not hasattr(self, 'secondary_vector_fig'):
+                self.secondary_vector_fig = plt.figure()
+            fig = self.secondary_vector_fig
+        else:
+            if not hasattr(self, 'vector_fig'):
+                self.vector_fig = plt.figure()
+            fig = self.vector_fig 
         t = np.arange(-2*np.pi, 2*np.pi, 0.1)
-        t_dx = np.arange(-8, 8, 0.1)
+        t_dx = np.arange(-6, 6, 0.1)
         #xx, yy = np.meshgrid(x, y, sparse = True)
         z = []
         xx = []
@@ -649,7 +654,17 @@ class CartpoleEnvironment(ControlEnvironment):
             for j in range(t_dx.size): #REALLY. nested for loops instead of vect.
                 xx.append(t[i])
                 yy.append(t_dx[j])
-                z.append(np.diag(self.dx(np.array([0, 0, t[i], t_dx[j]]))))
+                if dx_model is not None:
+                    dx = dx_model.update(np.array([t[i], t_dx[j]]))[0]
+                    if len(dx.shape) > 1:
+                        z.append(dx) #linear / Jacobian
+                    else:
+                        z.append(np.diag(dx)) #vector rep. transition
+                else:
+                    z.append(np.diag(self.dx(np.array([t[i], t_dx[j]]))))
+                    #z.append(self.d_dx(np.array([x[i], y[j]])))
+                    #z.append(np.array([[np.sin(x[i]), 0], [0, np.cos(y[j])]]))
+                #z.append(np.diag(self.dx(np.array([0, 0, t[i], t_dx[j]]))))
                 #z.append(self.d_dx(np.array([x[i], y[j]])))
                 #z.append(np.array([[np.sin(x[i]), 0], [0, np.cos(y[j])]]))
         z = np.array(z)
@@ -659,7 +674,11 @@ class CartpoleEnvironment(ControlEnvironment):
         #print("EIG[0]: ", eig[0][:,:])
         #print("Eig[0][0,0]:", eig[0][0,0])
         #print("Eig[0][0, 1]:", eig[0][0,1])
-        plt.figure(fig.number)
+        if dx_model is not None: #temporary measure, we have TOO MANY figures
+            plt.figure(54)
+        else:
+            plt.figure(55)
+        #plt.figure(fig.number)
         plt.quiver(xx, yy, eig[0][:,2], eig[0][:,3])
         plt.title("%s Quiver Plot" % (self.get_environment_name()))
         plt.xlabel("Radians")
@@ -676,8 +695,10 @@ class CartpoleEnvironment(ControlEnvironment):
         self.generate_theta_phase_plot()
         self.generate_cart_phase_plot()
         super().generate_plots() #order matters because quiver calls dx
-        self.generate_theta_vector_field_plot()
+        #self.generate_theta_vector_field_plot()
 
+    def generate_vector_field_plot(self, dx_model = None):
+        self.generate_theta_vector_field_plot()
 
     def get_reward(self):
         '''Reward = -Cost and vise-versa'''
@@ -704,8 +725,8 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    TEST_INVERTED_PENDULUM = False
-    TEST_CARTPOLE = True
+    TEST_INVERTED_PENDULUM = True
+    TEST_CARTPOLE = False
 
     if TEST_CARTPOLE:
         horizon = 10
@@ -718,7 +739,7 @@ if __name__ == '__main__':
         TSSMC = False
         #ucoeff = 1.5
         ucoeff = 2
-        umax = 2.0e1
+        umax = 1.5e1
         umin = -umax
         sigma_base = np.array([[1e0, 1e0, 1e0, 1e0]]).T #sliding surface definition
         sigma = sigma_base.copy() #sliding surface definition
@@ -787,7 +808,7 @@ if __name__ == '__main__':
             #ucomp = 1
 
             alpha = 1e-2
-            ISMC = False
+            ISMC = True
             if ISMC == True:
                 #x = x_
                 sigma = sigma_base.copy()
@@ -922,10 +943,10 @@ if __name__ == '__main__':
                 target = target)
         env.reset()
         #env.state = np.array([0.0, 0.0])
-        env.state = np.array([1.9*np.pi, 3e0])
+        env.state = np.array([np.pi, 0e0])
         gamma = 0.7
         wn = 20
-        umax = 4e-1
+        umax = 9e-1
         ARCTAN = False
         sigma_base = np.array([1, 1], dtype=np.float64) #sliding surface definition
         sigma_history = []
@@ -941,7 +962,7 @@ if __name__ == '__main__':
             ## Sliding Mode Controls
             g = np.array([0, 1]) #b vector
             f = np.array([x[1], np.cos(x[0]) - friction * x[1]])
-            alpha = 1e-2
+            alpha = 1e-1
             ISMC = True
             if ISMC:
                 sigma = sigma_base.copy()

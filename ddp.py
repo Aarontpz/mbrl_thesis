@@ -331,6 +331,8 @@ class DDP:
         self.action_size = action_size
         self.dt = dt
 
+        self.action_constraints = action_constraints
+
         self.max_iterations = max_iterations
         self.eps = eps
 
@@ -888,21 +890,28 @@ class SMC(DDP):
             dB = np.dot(ds_dx.T, self.model.B)
             dA = np.dot(ds_dx.T, np.dot(self.model.A, xt))
             #print("ds_dx: %s \nSign: %s" % (ds_dx, sign))
-            print("Sign: %s" % (sign))
-            #print("ds_dx.T: ",  (ds_dx.T.shape))
+            #print("ds_dx.T: ", (np.dot(self.surface.T, xt)))
+            #print("Sign: %s" % (sign))
             #print("B: ", self.model.B)
             #print("A: ", self.model.A)
             #print("xt: ", xt)
             #print("DOT: ", (dB))
             #print("|DOT|: ", np.linalg.det(dB))
-            magnitude = -(2 * np.linalg.inv(dB)) #TODO: Verify this step
-            magnitude *= dA
+            magnitude = -(np.linalg.inv(dB)) #TODO: Verify this step
+            #print("dB inv: ", magnitude)
+            #print("dA: ", dA)
+            #magnitude *= dA
+            magnitude = np.dot(magnitude, dA)
             if len(sign.shape) < 2:
                 sign = sign[..., np.newaxis]
-            print("mag: ", magnitude)
+            #print("mag: ", magnitude)
             #print("sign: ", sign.shape)
-            #out = magnitude * sign
-            out = np.dot(magnitude, sign)
+            out = magnitude * sign
+            #out = np.dot(magnitude, sign)
+            #print("Action Constraints: ", self.action_constraints[1])
+            #print("Sign: ", sign)
+            #print("Yeah", self.action_constraints[1] * sign.T)
+            #out = self.action_constraints[1] * sign.T
             #if len(out.shape) < 2:
             #    out = out[..., np.newaxis]
             #print("OUT SHAPE: ", out.shape)
@@ -916,7 +925,7 @@ class SMC(DDP):
             magnitude *= np.dot(ds_dx.T, self.model.f)
             if len(sign.shape) < 2:
                 sign = sign[..., np.newaxis]
-            #print("mag: ", magnitude)
+            print("mag: ", magnitude)
             #print("sign: ", sign)
             #out = magnitude * sign
             out = np.dot(magnitude, sign)
@@ -934,7 +943,6 @@ class SMC(DDP):
             return np.sign(np.dot(self.surface.T, xt))
         elif self.switching_function == 'arctan':
             return np.arctan(np.dot(self.surface.T, xt)) * 2 / np.pi
-            return np.arctan(np.dot(self.surface.T, xt)) * 2 / np.pi
 
     def update_surface(self, xt):
         pass
@@ -942,65 +950,156 @@ class SMC(DDP):
     def get_surface_d_dx(self, xt):
         return self.surface #NOTE: assumes linear
 
-class ISMC(ILQG, SMC):
-    '''Implementation of iterative sliding-mode control, modifying
-    the sliding surface a system is to be entrained upon to minimize
-    a differentiable cost function along a locally-linearized model
-    of the system-in-question.'''
-    def __init__(self, surface_base, switching_function,
-            *args, **kwargs):
-        
+
+class GD_SMC(SMC):
+    '''Implementation of gradient-descent SMC, which modifies the sliding
+    surface to ensure the system remains within the domain of attraction for some
+    positive-eigenvalued surface, if such a surface is reachable.'''
+    def __init__(self, alpha = 1e-2, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.surface_base = surface_base
-        self.surface = self.surface_base
+        self.alpha = alpha
         
-        self.surface_trajectory = []
-
-        self.switching_function = switching_function
-        
-        self.surface_ind = 0
-
-    
     def update_surface(self, xt):
-        if self.surface_ind < len(self.surface_trajectory):
-            self.surface = self.surface_trajectory[self.surface_ind]
-            self.surface_ind += 1
-        else:
-            self.surface = self.surface_base.copy()
+        umax = self.action_constraints[1]
+        mag = np.ones(umax.shape) * float('inf')
+        sigma = self.surface_base.copy()
+        
+        if (issubclass(type(self.model), LinearSystemModel)):
+            hx = np.dot(self.model.A, xt)
+            gx = self.model.B
+        elif (issubclass(type(self.model), GeneralSystemModel)):
+            hx = self.model.f.copy()
+            if len(hx.shape) < 1:
+                hx = hx[..., np.newaxis]
+            gx = self.model.g.copy()
 
-    def initialize_surface_trajectory(self, xt) -> np.ndarray: 
-        self.surface_trajectory = np.array([self.surface_base.copy() for i in range(self.horizon)])
+        i = 0
+        while (umax < mag).any() and i < 20: #or .any()?!
+            for c in range(sigma.shape[1]):
+                sf = -np.dot(sigma[:,c].T, hx)
+                sg = np.dot(sigma[:,c].T, gx[:,c])
+                #sg_inv = np.linalg.inv(sg)
+                sg_inv = 1/sg
+                if len(sg.shape) < 1:
+                    sg = sg[..., np.newaxis]
+                if len(sf.shape) < 1:
+                    sf = sf[..., np.newaxis]
+                #if sf.size == 1 and sg.size == 1:
+                #    sf = sf[0]
+                #    sg = sg[0]
+                    #mag = np.abs((sf / sg))
+                else:
+                    mag = np.abs(np.dot(sg_inv, sf))
+                if not (umax < mag).any(): #or .any()?!
+                    break
 
-    def initialize_control(self, xt, initial = 0.0):
-        self.surface_ind = 0
-        self.initialize_surface_trajectory(xt)
-        return self.surface_trajectory #we are TREATING trajectory as control iLQG is optimizing
+                if sf.size == 1 and sg.size == 1:
+                    grad = hx * 1/sg 
+                    gterm = -(1/sg * gx[:,c] * 1/sg) * sf
+                    if len(gterm.shape) < 2 and len(grad.shape) > 1:
+                        gterm = gterm[..., np.newaxis]
+                    #grad += -(1/sg * gx[:,c] * 1/sg) * sf
+                    #if gx[:,c].shape[0] == sf.shape[0]:
+                    #    grad += -np.dot(1/sg * gx[:,c] * 1/sg,sf)
+                    #else:
+                    grad += (gterm)
+                else:
+                    gs = np.dot(gx[:,c], sg_inv)
+                    grad = -np.dot(np.dot(sg_inv, gs), sf)
+                    grad += np.dot(hx, sg_inv) 
+                if len(grad.shape) > 1:
+                    grad = grad.flatten()
+                sigma[:,c] = sigma[:,c] - self.alpha * grad
+                sigma[:,c] = np.clip(sigma[:,c], 1e-1, float('inf'))
+                #print("GRAD: ", grad)
+                print("New sigma: ", sigma[:,c])
+            #sf = -np.dot(sigma.T, hx)
+            #sg = np.dot(sigma.T, gx)
+            #sg_inv = np.linalg.inv(sg)
+            #if sf.size == 1 and sg.size == 1:
+            #    sf = sf[0]
+            #    sg = sg[0]
+            #    mag = np.abs((sf / sg))
+            #else:
+            #    mag = np.abs(np.dot(sg_inv, sf))
+            #if (umax < mag).all(): #or .any()?!
+            #    break
 
-    def dq_dx(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
-        return lx + np.dot(Vx, fx) 
-    def dq_du(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
-        return lu + np.dot(Vx, fu) #lu[term] = 0]
-    def dq_dxx(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
-        return lxx + np.dot(fx.T, np.dot(Vxx, fx))
-    def dq_dxu(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
-        return lxu + np.dot(fu.T, np.dot(Vxx, fx))
-    def dq_duu(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
-        return luu + np.dot(fu.T, np.dot(Vxx, fu))
-    def dq_duu_inv(self, Quu, lamb = 1.0, LM_METHOD = True, *args, **kwargs):
-        if not LM_METHOD:
-            Quu_inv = np.linalg.pinv(Quu)
-        else:
-            try:
-                Quu_eval, Quu_evec = np.linalg.eig(Quu) 
-            except:
-                print("Quu: ", Quu)
-                input()
-            Quu_eval[Quu_eval < 0] = 0.0 #remove negative eigenvals
-            Quu_eval += lamb
-            #print("MODIFIED Quu Eigenvals: ", Quu_eval)
-            Quu_inv = np.dot(Quu_evec, np.dot(np.diag(1.0/Quu_eval),
-                Quu_evec.T)) #quadratic function with reciproc-eigvals
-            return Quu_inv       
+            #if sf.size == 1 and sg.size == 1:
+            #    grad = hx * 1/sg 
+            #    print("Grad: ", grad)
+            #    grad += -(1/sg * gx * 1/sg) * sf
+            #else:
+            #    grad = -np.dot(np.dot(sg_inv, np.dot(gx, sg_inv)), sf)
+            #    grad += np.dot(hx, sg_inv) 
+            #print("Grad+: ", grad)
+            #sigma = sigma - alpha * grad
+            #sigma = np.clip(sigma, 1e-1, float('inf'))
+
+            i += 1
+        print("GD SURFACE: ", sigma)
+        self.surface = sigma
+
+
+#class ISMC(ILQG, SMC):
+#    '''Implementation of iterative sliding-mode control, modifying
+#    the sliding surface a system is to be entrained upon to minimize
+#    a differentiable cost function along a locally-linearized model
+#    of the system-in-question.'''
+#    def __init__(self, surface_base, switching_function,
+#            *args, **kwargs):
+#        
+#        super().__init__(*args, **kwargs)
+#        self.surface_base = surface_base
+#        self.surface = self.surface_base
+#        
+#        self.surface_trajectory = []
+#
+#        self.switching_function = switching_function
+#        
+#        self.surface_ind = 0
+#
+#    
+#    def update_surface(self, xt):
+#        if self.surface_ind < len(self.surface_trajectory):
+#            self.surface = self.surface_trajectory[self.surface_ind]
+#            self.surface_ind += 1
+#        else:
+#            self.surface = self.surface_base.copy()
+#
+#    def initialize_surface_trajectory(self, xt) -> np.ndarray: 
+#        self.surface_trajectory = np.array([self.surface_base.copy() for i in range(self.horizon)])
+#
+#    def initialize_control(self, xt, initial = 0.0):
+#        self.surface_ind = 0
+#        self.initialize_surface_trajectory(xt)
+#        return self.surface_trajectory #we are TREATING trajectory as control iLQG is optimizing
+#
+#    def dq_dx(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
+#        return lx + np.dot(Vx, fx) 
+#    def dq_du(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
+#        return lu + np.dot(Vx, fu) #lu[term] = 0]
+#    def dq_dxx(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
+#        return lxx + np.dot(fx.T, np.dot(Vxx, fx))
+#    def dq_dxu(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
+#        return lxu + np.dot(fu.T, np.dot(Vxx, fx))
+#    def dq_duu(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
+#        return luu + np.dot(fu.T, np.dot(Vxx, fu))
+#    def dq_duu_inv(self, Quu, lamb = 1.0, LM_METHOD = True, *args, **kwargs):
+#        if not LM_METHOD:
+#            Quu_inv = np.linalg.pinv(Quu)
+#        else:
+#            try:
+#                Quu_eval, Quu_evec = np.linalg.eig(Quu) 
+#            except:
+#                print("Quu: ", Quu)
+#                input()
+#            Quu_eval[Quu_eval < 0] = 0.0 #remove negative eigenvals
+#            Quu_eval += lamb
+#            #print("MODIFIED Quu Eigenvals: ", Quu_eval)
+#            Quu_inv = np.dot(Quu_evec, np.dot(np.diag(1.0/Quu_eval),
+#                Quu_evec.T)) #quadratic function with reciproc-eigvals
+#            return Quu_inv       
 
 
 

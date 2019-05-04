@@ -791,7 +791,7 @@ if __name__ == '__main__':
             args.task_type = 'point'
         elif args.env_type == 'cartpole':
 
-            ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
+            ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10, 'target':np.array([0, 0, 0, 0])}
             args.task_type = 'point'
         elif args.env_type == 'inverted':
             ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
@@ -980,7 +980,7 @@ if __name__ == '__main__':
             SURFACE_BASE = None
             #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
             #surface = np.eye(obs_size, M=action_size)
-            surface = np.ones([obs_size, action_size]) * 0.5
+            surface = np.ones([obs_size, action_size]) * 1.0
 
             ## DDP-SPECIFIC ARGS 
             LQG_FULL_ITERATIONS = True
@@ -1095,7 +1095,19 @@ if __name__ == '__main__':
                     #position.
                     print("ENV TYPE IS INVERTED PENDULUM (control environment)")
                     target = np.zeros(obs_size)
-                    theta_ind = 0 #based on pole-angle cosine, rep theta
+                    theta_ind = 0 
+                    target_theta = 0.0 
+                    target[theta_ind] = target_theta
+                    target_inds = [theta_ind]
+                    Q = np.eye(obs_size) * 1e2
+                    Qf = Q * 1e2
+                    R = np.eye(action_size) * 1e1
+                elif args.env_type == 'cartpole':
+                    #cost is manually set as deviation from pole upright
+                    #position.
+                    print("ENV TYPE IS CARTPOLE (control environment)")
+                    target = np.zeros(obs_size)
+                    theta_ind = 2 #based on pole-angle cosine, rep theta
                     target_theta = 0.0 #target pole position
                     target[theta_ind] = target_theta
                     target_inds = [theta_ind]
@@ -1160,7 +1172,7 @@ if __name__ == '__main__':
                             )
                     ddp.set_smc(smc)
 
-            elif args.ddp_mode == 'ismc':
+            elif args.ddp_mode == 'smc':
                 #The idea is to make surface non-uniform (singular) 
                 #across control variables, but also to construct
                 #a generally good surface (target * 1e1 to focus emphasis
@@ -1174,6 +1186,32 @@ if __name__ == '__main__':
                 print("Action Size: ", action_size)
                 print("Surface Function: ", surface)
                 ddp = SMC(surface,
+                        target, diff_func,
+                        args.smc_switching_function,
+                        obs_space, obs_size,
+                        [1, action_size], action_size,
+                        system_model, cost,
+                        None, 
+                        action_constraints, 
+                        horizon = int(HORIZON/DT), dt = DT, 
+                        max_iterations = DDP_MAX_ITERATIONS,
+                        eps = 1e-2,
+                        update_model = UPDATE_DDP_MODEL
+                        )
+            elif args.ddp_mode == 'ismc':
+                #The idea is to make surface non-uniform (singular) 
+                #across control variables, but also to construct
+                #a generally good surface (target * 1e1 to focus emphasis
+                #on target variables)
+                target_vars = np.zeros((obs_size, 1)) #for guiding SMC
+                for i in target_inds:
+                    target_vars[i] = 1
+                surface = surface + target_vars * 5e0 + np.eye(obs_size, M = action_size) * 1e-2
+                #surface = surface + target * 1e1
+                print("Obs Size: ", obs_size)
+                print("Action Size: ", action_size)
+                print("Surface Function: ", surface)
+                ddp = GD_SMC(1e-1, surface,
                         target, diff_func,
                         args.smc_switching_function,
                         obs_space, obs_size,
