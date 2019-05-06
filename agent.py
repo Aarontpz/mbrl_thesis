@@ -772,7 +772,8 @@ class MPCAgent(Agent):
 
 class PyTorchMLP(torch.nn.Module):
     def __init__(self, device, indim, outdim, hdims : [] = [], 
-            activations : [] = [], initializer = None, batchnorm = False):
+            activations : [] = [], initializer = None, batchnorm = False,
+            bias = True):
         super(PyTorchMLP, self).__init__()
         self.indim = indim
         self.outdim = outdim
@@ -785,7 +786,7 @@ class PyTorchMLP(torch.nn.Module):
         layers = []
         prev_size = indim
         for i in range(len(hdims)):
-            linear = torch.nn.Linear(prev_size, hdims[i], bias = True)
+            linear = torch.nn.Linear(prev_size, hdims[i], bias = bias)
             layers.append(linear)
             if activations[i] is not None:
                 if activations[i] == 'relu':
@@ -795,7 +796,7 @@ class PyTorchMLP(torch.nn.Module):
             if batchnorm:
                 layers.append(tf.nn.BatchNorm1d(hdims[i]))
             prev_size = hdims[i]
-        linear = torch.nn.Linear(prev_size, outdim, bias = True)
+        linear = torch.nn.Linear(prev_size, outdim, bias = bias)
         layers.append(linear)
         final_ind = len(hdims)
         if activations[final_ind] is not None:
@@ -1395,6 +1396,8 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
         self.neighbors = neighbors
         self.region_knn = {}
 
+        self.prev_region = None
+
     def update(self, xt):
         if len(xt.shape) < 2:
             xt = xt.reshape(-1, xt.size)
@@ -1403,15 +1406,24 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
             #self.B = np.ndarray(self.b_shape)
             self.initialize_model_free_arrays()
         else:
+            #if xt.shape[1] > xt.shape[0]:
+            #    xt = xt.T
+            region = self.predict_cluster(xt.T)
+            #print("PREV REGION: %s REGION: %s" % (self.prev_region, region))
+            if self.prev_region is not None:
+                if region == self.prev_region:
+                    return self.A, self.B
+            self.prev_region = region
+
             model = self.get_local_model(xt)
             if model is None: #TODO: temporary measure
                 print("INVALID xt (no label / no matching model)")
                 #raise Exception("REEEE fix this") #TODO TODO TODO TODO
                 self.initialize_model_free_arrays()
             else:
-                self.A, self.B = self.get_linear_model(model)
-        #print("A: ", self.A.shape)
-        #print("B: ", self.B.shape)
+                self.A, self.B = self.get_linear_model(model, xt)
+        #self.A += np.eye(self.A.shape[0])
+        #self.B += np.eye(self.A.shape[0], M=self.B.shape[1])
         #input()
         return self.A, self.B
 
@@ -1449,6 +1461,7 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
         comes in those points may no longer truly belong to that region.
         This systematically (inefficiently) verifies the position of
         each element in each region.'''
+        self.prev_region = None
         for r in self.region_s.keys(): #update each region's points 
             if len(self.region_s[r]) > self.max_points:
                 num_remove = len(self.region_s[r]) - self.max_points
@@ -1478,7 +1491,7 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
         pass     
 
     @abc.abstractmethod
-    def get_linear_model(self, model) -> (np.ndarray, np.ndarray):
+    def get_linear_model(self, model, xt = None, ut = None) -> (np.ndarray, np.ndarray):
         '''Retrieve local parameters from local model'''
         pass
 
@@ -1512,16 +1525,26 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
     LAYER PERCEPTRON, representing linear function) 
     to each cluster in order to create piecewise-linear 
     model of system dynamics.'''
-    def __init__(self, device, *args, **kwargs):
+    def __init__(self, mlp_layer, device, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.device = device
+        self.mlp_layer = mlp_layer
 
-    def get_linear_model(self, model):
+    def get_linear_model(self, model, xt = None, ut = None):
         '''Assumes local models are "forward dynamics", where F 
         and G and calculated seperately and are represented by
         properly-sized matrices.'''
-        A = model.a_layer.weight.detach().numpy()
-        B = model.b_layer.weight.detach().numpy()
+        if self.mlp_layer:
+            xt = xt if xt is not None else np.zeros(self.a_shape[0])
+            #print("GET LINEAR MODEL")
+            #input()
+            A = model.dx(xt)
+            B = model.du(xt)
+        else:
+            #print("NOT MLP PLALERY")
+            #input()
+            A = model.a_layer.weight.detach().numpy()
+            B = model.b_layer.weight.detach().numpy()
         return A,B 
     
     def get_local_model(self, x):
@@ -1541,12 +1564,26 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
 
     def construct_model(self):
         class PyTorchLinearModel(torch.nn.Module):
-            def __init__(self, device, dt, obs_size, action_size):
+            def __init__(self, device, dt, obs_size, action_size, mlp_layer = True):
                 super().__init__()
                 self.device = device
-                self.a_layer = torch.nn.Linear(obs_size, obs_size, bias = False)
-                self.b_layer = torch.nn.Linear(action_size, obs_size, bias = False)
+                
+                self.mlp_layer = mlp_layer
+                if self.mlp_layer:
+                    self.a_layer = PyTorchMLP(device, obs_size, 
+                            obs_size, hdims = [100,],
+                            activations = [None, None], bias = False)
+                    self.b_layer = PyTorchMLP(device, action_size,
+                            obs_size, hdims = [100,], 
+                            #activations = ['relu', None])
+                            activations = [None, None], bias = False)
+                else:
+                    self.a_layer = torch.nn.Linear(obs_size, obs_size, bias = False)
+                    self.b_layer = torch.nn.Linear(action_size, obs_size, bias = False)
                 self.dt = dt
+                
+                self.obs_size = obs_size
+                self.action_size = action_size
 
             def forward(self, x, u):
                 ax = self.a_layer(x)
@@ -1557,19 +1594,37 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                 '''Return x' = x + dt(Ax + Bu)'''
                 return x + self.dt * (self.forward(x, u))
 
-            def dx(self, x, u, create_graph = True):
-                return grad(self.a_layer, x, create_graph = create_graph)
+            def dx(self, xt, u = None, create_graph = True):
+                #dm_dx = grad(self.a_layer, xt, create_graph = create_graph)
+                #dm_dx = dm_dx.detach().numpy()
+                #print("Xt Shape: ", xt.shape)
+                dm_dx = np.eye(xt.shape[0])
+                #for l in reversed(self.a_layer.layers):
+                for l in (self.a_layer.layers):
+                    #print("LAYER: ", l)
+                    #print("Weight Shape", l.weight.shape) 
+                    weight = l.weight.detach().numpy()
+                    dm_dx = np.dot(weight, dm_dx) 
+                return dm_dx
 
-            def du(self, x, u, create_graph = True):
-                return grad(self.b_layer, u, create_graph = True)
+            def du(self, xt, u = None, create_graph = True):
+                #dm_du = grad(self.b_layer, xt, create_graph = True)
+                #dm_du = dm_du.detach().numpy()
+                dm_du = np.eye(self.action_size)
+                for l in (self.b_layer.layers):
+                    #print("LAYER: ", l)
+                    #print("Weight Shape", l.weight.shape) 
+                    weight = l.weight.detach().numpy()
+                    dm_du = np.dot(weight, dm_du) 
+                return dm_du
 
             def fit(self, X, X_, U, num_iters = 20, lr=2e-3):
                 '''We're being sloppy here. This is a training step to
                 allow this to work with the existing LocalLinearModel trainer
                 '''
                 criterion = torch.nn.MSELoss()
-                optimizer = torch.optim.SGD(self.parameters(), lr = lr, momentum = 1e-4)
-                #optimizer = torch.optim.Adam(self.parameters(), lr = 1e-3, betas = (0.9, 0.999))
+                #optimizer = torch.optim.SGD(self.parameters(), lr = lr, momentum = 1e-4)
+                optimizer = torch.optim.Adam(self.parameters(), lr = lr, betas = (0.9, 0.999))
                 for ii in range(num_iters): #we're overfitting...intentionally?
                     loss = torch.tensor([0.0], requires_grad = False)
                     for i in range(len(X)):
@@ -1582,14 +1637,17 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                     optimizer.step()
                     optimizer.zero_grad()
 
-        return PyTorchLinearModel(self.device, self.dt, self.a_shape[0], self.b_shape[1]) 
+        return PyTorchLinearModel(self.device, self.dt, self.a_shape[0], self.b_shape[1], self.mlp_layer) 
     
     def fit_model(self, X, X_, U = None):
         #Multiple samples here, instead of overfitting in model.fit?
         for r in self.region_s.keys(): #update each region's model
+            print("Training region: %s" % (r))
             if len(self.region_s[r]) > 1: #cannot fit on empty/1 samples
                 if r not in self.models.keys():
+                    print("Constructing model!")
                     self.models[r] = self.construct_model()
+                print("Training model!")
                 for training_iter in range(10):
                     ##Randomly sample some points in region
                     num_samples = 128
@@ -1598,7 +1656,7 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                     sample_a = [self.region_a[r][i] for i in indices]
                     sample_s_ = [self.region_s_[r][i] for i in indices]
                     #raise Exception("Only train on recent samples from each region? Otherwise, as regions DEVELOP, samples which no longer are representitive are left????")
-                    self.models[r].fit(sample_s, sample_s_, sample_a, num_iters = 40) #TODO: use ALL points in reg.
+                    self.models[r].fit(sample_s, sample_s_, sample_a, num_iters = 5) #TODO: use ALL points in reg.
 
 
 
@@ -1607,7 +1665,7 @@ class SKLearnLinearClusterLocalModel(LinearClusterLocalModel):
     which is proposed as an alternative to mini-batch k-means)
     to group points spatially, apply linear fit (via SKLearn) to each cluster
     in order to create piecewise-linear model of system dynamics.'''
-    def get_linear_model(self, model):
+    def get_linear_model(self, model, xt = None):
         #print("MODEL RETRIEVED!")
         augmented = model.coef_ #[A|B] coeff
         #print("Coef: ", self.A)

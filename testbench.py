@@ -1001,7 +1001,8 @@ if __name__ == '__main__':
                         compute_labels = True, 
                         dt = DT)
             elif args.local_linear_model == 'pytorch': 
-                system_model = PyTorchLinearClusterLocalModel(device,
+                system_model = PyTorchLinearClusterLocalModel(True, 
+                        device,
                         (obs_size, obs_size), (obs_size, action_size),
                         n_clusters = args.local_clusters, 
                         neighbors = args.local_neighbors,

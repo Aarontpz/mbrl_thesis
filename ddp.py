@@ -865,12 +865,12 @@ class SMC(DDP):
         self.diff_func = diff_func
 
     def step(self, xt):
+        #print("MODEL: ", self.model)
         if len(xt.shape) < 2:
             xt = xt[..., np.newaxis]
         #print('Target: %s Xt: %s' % (self.target.shape, xt.shape))
         xt = self.diff_func(self.target, xt)
         if self.update_model:
-            #print("UPDATING MODEL")
             #if len(xt.shape) > 1:
             #    xt = xt.flatten()
             self.model.update(xt)
@@ -895,8 +895,8 @@ class SMC(DDP):
             #print("B: ", self.model.B)
             #print("A: ", self.model.A)
             #print("xt: ", xt)
-            #print("DOT: ", (dB))
-            #print("|DOT|: ", np.linalg.det(dB))
+            print("DOT: ", (dB))
+            print("|DOT|: ", np.linalg.det(dB))
             magnitude = -(np.linalg.inv(dB)) #TODO: Verify this step
             #print("dB inv: ", magnitude)
             #print("dA: ", dA)
@@ -904,14 +904,18 @@ class SMC(DDP):
             magnitude = np.dot(magnitude, dA)
             if len(sign.shape) < 2:
                 sign = sign[..., np.newaxis]
-            #print("mag: ", magnitude)
-            #print("sign: ", sign.shape)
-            out = magnitude * sign
-            #out = np.dot(magnitude, sign)
-            #print("Action Constraints: ", self.action_constraints[1])
-            #print("Sign: ", sign)
-            #print("Yeah", self.action_constraints[1] * sign.T)
-            #out = self.action_constraints[1] * sign.T
+            print("mag: ", magnitude.shape)
+            print("sign: ", sign.shape)
+            if True:
+                out = magnitude * sign
+                #out = np.dot(magnitude, sign)
+                out = self.action_constraints[1] * np.sign(out).T
+            else:
+                pass
+                #print("Action Constraints: ", self.action_constraints[1])
+                #print("Sign: ", sign)
+                #print("Yeah", self.action_constraints[1] * sign.T)
+                #out = self.action_constraints[1] * sign.T
             #if len(out.shape) < 2:
             #    out = out[..., np.newaxis]
             #print("OUT SHAPE: ", out.shape)
@@ -1012,7 +1016,7 @@ class GD_SMC(SMC):
                 sigma[:,c] = sigma[:,c] - self.alpha * grad
                 sigma[:,c] = np.clip(sigma[:,c], 1e-1, float('inf'))
                 #print("GRAD: ", grad)
-                print("New sigma: ", sigma[:,c])
+                #print("New sigma: ", sigma[:,c])
             #sf = -np.dot(sigma.T, hx)
             #sg = np.dot(sigma.T, gx)
             #sg_inv = np.linalg.inv(sg)
@@ -1037,6 +1041,7 @@ class GD_SMC(SMC):
             #sigma = np.clip(sigma, 1e-1, float('inf'))
 
             i += 1
+        sigma += np.eye(sigma.shape[0], M = sigma.shape[1]) * 1e-1
         print("GD SURFACE: ", sigma)
         self.surface = sigma
 
@@ -1131,7 +1136,7 @@ if __name__ == '__main__':
     if NONLINEAR_CARTPOLE_TEST:
         lamb_factor = 10
         lamb_max = 1000
-        horizon = 4
+        horizon = 8
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -1158,7 +1163,7 @@ if __name__ == '__main__':
         #DDP_CLASS = 'ISMC'
         DDP_CLASS = 'ILQG'
         SMC_SURFACE_BASE = np.eye(state_size, M = action_size)
-        SMC_SWITCHING_FUNCTION = 'arctan'
+        #SMC_SWITCHING_FUNCTION = 'arctan'
 
         update_model = False
         FULL_ITERATIONS = True
@@ -1169,7 +1174,7 @@ if __name__ == '__main__':
         target = np.array([0, 0, 0.0, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.7, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.0, 0], dtype = np.float64)
-        x0 = np.array([0, .0, -0.20, 0.1],dtype=np.float64)
+        x0 = np.array([0, .0, 0.20, 0.1],dtype=np.float64)
         #x0 = np.array([0, 1, 0.0, 1.00],dtype=np.float64)
         #x0 = np.array([0, 1, 0, 5.00],dtype=np.float64)
         #diff_func = lambda t,x : x - np.array([x[0], x[1], t[2], t[3]])
@@ -1184,15 +1189,15 @@ if __name__ == '__main__':
         #    t[null_ind] = x[null_ind]
         #    return x-t
         #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
-        null_ind = [0, 1, ] #TODO: control INPUT, not ERROR?!
-        cost_func = lambda h,dt:1e2
+        null_ind = [0, 1, 3] #TODO: control INPUT, not ERROR?!
+        cost_func = lambda h,dt:1e1
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
         Q[2] *= 5
         #Qf = Q
         Qf = np.eye(state_size) * cost_func(horizon, dt) * 1e1
-        R = np.eye(action_size) * 1e0 * 1
+        R = np.eye(action_size) * 1e2 * 1
 
         priority_cost = True
         if priority_cost:
@@ -1214,7 +1219,7 @@ if __name__ == '__main__':
         friction = 0.000
         mc = 1
         mp = .1
-        L = 0.5
+        L = 1.0
         g = 9.8
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
@@ -1404,15 +1409,15 @@ if __name__ == '__main__':
             for i in null_ind:
                 Q[i][i] = 0
         #target = None
-        target = np.array([np.pi, 0], dtype = np.float64)
+        target = np.array([0, 0], dtype = np.float64)
         #target = np.array([0.5, 0], dtype = np.float64)
         #target = np.array([np.pi, 0], dtype = np.float64)
         #target = np.array([np.pi/2, 0], dtype = np.float64)
         #target = np.array([np.pi/4, 0], dtype = np.float64)
         
         #x0 = np.array([0, np.pi/2],dtype=np.float64)
-        #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
-        x0 = np.array([np.pi/2, -0.00],dtype=np.float64) #NOTE: don't do 
+        x0 = np.array([0.0, np.pi/4],dtype=np.float64)
+        #x0 = np.array([2*np.pi/4, -1.00],dtype=np.float64) #NOTE: don't do 
         #x0 = np.array([0.1, 0.10],dtype=np.float64)
         
         diff_func = lambda t,x : x - t
@@ -1592,7 +1597,7 @@ if __name__ == '__main__':
         action_constraints = None
         #x0 = np.array([0, np.pi/2],dtype=np.float64)
         #x0 = np.array([0.0, np.pi/8],dtype=np.float64)
-        x0 = np.array([0.1, 0.00],dtype=np.float64)
+        x0 = np.array([2*np.pi, 0.00],dtype=np.float64)
         #x0 = np.array([0.00, 0.00],dtype=np.float64)
         #
         FULL_ITERATIONS = True

@@ -404,19 +404,28 @@ class InvertedPendulumEnvironment(ControlEnvironment):
                 xx.append(x[i])
                 yy.append(y[j])
                 if dx_model is not None:
-                    dx = dx_model.update(np.array([x[i], y[j]]))[0]
+                    xt = np.array([[x[i], y[j]]]).T
+                    dx = dx_model.update(xt)[0]
+                    dx = np.dot(dx,xt)
+                    #print("Square: ", np.diag(np.concatenate((dx.T, dx.T))))
                     if len(dx.shape) > 1:
-                        z.append(dx) #linear / Jacobian
+                        z.append(dx)
+                        #if dx.shape[0] == dx.shape[1]:
+                        #    z.append(dx) #linear / Jacobian
+                        #else:
+                        #z.append(np.dot(np.eye(dx.shape[0]), dx)) #vector rep. transition
                     else:
                         z.append(np.diag(dx)) #vector rep. transition
+                        #z.append(np.dot(np.eye(dx.shape[0]), dx)) #vector rep. transition
                 else:
                     z.append(np.diag(self.dx(np.array([x[i], y[j]]))))
                     #z.append(self.d_dx(np.array([x[i], y[j]])))
                     #z.append(np.array([[np.sin(x[i]), 0], [0, np.cos(y[j])]]))
         z = np.array(z)
-        #print("Z: ", z.shape)
-        #eig = z
-        eig = np.linalg.eig(np.array(z))
+        print("Z: ", z.shape)
+        eig = z
+        if dx_model is None:
+            eig = np.linalg.eig(np.array(z))
         #print("Eig: ", len(eig))
         #print("EIG[0]: ", eig[0][:,:])
         #print("Eig[0][0,0]:", eig[0][0,0])
@@ -426,7 +435,10 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         else:
             plt.figure(55)
         plt.clf()
-        plt.quiver(xx, yy, eig[0][:,0], eig[0][:,1])
+        if dx_model is None:
+            plt.quiver(xx, yy, eig[0][:,0], eig[0][:,1])
+        else:
+            plt.quiver(xx, yy, z[:,0], z[:,1])
         plt.title("%s Quiver Plot" % (self.get_environment_name()))
         plt.xlabel("Radians")
         plt.ylabel("Radians / s")
@@ -943,10 +955,10 @@ if __name__ == '__main__':
                 target = target)
         env.reset()
         #env.state = np.array([0.0, 0.0])
-        env.state = np.array([np.pi, 0e0])
+        #env.state = np.array([np.pi, 0e0])
         gamma = 0.7
         wn = 20
-        umax = 9e-1
+        umax = 5e-1
         ARCTAN = False
         sigma_base = np.array([1, 1], dtype=np.float64) #sliding surface definition
         sigma_history = []
