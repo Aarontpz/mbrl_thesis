@@ -307,7 +307,10 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         target = self.get_target()
         #state += (self.dx(state, action, target) * self.interval*self.ts)
         state += (self.dx(state, action) * self.ts)
-        state[0] %= 2*np.pi
+        if state[0] > 0:
+            state[0] %= 2*np.pi
+        elif state[0] < 0:
+            state[0] %= -2*np.pi
         #state += (self.dx(state, action))
         #state[0] = state[0] % np.pi
         self.steps += self.ts
@@ -501,7 +504,10 @@ class CartpoleEnvironment(ControlEnvironment):
         #state += (self.dx(state, action, target) * self.interval*self.ts)
         state += (self.dx(state, action) * self.ts)
         #state += (self.dx(state, action))
-        state[2] %= 2*np.pi
+        if state[2] > 0:
+            state[2] %= 2*np.pi
+        elif state[2] < 0:
+            state[2] %= -2*np.pi
         self.steps += self.ts
         self.state_history.append(state.copy())
         self.state = state.copy()
@@ -737,8 +743,8 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    TEST_INVERTED_PENDULUM = True
-    TEST_CARTPOLE = False
+    TEST_INVERTED_PENDULUM = False
+    TEST_CARTPOLE = True
 
     if TEST_CARTPOLE:
         horizon = 10
@@ -749,9 +755,10 @@ if __name__ == '__main__':
         dt = 1e-2
         ARCTAN = False
         TSSMC = False
+        ISMC = False
         #ucoeff = 1.5
         ucoeff = 2
-        umax = 1.5e1
+        umax = 2.0e1
         umin = -umax
         sigma_base = np.array([[1e0, 1e0, 1e0, 1e0]]).T #sliding surface definition
         sigma = sigma_base.copy() #sliding surface definition
@@ -820,7 +827,6 @@ if __name__ == '__main__':
             #ucomp = 1
 
             alpha = 1e-2
-            ISMC = True
             if ISMC == True:
                 #x = x_
                 sigma = sigma_base.copy()
@@ -859,6 +865,7 @@ if __name__ == '__main__':
                 sign = np.sign(s)
                 #control = -umax * mag * sign
                 control = umax * sign
+                control += -(1/(np.dot(sigma.T, gx))) * (np.dot(sigma.T, hx))
                 control = np.clip(control, -umax, umax)
             else:
                 ## FOSMC
@@ -870,8 +877,9 @@ if __name__ == '__main__':
                 #print("du/ds: ", du_ds(sigma, x_))
                 #d_du.append(du_ds(sigma, x_))
                 #u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(dx)) * np.sign(sx)
-                control = np.clip(u(sigma, x_), umin, umax)
-                #control = u(sigma, x_)
+                control = u(sigma, x_)
+                #control += (1/(np.dot(sigma.T, gx))) * np.abs((np.dot(sigma.T, hx)))
+                control = np.clip(control, umin, umax)
                 print("Control: ", control)
 
                 ## TSSMC (twisted-surface)
@@ -955,10 +963,10 @@ if __name__ == '__main__':
                 target = target)
         env.reset()
         #env.state = np.array([0.0, 0.0])
-        #env.state = np.array([np.pi, 0e0])
+        env.state = np.array([np.pi, 0e0])
         gamma = 0.7
         wn = 20
-        umax = 5e-1
+        umax = 2e-1
         ARCTAN = False
         sigma_base = np.array([1, 1], dtype=np.float64) #sliding surface definition
         sigma_history = []
@@ -1003,6 +1011,7 @@ if __name__ == '__main__':
                 sign = np.sign(s)
                 #control = -umax * mag * sign
                 control = -umax * sign
+                #control += -(1/(np.dot(sigma.T, g))) * (np.dot(sigma.T, f))
                 control = np.clip(control, -umax, umax)
             else:
                 sigma = sigma_base.copy()

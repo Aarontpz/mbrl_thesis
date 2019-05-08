@@ -336,6 +336,7 @@ class DDP:
         self.max_iterations = max_iterations
         self.eps = eps
 
+
     @abc.abstractmethod
     def step(self, xt) -> (np.ndarray, np.ndarray):
         pass
@@ -869,12 +870,15 @@ class SMC(DDP):
         if len(xt.shape) < 2:
             xt = xt[..., np.newaxis]
         #print('Target: %s Xt: %s' % (self.target.shape, xt.shape))
+        #x = xt.copy()
         xt = self.diff_func(self.target, xt)
         if self.update_model:
             #if len(xt.shape) > 1:
             #    xt = xt.flatten()
             self.model.update(xt)
+        #self.update_surface(x)
         self.update_surface(xt)
+        #raise Exception("Figure out the-above")
         return None, self.compute_control(xt) #TODO: make this NOT a subclass of DDP so we don't need this janky None returnval?
 
     def forward_cost(self, X, U):
@@ -906,16 +910,15 @@ class SMC(DDP):
                 sign = sign[..., np.newaxis]
             print("mag: ", magnitude.shape)
             print("sign: ", sign.shape)
-            if True:
-                out = magnitude * sign
+            if False:
+                out = -(magnitude / np.abs(magnitude)) * sign
                 #out = np.dot(magnitude, sign)
                 out = self.action_constraints[1] * np.sign(out).T
             else:
-                pass
                 #print("Action Constraints: ", self.action_constraints[1])
                 #print("Sign: ", sign)
                 #print("Yeah", self.action_constraints[1] * sign.T)
-                #out = self.action_constraints[1] * sign.T
+                out = self.action_constraints[1] * sign.T
             #if len(out.shape) < 2:
             #    out = out[..., np.newaxis]
             #print("OUT SHAPE: ", out.shape)

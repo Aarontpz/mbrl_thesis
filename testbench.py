@@ -29,7 +29,7 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument("--load", type=int, help="Load arguments/model in given run (requires lib-type, env-type, task-type, agent-type, and ITERATION corresponding to which 'milestone' of previous run to load)", default = 0)
 parser.add_argument("--load-iteration", type=str, help="Load arguments/model in given run (requires lib-type, env-type, task-type, agent-type, and ITERATION corresponding to which 'milestone' of previous run to load)", default = None)
-parser.add_argument("--save-rate", type=int, help="Iterations between saves", default = 500)
+parser.add_argument("--save-rate", type=int, help="Iterations between saves", default = 250)
 #parser.add_argument("--save-location", type=str, help="Directory to save run details to.")
 
 parser.add_argument("--lib-type", type=str, help="Library type (DM, GYM, Control)", default='dm')
@@ -271,6 +271,14 @@ def create_ddp_dm_humanoid_agent(agent_base, *args, **kwargs):
                 state = obs
             #return Variable(torch.tensor(state).float(), requires_grad = True)
             return state
+
+        def get_lqc_terms(self) -> (np.ndarray, np.ndarray, np.ndarray):
+            '''Returns Q, Qf, and R of linear quadratic cost term.'''
+            pass
+        def get_target(self) -> (np.ndarray, []):
+            '''Returns target array and list of target indices.'''
+            pass
+
     return DDPHumanoidAgent(*args, **kwargs)
 def create_ddp_dm_walker_agent(agent_base, *args, **kwargs):
     '''Transform_observation transforms observation into Numpy array. '''
@@ -296,6 +304,65 @@ def create_ddp_dm_walker_agent(agent_base, *args, **kwargs):
                 return 0.0
     
     return DDP_DMWalkerAgent(*args, **kwargs)
+
+def create_ddp_dm_ballcup_agent(env, agent_base, *args, **kwargs):
+    '''Transform_observation transforms observation into Numpy array. '''
+    class DDP_DMBallCupAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            if type(obs) == type(collections.OrderedDict()):
+                orientation = obs['position']
+                vel = obs['velocity']
+                state = np.concatenate((orientation, vel))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
+            #return Variable(torch.tensor(state).float(), requires_grad = True)
+            return state
+
+        def update_target(self, env):
+            '''Update MPC elements relying on target.'''
+            obs_size = self.get_obs_size()
+            target = np.zeros(obs_size)
+            target_pos = env.physics.named.data.site_xpos['target', ['x', 'z']]
+            target_x = target_pos[0] 
+            target_x_ind = 2
+            target_z = target_pos[1] - 0.2 #account for offset of ball
+            target_z_ind = 3
+            target[target_x_ind] = target_x
+            target[target_z_ind] = target_z
+            print("TARGET: ", target)
+            self.mpc_ddp.model.target = target
+            self.mpc_ddp.cost.target = target
+    
+        def reward(self, st, at, *args, **kwargs):
+            return 0.0
+        
+        def get_lqc_terms(self) -> (np.ndarray, np.ndarray, np.ndarray):
+            '''Returns Q, Qf, and R of linear quadratic cost term.'''
+            Q = 0
+            Qf = 0
+            R = 0
+            return Q, Qf, R
+
+        def get_target(self) -> (np.ndarray, []):
+            '''Returns target array and list of target indices.'''
+            target = self.env.named.data.site_xpos['target', ['x', 'z']]
+            indices = []
+            return target, indices
+
+        def get_obs_size(self) -> int:
+            obs_space = self.env.observation_spec()
+            size = obs_space['position'].shape[0] 
+            size += obs_space['velocity'].shape[0]  
+            #size += 2 
+            return size
+    
+    agent = DDP_DMBallCupAgent(*args, **kwargs)
+    agent.env = env #necessary for DDP methods
+    return agent
+
+
 
 def create_ddp_dm_cartpole_agent(agent_base, *args, **kwargs):
     '''Transform_observation transforms observation into Numpy array. '''
@@ -355,6 +422,8 @@ def create_ddp_agent(lib_type, env_type, env, agent_base = DDPMPCAgent, *args, *
             agent = create_ddp_dm_acrobot_agent(env, DDPMPCAgent, *args, **kwargs) #requires access to additional state in order to function
         elif env_type == 'cartpole':
             agent = create_ddp_dm_cartpole_agent(DDPMPCAgent, *args, **kwargs) 
+        elif env_type == 'ballcup':
+            agent = create_ddp_dm_ballcup_agent(env, DDPMPCAgent, *args, **kwargs) 
     else:
         return create_numpy_agent(agent_base, *args, **kwargs)
     return agent
@@ -380,6 +449,8 @@ def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwar
     return agent
 
 def initialize_dm_environment(env_type, task_name, agent_type, *args, **kwargs):
+    if env_type == 'ballcup':
+        env_type = 'ball_in_cup'
     env = suite.load(domain_name = env_type, task_name = task_name)  
     tmp_env = suite.load(domain_name = env_type, task_name = task_name)  
     action_space = env.action_spec()
@@ -398,6 +469,9 @@ def initialize_dm_environment(env_type, task_name, agent_type, *args, **kwargs):
         obs_size = obs_size + obs_space['com_velocity'].shape[0]
         obs_size = obs_size + 1 #+1 for height
         obs_size = obs_size + obs_space['torso_vertical'].shape[0]
+    elif env_type == 'ball_in_cup':
+        obs_size = obs_space['position'].shape[0] 
+        obs_size += obs_space['velocity'].shape[0]  
 
     action_size = action_space.shape[0] 
     #action_size = 2
@@ -1047,6 +1121,23 @@ if __name__ == '__main__':
                     Q = np.eye(obs_size) * 1e8
                     Qf = Q
                     R = np.eye(action_size) * 1e3
+                if args.env_type == 'ballcup':
+                    target = np.zeros(obs_size)
+                    target_pos = env.physics.named.data.site_xpos['target', ['x', 'z']]
+                    target_x = target_pos[0] 
+                    target_x_ind = 2
+                    target_z = target_pos[1] - 0.2 #account for offset of ball
+                    target_z_ind = 3
+                    target[target_x_ind] = target_x
+                    target[target_z_ind] = target_z
+                    target_inds = [target_x_ind, target_z_ind]
+                    #target, target_inds = env.get_target()
+                    Q = np.eye(obs_size) * 1e8
+                    Qf = Q
+                    R = np.eye(action_size) * 1e3
+                    #Q, Qf, R = agent.get_lqc_terms()
+                     
+
                 if args.env_type == 'walker':
                     #cost is manually set as walker height and
                     #center-of-mass horizontal velocity, conditioned

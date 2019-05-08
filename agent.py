@@ -666,7 +666,12 @@ class DDPMPCAgent(MPCAgent):
         self.eps_min = eps_min
         self.eps_decay = eps_decay
 
+    def update_target(self, env):
+        pass
+
     def evaluate(self, obs, *args, **kwargs) -> (np.array, None, None):
+        if hasattr(self, 'env'):
+            self.update_target(self.env) #for tasks with variable targets
         if random.random() < self.eps:
             self.eps = max(self.eps_min, self.eps - self.eps_decay)
             print("EPS ACTION: ", self.sample_action(obs))
@@ -1558,7 +1563,7 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
             X = [self.region_s[label][i] for i in ind]
             X_ = [self.region_s_[label][i] for i in ind]
             U = [self.region_a[label][i] for i in ind]
-            model.fit(X, X_, U, num_iters = 5, lr=1e0) #overfit on neighbors
+            model.fit(X, X_, U, num_iters = 5, lr=1e-1) #overfit on neighbors
         return model
 
 
@@ -1577,6 +1582,13 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                             obs_size, hdims = [100,], 
                             #activations = ['relu', None])
                             activations = [None, None], bias = False)
+                    #self.a_layer = PyTorchMLP(device, obs_size, 
+                    #        obs_size, hdims = [100,],
+                    #        activations = [None, None], bias = False)
+                    #self.b_layer = PyTorchMLP(device, action_size,
+                    #        obs_size, hdims = [100,], 
+                    #        #activations = ['relu', None])
+                    #        activations = [None, None], bias = False)
                 else:
                     self.a_layer = torch.nn.Linear(obs_size, obs_size, bias = False)
                     self.b_layer = torch.nn.Linear(action_size, obs_size, bias = False)
@@ -1656,7 +1668,7 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                     sample_a = [self.region_a[r][i] for i in indices]
                     sample_s_ = [self.region_s_[r][i] for i in indices]
                     #raise Exception("Only train on recent samples from each region? Otherwise, as regions DEVELOP, samples which no longer are representitive are left????")
-                    self.models[r].fit(sample_s, sample_s_, sample_a, num_iters = 5) #TODO: use ALL points in reg.
+                    self.models[r].fit(sample_s, sample_s_, sample_a, num_iters = 5, lr=1e-4) #TODO: use ALL points in reg.
 
 
 
