@@ -33,7 +33,7 @@ parser.add_argument("--save-rate", type=int, help="Iterations between saves", de
 #parser.add_argument("--save-location", type=str, help="Directory to save run details to.")
 
 parser.add_argument("--lib-type", type=str, help="Library type (DM, GYM, Control)", default='dm')
-parser.add_argument("--env-type", type=str, help="Environment type (walker, cartpole, humanoid, swimmer,...)", default = 'walker')
+parser.add_argument("--env-type", type=str, help="Environment type (walker, cartpole, humanoid, ballcup,...)", default = 'walker')
 parser.add_argument("--task-type", type=str, help="Environment-specific task (walk, stand, balance, swingup,...)", default = 'stand')
 
 parser.add_argument("--agent-type", type=str, help="Specify agent algorithm (policy [policy gradient], mbrl [model-based RL])", default = 'policy')
@@ -1147,8 +1147,8 @@ if __name__ == '__main__':
                     upright_ind = 0 #1st "orientation" corresponds
                     height_ind = 14 #height field corresponds
                     if args.task_type == 'stand':
-                        target[height_ind] = 2.0
-                        target[upright_ind] = 1.0 #TODO: confirm this
+                        target[height_ind] = 1.2
+                        target[upright_ind] = 1.5 #TODO: confirm this
                         target_inds = [height_ind, upright_ind]
                     else:
                         raise Exception("Extract COM for this env.")

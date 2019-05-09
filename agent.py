@@ -1389,7 +1389,7 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
         self.region_a = {} #label : [a]
         self.region_s_ = {} #label : [s_]
 
-        self.max_points = 2000
+        self.max_points = 1000
 
         self.a_shape = a_shape
         self.b_shape = b_shape
@@ -1576,10 +1576,10 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                 self.mlp_layer = mlp_layer
                 if self.mlp_layer:
                     self.a_layer = PyTorchMLP(device, obs_size, 
-                            obs_size, hdims = [100,],
+                            obs_size, hdims = [150,],
                             activations = [None, None], bias = False)
                     self.b_layer = PyTorchMLP(device, action_size,
-                            obs_size, hdims = [100,], 
+                            obs_size, hdims = [150,], 
                             #activations = ['relu', None])
                             activations = [None, None], bias = False)
                     #self.a_layer = PyTorchMLP(device, obs_size, 
@@ -1592,20 +1592,28 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                 else:
                     self.a_layer = torch.nn.Linear(obs_size, obs_size, bias = False)
                     self.b_layer = torch.nn.Linear(action_size, obs_size, bias = False)
+                    
+                self.a_layer.to(device)
+                self.b_layer.to(device)
                 self.dt = dt
                 
                 self.obs_size = obs_size
                 self.action_size = action_size
 
             def forward(self, x, u):
+                if self.device == torch.device('cuda'):
+                    x = torch.tensor(x, device = self.device)
+                    u = torch.tensor(u, device = self.device)
                 ax = self.a_layer(x)
                 bu = self.b_layer(u)
                 return ax + bu
 
             def forward_predict(self, x, u):
                 '''Return x' = x + dt(Ax + Bu)'''
+                if self.device == torch.device('cuda'):
+                    x = torch.tensor(x, device = self.device)
                 return x + self.dt * (self.forward(x, u))
-
+            
             def dx(self, xt, u = None, create_graph = True):
                 #dm_dx = grad(self.a_layer, xt, create_graph = create_graph)
                 #dm_dx = dm_dx.detach().numpy()
@@ -1615,7 +1623,10 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                 for l in (self.a_layer.layers):
                     #print("LAYER: ", l)
                     #print("Weight Shape", l.weight.shape) 
-                    weight = l.weight.detach().numpy()
+                    if self.device == torch.device('cuda'):
+                        weight = l.weight.cpu().detach().numpy()
+                    else:
+                        weight = l.weight.detach().numpy()
                     dm_dx = np.dot(weight, dm_dx) 
                 return dm_dx
 
@@ -1626,7 +1637,10 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                 for l in (self.b_layer.layers):
                     #print("LAYER: ", l)
                     #print("Weight Shape", l.weight.shape) 
-                    weight = l.weight.detach().numpy()
+                    if self.device == torch.device('cuda'):
+                        weight = l.weight.cpu().detach().numpy()
+                    else:
+                        weight = l.weight.detach().numpy()
                     dm_du = np.dot(weight, dm_du) 
                 return dm_du
 
@@ -1638,9 +1652,9 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                 #optimizer = torch.optim.SGD(self.parameters(), lr = lr, momentum = 1e-4)
                 optimizer = torch.optim.Adam(self.parameters(), lr = lr, betas = (0.9, 0.999))
                 for ii in range(num_iters): #we're overfitting...intentionally?
-                    loss = torch.tensor([0.0], requires_grad = False)
+                    loss = torch.tensor([0.0], requires_grad = False).to(self.device)
                     for i in range(len(X)):
-                        s_ = torch.tensor(X_[i]).float()
+                        s_ = torch.tensor(X_[i]).float().to(self.device)
                         s = torch.tensor(X[i]).float()
                         a = torch.tensor(U[i]).float()
                         prediction = self.forward_predict(s, a)
@@ -1648,6 +1662,7 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                     loss.backward()
                     optimizer.step()
                     optimizer.zero_grad()
+
 
         return PyTorchLinearModel(self.device, self.dt, self.a_shape[0], self.b_shape[1], self.mlp_layer) 
     
@@ -1660,15 +1675,15 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                     print("Constructing model!")
                     self.models[r] = self.construct_model()
                 print("Training model!")
-                for training_iter in range(10):
+                for training_iter in range(5):
                     ##Randomly sample some points in region
-                    num_samples = 128
+                    num_samples = 64
                     indices = random.sample(range(len(self.region_s[r]) - 1), min(num_samples, len(self.region_s[r]) - 1))
                     sample_s = [self.region_s[r][i] for i in indices]
                     sample_a = [self.region_a[r][i] for i in indices]
                     sample_s_ = [self.region_s_[r][i] for i in indices]
                     #raise Exception("Only train on recent samples from each region? Otherwise, as regions DEVELOP, samples which no longer are representitive are left????")
-                    self.models[r].fit(sample_s, sample_s_, sample_a, num_iters = 5, lr=1e-4) #TODO: use ALL points in reg.
+                    self.models[r].fit(sample_s, sample_s_, sample_a, num_iters = 5, lr=5e-2) #TODO: use ALL points in reg.
 
 
 
