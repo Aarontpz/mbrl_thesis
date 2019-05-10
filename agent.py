@@ -1369,11 +1369,11 @@ class LocalModel(Model):
         as necessary.'''
         pass
 
-class LinearClusterLocalModel(LocalModel, LinearSystemModel):
+class ClusterLocalModel(LocalModel):
     '''Utilize online clustering algorithm (Birch clustering,
     which is proposed as an alternative to mini-batch k-means)
     to group points spatially.'''
-    def __init__(self, a_shape, b_shape, neighbors = 0,
+    def __init__(self, neighbors = 0,
             n_clusters = 50,
             compute_labels = True,
             *args, **kwargs):
@@ -1391,52 +1391,12 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
 
         self.max_points = 1000
 
-        self.a_shape = a_shape
-        self.b_shape = b_shape
-        
-        self.fit_b = True
-
         self.update_clusters = True
         
         self.neighbors = neighbors
         self.region_knn = {}
 
         self.prev_region = None
-
-    def update(self, xt):
-        if len(xt.shape) < 2:
-            xt = xt.reshape(-1, xt.size)
-        if len(self.models) == 0:
-            #self.A = np.ndarray(self.a_shape)
-            #self.B = np.ndarray(self.b_shape)
-            self.initialize_model_free_arrays()
-        else:
-            #if xt.shape[1] > xt.shape[0]:
-            #    xt = xt.T
-            region = self.predict_cluster(xt.T)
-            #print("PREV REGION: %s REGION: %s" % (self.prev_region, region))
-            if self.prev_region is not None:
-                if region == self.prev_region:
-                    return self.A, self.B
-            self.prev_region = region
-
-            model = self.get_local_model(xt)
-            if model is None: #TODO: temporary measure
-                print("INVALID xt (no label / no matching model)")
-                #raise Exception("REEEE fix this") #TODO TODO TODO TODO
-                self.initialize_model_free_arrays()
-            else:
-                self.A, self.B = self.get_linear_model(model, xt)
-        #self.A += np.eye(self.A.shape[0])
-        #self.B += np.eye(self.A.shape[0], M=self.B.shape[1])
-        #input()
-        return self.A, self.B
-
-
-    def initialize_model_free_arrays(self):
-        self.A = np.random.rand(*self.a_shape)
-        self.B = np.random.rand(*self.b_shape)
-        #self.B = np.ones(self.b_shape)
 
     def get_local_model(self, x):
         if x.shape[0] > x.shape[1]: #this is a next-level disgusting hack
@@ -1495,14 +1455,9 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
     def fit_model(self, X, X_, U = None):
         pass     
 
-    @abc.abstractmethod
-    def get_linear_model(self, model, xt = None, ut = None) -> (np.ndarray, np.ndarray):
-        '''Retrieve local parameters from local model'''
-        pass
-
     def fit(self, X, X_, U = None):
         '''Fit data into existing model, updating clusters and 
-        linear models as necessary. If only least-squares approximation
+        models as necessary. If only least-squares approximation
         (via sklearn) is used, no need to run trainer in this step.
         ''' 
         self.fit_cluster(X, X_, U)
@@ -1522,6 +1477,250 @@ class LinearClusterLocalModel(LocalModel, LinearSystemModel):
         #this should be all "Online", not brute-forcey
         return labels
 
+class ForwardClusterLocalModel(ClusterLocalModel, GeneralSystemModel):
+    '''Express system dynamics as locally "control affine" within regions
+    determined by cluster local model.'''
+    def __init__(self, f_shape, g_shape, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.f_shape = f_shape
+        self.g_shape = g_shape
+    
+    def update(self, xt):
+        if len(xt.shape) < 2:
+            xt = xt.reshape(-1, xt.size)
+        if len(self.models) == 0:
+            #self.A = np.ndarray(self.a_shape)
+            #self.B = np.ndarray(self.b_shape)
+            self.initialize_model_free_arrays()
+        else:
+            #if xt.shape[1] > xt.shape[0]:
+            #    xt = xt.T
+            region = self.predict_cluster(xt.T)
+            #print("PREV REGION: %s REGION: %s" % (self.prev_region, region))
+            if self.prev_region is not None:
+                if region == self.prev_region:
+                    return self.f, self.g
+            self.prev_region = region
+
+            model = self.get_local_model(xt)
+            if model is None: #TODO: temporary measure
+                print("INVALID xt (no label / no matching model)")
+                #raise Exception("REEEE fix this") #TODO TODO TODO TODO
+                self.initialize_model_free_arrays()
+            else:
+                self.f, self.g = self.get_forward_model(model, xt)
+        return self.f, self.g
+
+
+    def initialize_model_free_arrays(self):
+        self.f = np.random.rand(*self.f_shape)
+        self.g = np.random.rand(*self.g_shape)
+        #self.B = np.ones(self.b_shape)
+
+    @abc.abstractmethod
+    def fit_model(self, X, X_, U = None):
+        pass     
+
+    @abc.abstractmethod
+    def get_linear_model(self, model, xt = None, ut = None) -> (np.ndarray, np.ndarray):
+        '''Retrieve local parameters from local model'''
+        pass
+
+
+class LinearClusterLocalModel(ClusterLocalModel, LinearSystemModel):
+    '''Express system dynamics as locally linear within regions determined by
+    cluster local model.'''
+    def __init__(self, a_shape, b_shape,
+            *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.a_shape = a_shape
+        self.b_shape = b_shape
+        self.fit_b = True
+
+    def update(self, xt):
+        if len(xt.shape) < 2:
+            xt = xt.reshape(-1, xt.size)
+        if len(self.models) == 0:
+            #self.A = np.ndarray(self.a_shape)
+            #self.B = np.ndarray(self.b_shape)
+            self.initialize_model_free_arrays()
+        else:
+            #if xt.shape[1] > xt.shape[0]:
+            #    xt = xt.T
+            region = self.predict_cluster(xt.T)
+            #print("PREV REGION: %s REGION: %s" % (self.prev_region, region))
+            if self.prev_region is not None:
+                if region == self.prev_region:
+                    return self.A, self.B
+            self.prev_region = region
+
+            model = self.get_local_model(xt)
+            if model is None: #TODO: temporary measure
+                print("INVALID xt (no label / no matching model)")
+                #raise Exception("REEEE fix this") #TODO TODO TODO TODO
+                self.initialize_model_free_arrays()
+            else:
+                self.A, self.B = self.get_linear_model(model, xt)
+        #self.A += np.eye(self.A.shape[0])
+        #self.B += np.eye(self.A.shape[0], M=self.B.shape[1])
+        #input()
+        return self.A, self.B
+
+
+    def initialize_model_free_arrays(self):
+        self.A = np.random.rand(*self.a_shape)
+        self.B = np.random.rand(*self.b_shape)
+        #self.B = np.ones(self.b_shape)
+
+    @abc.abstractmethod
+    def fit_model(self, X, X_, U = None):
+        pass     
+
+    @abc.abstractmethod
+    def get_linear_model(self, model, xt = None, ut = None) -> (np.ndarray, np.ndarray):
+        '''Retrieve local parameters from local model'''
+        pass
+
+class PyTorchForwardClusterLocalModel(ForwardClusterLocalModel):
+    '''Utilize online clustering algorithm (Birch clustering,
+    which is proposed as an alternative to mini-batch k-means)
+    to group points spatially, apply linear fit (SINGLE
+    LAYER PERCEPTRON, representing linear function) 
+    to each cluster in order to create piecewise-linear 
+    model of system dynamics.'''
+    def __init__(self, mlp_layer, device, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.device = device
+        self.mlp_layer = mlp_layer
+
+    def get_forward_model(self, model, xt = None, ut = None):
+        '''Assumes local models are "forward dynamics", where F 
+        and G and calculated seperately and are represented by
+        properly-sized matrices.'''
+        f, g = model.forward(xt) 
+        #raise Exception("Todo: conclude this for GeneralModels")
+        self.f = f.cpu().detach().numpy()
+        self.g = g.cpu().detach().numpy()
+        #self.f.resize(self.module.a_shape)
+        #self.g.resize(self.module.b_shape)
+        #print("f: ", self.f.shape)
+        #print("g: ", self.g.shape)
+        return self.f, self.g
+
+    def get_local_model(self, x):
+        if x.shape[0] > x.shape[1]: #this is a next-level disgusting hack
+            x = x.T
+        model = super().get_local_model(x)
+        label = self.cluster.predict(x)[0]
+        if self.neighbors > 0 and label in self.region_knn.keys(): #train model on local neighbors
+            dist, ind = self.region_knn[label].query(x, k=self.neighbors)
+            ind = ind[0] #nested list for some reason...
+            X = [self.region_s[label][i] for i in ind]
+            X_ = [self.region_s_[label][i] for i in ind]
+            U = [self.region_a[label][i] for i in ind]
+            model.fit(X, X_, U, num_iters = 5, lr=1e-1) #overfit on neighbors
+        return model
+
+
+    def construct_model(self):
+        class PyTorchForwardModule(torch.nn.Module):
+            def __init__(self, device, dt, obs_size, action_size, mlp_layer = True):
+                super().__init__()
+                self.device = device
+                
+                self.mlp_layer = mlp_layer
+                if self.mlp_layer:
+                    self.f_layer = PyTorchMLP(device, obs_size, 
+                            obs_size, hdims = [150,],
+                            activations = [None, None], bias = True)
+                    self.g_layer = PyTorchMLP(device, obs_size,
+                            obs_size * action_size, hdims = [300,], 
+                            #activations = ['relu', None])
+                            activations = ['relu', None], bias = True)
+                    #self.a_layer = PyTorchMLP(device, obs_size, 
+                    #        obs_size, hdims = [100,],
+                    #        activations = [None, None], bias = False)
+                    #self.b_layer = PyTorchMLP(device, action_size,
+                    #        obs_size, hdims = [100,], 
+                    #        #activations = ['relu', None])
+                    #        activations = [None, None], bias = False)
+                else:
+                    self.f_layer = torch.nn.Linear(obs_size, obs_size, bias = False)
+                    self.g_layer = torch.nn.Linear(action_size, obs_size, bias = False)
+                    
+                self.f_layer.to(device)
+                self.g_layer.to(device)
+                self.dt = dt
+                
+                self.obs_size = obs_size
+                self.action_size = action_size
+
+            def forward(self, x, u=None):
+                #print("u: ", u)
+                if len(x.shape) > 1:
+                    x = x.flatten()
+                if self.device == torch.device('cuda'):
+                    x = torch.tensor(x, device = self.device).float()
+                #print("X: ", x.shape)
+                #print("Weight: ", self.f_layer.layers[0].weight.shape)
+                f = self.f_layer(x)
+                g = self.g_layer(x)
+                g = g.reshape((self.obs_size, self.action_size))
+                return f, g
+
+            def forward_predict(self, x, u = None):
+                '''Return x' = x + dt(Ax + Bu)'''
+                if self.device == torch.device('cuda'):
+                    x = torch.tensor(x, device = self.device)
+                    u = torch.tensor(u, device = self.device)
+                f, g = self.forward(x, u)
+                #print("f: ", f)
+                #print("g: ", g)
+                #forward = f + g
+                forward = f + torch.mv(g, u)
+                #print("Forward: ", forward.shape)
+                return x + self.dt * (forward)
+            
+            def fit(self, X, X_, U, num_iters = 20, lr=2e-3):
+                '''We're being sloppy here. This is a training step to
+                allow this to work with the existing LocalLinearModel trainer
+                '''
+                criterion = torch.nn.MSELoss()
+                #optimizer = torch.optim.SGD(self.parameters(), lr = lr, momentum = 1e-4)
+                optimizer = torch.optim.Adam(self.parameters(), lr = lr, betas = (0.9, 0.999))
+                for ii in range(num_iters): #we're overfitting...intentionally?
+                    loss = torch.tensor([0.0], requires_grad = False).to(self.device)
+                    for i in range(len(X)):
+                        s_ = torch.tensor(X_[i]).float().to(self.device)
+                        s = torch.tensor(X[i]).float()
+                        a = torch.tensor(U[i]).float()
+                        prediction = self.forward_predict(s, a)
+                        loss += criterion(s_, prediction)    
+                    loss.backward()
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+
+        return PyTorchForwardModule(self.device, self.dt, self.f_shape[0], self.g_shape[1], self.mlp_layer) 
+    
+    def fit_model(self, X, X_, U = None):
+        #Multiple samples here, instead of overfitting in model.fit?
+        for r in self.region_s.keys(): #update each region's model
+            print("Training region: %s" % (r))
+            if len(self.region_s[r]) > 1: #cannot fit on empty/1 samples
+                if r not in self.models.keys():
+                    print("Constructing model!")
+                    self.models[r] = self.construct_model()
+                print("Training model!")
+                for training_iter in range(5):
+                    ##Randomly sample some points in region
+                    num_samples = 64
+                    indices = random.sample(range(len(self.region_s[r]) - 1), min(num_samples, len(self.region_s[r]) - 1))
+                    sample_s = [self.region_s[r][i] for i in indices]
+                    sample_a = [self.region_a[r][i] for i in indices]
+                    sample_s_ = [self.region_s_[r][i] for i in indices]
+                    #raise Exception("Only train on recent samples from each region? Otherwise, as regions DEVELOP, samples which no longer are representitive are left????")
+                    self.models[r].fit(sample_s, sample_s_, sample_a, num_iters = 5, lr=5e-2) #TODO: use ALL points in reg.
 
 class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
     '''Utilize online clustering algorithm (Birch clustering,
@@ -1568,7 +1767,7 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
 
 
     def construct_model(self):
-        class PyTorchLinearModel(torch.nn.Module):
+        class PyTorchLinearModule(torch.nn.Module):
             def __init__(self, device, dt, obs_size, action_size, mlp_layer = True):
                 super().__init__()
                 self.device = device
@@ -1664,7 +1863,7 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                     optimizer.zero_grad()
 
 
-        return PyTorchLinearModel(self.device, self.dt, self.a_shape[0], self.b_shape[1], self.mlp_layer) 
+        return PyTorchLinearModule(self.device, self.dt, self.a_shape[0], self.b_shape[1], self.mlp_layer) 
     
     def fit_model(self, X, X_, U = None):
         #Multiple samples here, instead of overfitting in model.fit?

@@ -52,7 +52,7 @@ parser.add_argument("--ddp-mode", type=str, help="Determines 'DDP' / control met
 parser.add_argument("--local-linear-model", type=str, help="Specifies local-linear model type (if any)", default = 'pytorch')
 parser.add_argument("--local-clusters", type=int, help="Number of clusters for local model", default = 100)
 parser.add_argument("--local-neighbors", type=int, help="Number of neighbors to overfit on for local model", default = 0)
-parser.add_argument("--global-model", type=str, help="Specifies glocal model, if any", default = None)
+parser.add_argument("--model-type", type=str, help="Specifies model mode (linear vs forward)", default = 'linear')
 
 parser.add_argument("--smc-switching-function", type=str, default='arctan')
 
@@ -1038,11 +1038,11 @@ if __name__ == '__main__':
                 DT = env.control_timestep()
             
             print("Local Linear Model: ", args.local_linear_model)
-            print("Global Model: ", args.global_model)
+            print("Model Mode: ", args.model_type)
             dataset = DAgger(recent_prob = args.dataset_recent_prob, aggregate_examples = False, shuffle = True)
             if args.local_linear_model is not None:
                 dataset = Dataset(aggregate_examples = False, shuffle = True)
-            if args.global_model == 'linear':
+            if args.model_type == 'linear':
                 pytorch_class = PyTorchLinearSystemDynamicsLinearModule
                 pytorch_model = PyTorchLinearSystemModel 
             else:
@@ -1075,13 +1075,22 @@ if __name__ == '__main__':
                         compute_labels = True, 
                         dt = DT)
             elif args.local_linear_model == 'pytorch': 
-                system_model = PyTorchLinearClusterLocalModel(True, 
-                        device,
-                        (obs_size, obs_size), (obs_size, action_size),
-                        n_clusters = args.local_clusters, 
-                        neighbors = args.local_neighbors,
-                        compute_labels = True, 
-                        dt = DT)
+                if args.model_type == 'linear':
+                    system_model = PyTorchLinearClusterLocalModel(True, 
+                            device,
+                            (obs_size, obs_size), (obs_size, action_size),
+                            n_clusters = args.local_clusters, 
+                            neighbors = args.local_neighbors,
+                            compute_labels = True, 
+                            dt = DT)
+                else:
+                    system_model = PyTorchForwardClusterLocalModel(True, 
+                            device,
+                            (obs_size, 1), (obs_size, action_size),
+                            n_clusters = args.local_clusters, 
+                            neighbors = args.local_neighbors,
+                            compute_labels = True, 
+                            dt = DT)
             else:
                 if pytorch_class == PyTorchForwardDynamicsLinearModule:
                     pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
@@ -1148,7 +1157,7 @@ if __name__ == '__main__':
                     height_ind = 14 #height field corresponds
                     if args.task_type == 'stand':
                         target[height_ind] = 1.2
-                        target[upright_ind] = 1.5 #TODO: confirm this
+                        target[upright_ind] = 1.0 #TODO: confirm this
                         target_inds = [height_ind, upright_ind]
                     else:
                         raise Exception("Extract COM for this env.")

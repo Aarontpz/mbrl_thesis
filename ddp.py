@@ -249,7 +249,7 @@ class GeneralSystemModel(Model):
     '''Model a system as a "general" relationship which assumes only
     a linear control relationship: x' = f(x,t) + g(x,t)*u, where
     f has no guarentees on linearity.'''
-    def __init__(self, f : np.ndarray, g : np.ndarray):
+    def __init__(self, f : np.ndarray = None, g : np.ndarray = None):
         self.f = f
         self.g = g
     def d_dx(self, xt, ut=None, dt=None, *args, **kwargs):
@@ -979,7 +979,8 @@ class GD_SMC(SMC):
             if len(hx.shape) < 1:
                 hx = hx[..., np.newaxis]
             gx = self.model.g.copy()
-
+        print("hx: ", hx.shape)
+        print("gx: ", gx.shape)
         i = 0
         while (umax < mag).any() and i < 20: #or .any()?!
             for c in range(sigma.shape[1]):
