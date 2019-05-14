@@ -74,7 +74,7 @@ parser.add_argument('--value-momentum', type=float, default=1e-4)
 
 ##** NN-specific arguments (agent INDEPENDENT, IMPORTANT!)
 parser.add_argument('--mlp-activations', nargs='+', type=str, default=[None])
-parser.add_argument('--mlp-hdims', nargs='*', type=int, default=[])
+parser.add_argument('--mlp-hdims', nargs='+', type=int, default=[])
 parser.add_argument('--mlp-outdim', type=int, default = 500)
 parser.add_argument('--lr', type=float, default=1e-3, help="NN Learning Rate")
 parser.add_argument('--momentum', type=float, default=1e-4)
@@ -1099,6 +1099,7 @@ if __name__ == '__main__':
                     pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
                         activations = mlp_activations, initializer = mlp_initializer).to(device)
                 system_model = pytorch_model(pytorch_module, DT) 
+                print("System Module: ", pytorch_module)
 
             #TODO TODO: Neural Network generation of quadratic cost
             #function, using RL
@@ -1151,6 +1152,7 @@ if __name__ == '__main__':
                     #cost is manually set as walker height and
                     #center-of-mass horizontal velocity, conditioned
                     #on task type
+                    #raise Exception("Hip angle != 0?! Is this...a problem for all envs? Can't assume 0,0 is valid...")
                     print("ENV TYPE IS WALKER")
                     target = np.zeros(obs_size)
                     upright_ind = 0 #1st "orientation" corresponds

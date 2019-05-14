@@ -16,6 +16,7 @@ import math
 from functools import reduce
 
 from ddp import *
+from model import *
 
 import sklearn.neighbors as neighbors 
 from sklearn import linear_model
@@ -145,6 +146,7 @@ class Agent:
         self.terminal_history[-1] = 1
         self.reward_history[-1] = self.terminal_penalty
         avg_reward = sum(self.reward_history) / len(self.reward_history)
+        #avg_reward = sum(self.reward_history)
         self.net_reward_history.append(avg_reward)
 
     def reset_histories(self):
@@ -1388,8 +1390,8 @@ class ClusterLocalModel(LocalModel):
         self.region_s = {} #label : [s]
         self.region_a = {} #label : [a]
         self.region_s_ = {} #label : [s_]
-
-        self.max_points = 1000
+        
+        self.max_points = 2000
 
         self.update_clusters = True
         
@@ -1401,9 +1403,9 @@ class ClusterLocalModel(LocalModel):
     def get_local_model(self, x):
         if x.shape[0] > x.shape[1]: #this is a next-level disgusting hack
             x = x.T
-        print("X shape (glm): ", x.shape)
+        #print("X shape (glm): ", x.shape)
         label = self.cluster.predict(x)[0]
-        print("LABEL: ", label)
+        #print("LABEL: ", label)
         #print("Models: ", self.models.keys())
         if label in self.models.keys():
             return self.models[label]
@@ -1484,6 +1486,8 @@ class ForwardClusterLocalModel(ClusterLocalModel, GeneralSystemModel):
         super().__init__(*args, **kwargs)
         self.f_shape = f_shape
         self.g_shape = g_shape
+        self.max_points = 4000
+
     
     def update(self, xt):
         if len(xt.shape) < 2:
@@ -1509,6 +1513,8 @@ class ForwardClusterLocalModel(ClusterLocalModel, GeneralSystemModel):
                 self.initialize_model_free_arrays()
             else:
                 self.f, self.g = self.get_forward_model(model, xt)
+                print("f: %s" % (self.f))
+                #input()
         return self.f, self.g
 
 
@@ -1592,20 +1598,19 @@ class PyTorchForwardClusterLocalModel(ForwardClusterLocalModel):
         super().__init__(*args, **kwargs)
         self.device = device
         self.mlp_layer = mlp_layer
+        self.linear_g = True
 
     def get_forward_model(self, model, xt = None, ut = None):
         '''Assumes local models are "forward dynamics", where F 
         and G and calculated seperately and are represented by
         properly-sized matrices.'''
         f, g = model.forward(xt) 
-        #raise Exception("Todo: conclude this for GeneralModels")
-        self.f = f.cpu().detach().numpy()
-        self.g = g.cpu().detach().numpy()
-        #self.f.resize(self.module.a_shape)
-        #self.g.resize(self.module.b_shape)
-        #print("f: ", self.f.shape)
-        #print("g: ", self.g.shape)
-        return self.f, self.g
+        f = f.cpu().detach().numpy()
+        if self.linear_g:
+            g = model.du(xt, ut)
+        else:
+            g = g.cpu().detach().numpy()
+        return f, g
 
     def get_local_model(self, x):
         if x.shape[0] > x.shape[1]: #this is a next-level disgusting hack
@@ -1624,29 +1629,30 @@ class PyTorchForwardClusterLocalModel(ForwardClusterLocalModel):
 
     def construct_model(self):
         class PyTorchForwardModule(torch.nn.Module):
-            def __init__(self, device, dt, obs_size, action_size, mlp_layer = True):
+            def __init__(self, linear_g, mlp_layer, device, dt, obs_size, action_size):
                 super().__init__()
                 self.device = device
                 
                 self.mlp_layer = mlp_layer
+                self.linear_g = linear_g
                 if self.mlp_layer:
                     self.f_layer = PyTorchMLP(device, obs_size, 
-                            obs_size, hdims = [150,],
-                            activations = [None, None], bias = True)
-                    self.g_layer = PyTorchMLP(device, obs_size,
-                            obs_size * action_size, hdims = [300,], 
-                            #activations = ['relu', None])
+                            obs_size, hdims = [100],
                             activations = ['relu', None], bias = True)
-                    #self.a_layer = PyTorchMLP(device, obs_size, 
-                    #        obs_size, hdims = [100,],
-                    #        activations = [None, None], bias = False)
-                    #self.b_layer = PyTorchMLP(device, action_size,
-                    #        obs_size, hdims = [100,], 
-                    #        #activations = ['relu', None])
-                    #        activations = [None, None], bias = False)
                 else:
                     self.f_layer = torch.nn.Linear(obs_size, obs_size, bias = False)
-                    self.g_layer = torch.nn.Linear(action_size, obs_size, bias = False)
+                if self.mlp_layer and not self.linear_g:
+                    self.g_layer = PyTorchMLP(device, obs_size,
+                            obs_size * action_size, hdims = [100, 300,], 
+                            #activations = ['relu', None])
+                            activations = [None, None], bias = True)
+                else:
+                    self.g_layer = PyTorchMLP(device, action_size,
+                            #obs_size, hdims = [100,], 
+                            #activations = [None, None], bias = False)
+                            obs_size, hdims = [], 
+                            activations = [None], bias = False)
+                    #self.g_layer = torch.nn.Linear(action_size, obs_size, bias = False)
                     
                 self.f_layer.to(device)
                 self.g_layer.to(device)
@@ -1654,6 +1660,10 @@ class PyTorchForwardClusterLocalModel(ForwardClusterLocalModel):
                 
                 self.obs_size = obs_size
                 self.action_size = action_size
+                
+                #self.optimizer = torch.optim.SGD(self.parameters(), lr = lr, momentum = 1e-4)
+                self.optimizer = torch.optim.Adam(self.parameters(), lr = 1e-3, betas = (0.9, 0.999))
+                
 
             def forward(self, x, u=None):
                 #print("u: ", u)
@@ -1664,8 +1674,11 @@ class PyTorchForwardClusterLocalModel(ForwardClusterLocalModel):
                 #print("X: ", x.shape)
                 #print("Weight: ", self.f_layer.layers[0].weight.shape)
                 f = self.f_layer(x)
-                g = self.g_layer(x)
-                g = g.reshape((self.obs_size, self.action_size))
+                if self.linear_g:
+                    g = None
+                else:
+                    g = self.g_layer(x)
+                    g = g.reshape((self.obs_size, self.action_size))
                 return f, g
 
             def forward_predict(self, x, u = None):
@@ -1674,34 +1687,52 @@ class PyTorchForwardClusterLocalModel(ForwardClusterLocalModel):
                     x = torch.tensor(x, device = self.device)
                     u = torch.tensor(u, device = self.device)
                 f, g = self.forward(x, u)
+                if self.linear_g:
+                    g = self.g_layer(u)
+                    forward = f + g
+                else:
+                    forward = f + torch.mv(g, u)
                 #print("f: ", f)
                 #print("g: ", g)
-                #forward = f + g
-                forward = f + torch.mv(g, u)
                 #print("Forward: ", forward.shape)
-                return x + self.dt * (forward)
+                #return x + self.dt * (forward)
+                return x + torch.mul(self.dt, (forward))
+            
+            def du(self, xt, u = None, create_graph = True):
+                #dm_du = grad(self.b_layer, xt, create_graph = True)
+                #dm_du = dm_du.detach().numpy()
+                dm_du = np.eye(self.action_size)
+                for l in (self.g_layer.layers):
+                    #print("LAYER: ", l)
+                    #print("Weight Shape", l.weight.shape) 
+                    if self.device == torch.device('cuda'):
+                        weight = l.weight.cpu().detach().numpy()
+                    else:
+                        weight = l.weight.detach().numpy()
+                    dm_du = np.dot(weight, dm_du) 
+                return dm_du
             
             def fit(self, X, X_, U, num_iters = 20, lr=2e-3):
                 '''We're being sloppy here. This is a training step to
                 allow this to work with the existing LocalLinearModel trainer
                 '''
                 criterion = torch.nn.MSELoss()
-                #optimizer = torch.optim.SGD(self.parameters(), lr = lr, momentum = 1e-4)
-                optimizer = torch.optim.Adam(self.parameters(), lr = lr, betas = (0.9, 0.999))
                 for ii in range(num_iters): #we're overfitting...intentionally?
                     loss = torch.tensor([0.0], requires_grad = False).to(self.device)
                     for i in range(len(X)):
                         s_ = torch.tensor(X_[i]).float().to(self.device)
                         s = torch.tensor(X[i]).float()
                         a = torch.tensor(U[i]).float()
+                        #print("s: %s \n a: %s s_: %s" % (s, a, s_))
                         prediction = self.forward_predict(s, a)
+                        #print("prediction: ", prediction)
                         loss += criterion(s_, prediction)    
                     loss.backward()
-                    optimizer.step()
-                    optimizer.zero_grad()
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
 
 
-        return PyTorchForwardModule(self.device, self.dt, self.f_shape[0], self.g_shape[1], self.mlp_layer) 
+        return PyTorchForwardModule(self.linear_g, self.mlp_layer, self.device, self.dt, self.f_shape[0], self.g_shape[1]) 
     
     def fit_model(self, X, X_, U = None):
         #Multiple samples here, instead of overfitting in model.fit?
@@ -1712,7 +1743,7 @@ class PyTorchForwardClusterLocalModel(ForwardClusterLocalModel):
                     print("Constructing model!")
                     self.models[r] = self.construct_model()
                 print("Training model!")
-                for training_iter in range(5):
+                for training_iter in range(8):
                     ##Randomly sample some points in region
                     num_samples = 64
                     indices = random.sample(range(len(self.region_s[r]) - 1), min(num_samples, len(self.region_s[r]) - 1))
@@ -1720,7 +1751,7 @@ class PyTorchForwardClusterLocalModel(ForwardClusterLocalModel):
                     sample_a = [self.region_a[r][i] for i in indices]
                     sample_s_ = [self.region_s_[r][i] for i in indices]
                     #raise Exception("Only train on recent samples from each region? Otherwise, as regions DEVELOP, samples which no longer are representitive are left????")
-                    self.models[r].fit(sample_s, sample_s_, sample_a, num_iters = 5, lr=5e-2) #TODO: use ALL points in reg.
+                    self.models[r].fit(sample_s, sample_s_, sample_a, num_iters = 1, lr=1e-3) #TODO: use ALL points in reg.
 
 class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
     '''Utilize online clustering algorithm (Birch clustering,
@@ -1764,7 +1795,6 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
             U = [self.region_a[label][i] for i in ind]
             model.fit(X, X_, U, num_iters = 5, lr=1e-1) #overfit on neighbors
         return model
-
 
     def construct_model(self):
         class PyTorchLinearModule(torch.nn.Module):
@@ -1811,7 +1841,8 @@ class PyTorchLinearClusterLocalModel(LinearClusterLocalModel):
                 '''Return x' = x + dt(Ax + Bu)'''
                 if self.device == torch.device('cuda'):
                     x = torch.tensor(x, device = self.device)
-                return x + self.dt * (self.forward(x, u))
+                #return x + self.dt * (self.forward(x, u))
+                return x + torch.mul(self.dt, (self.forward(x, u)))
             
             def dx(self, xt, u = None, create_graph = True):
                 #dm_dx = grad(self.a_layer, xt, create_graph = create_graph)

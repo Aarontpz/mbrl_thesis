@@ -10,6 +10,8 @@ from mpl_toolkits.mplot3d import Axes3D
 
 from math import copysign
 
+from model import *
+
 class Environment:
     __metaclass__ = abc.ABCMeta
     def __init__(self,):
@@ -408,40 +410,35 @@ class InvertedPendulumEnvironment(ControlEnvironment):
                 yy.append(y[j])
                 if dx_model is not None:
                     xt = np.array([[x[i], y[j]]]).T
-                    dx = dx_model.update(xt)[0]
-                    dx = np.dot(dx,xt)
-                    #print("Square: ", np.diag(np.concatenate((dx.T, dx.T))))
-                    if len(dx.shape) > 1:
-                        z.append(dx)
-                        #if dx.shape[0] == dx.shape[1]:
-                        #    z.append(dx) #linear / Jacobian
-                        #else:
-                        #z.append(np.dot(np.eye(dx.shape[0]), dx)) #vector rep. transition
-                    else:
-                        z.append(np.diag(dx)) #vector rep. transition
-                        #z.append(np.dot(np.eye(dx.shape[0]), dx)) #vector rep. transition
+                    print("Xt: ", xt)
+                    if issubclass(type(dx_model), LinearSystemModel):
+                        A, B = dx_model.update(xt)
+                        dx = np.dot(A, xt)
+                        z.append(dx.copy())
+                    elif issubclass(type(dx_model), GeneralSystemModel):
+                        f, g = dx_model.update(xt)
+                        print("f: ", f)
+                        z.append((f.copy())) 
                 else:
-                    z.append(np.diag(self.dx(np.array([x[i], y[j]]))))
+                    dx = self.dx(np.array([x[i], y[j]]))
+                    print("Dx: ", dx)
+                    print("Diag: ", np.diag(dx))
+                    z.append(dx)
+                    #z.append(np.diag(self.dx(np.array([x[i], y[j]]))))
+                    #z.append(np.diag(dx))
                     #z.append(self.d_dx(np.array([x[i], y[j]])))
                     #z.append(np.array([[np.sin(x[i]), 0], [0, np.cos(y[j])]]))
         z = np.array(z)
         print("Z: ", z.shape)
-        eig = z
-        if dx_model is None:
-            eig = np.linalg.eig(np.array(z))
-        #print("Eig: ", len(eig))
-        #print("EIG[0]: ", eig[0][:,:])
-        #print("Eig[0][0,0]:", eig[0][0,0])
-        #print("Eig[0][0, 1]:", eig[0][0,1])
         if dx_model is not None: #temporary measure, we have TOO MANY figures
             plt.figure(54)
         else:
             plt.figure(55)
         plt.clf()
-        if dx_model is None:
-            plt.quiver(xx, yy, eig[0][:,0], eig[0][:,1])
-        else:
-            plt.quiver(xx, yy, z[:,0], z[:,1])
+        #if dx_model is None:
+        #    plt.quiver(xx, yy, eig[0][:,0], eig[0][:,1])
+        #else:
+        plt.quiver(xx, yy, z[:,0], z[:,1])
         plt.title("%s Quiver Plot" % (self.get_environment_name()))
         plt.xlabel("Radians")
         plt.ylabel("Radians / s")
@@ -755,10 +752,10 @@ if __name__ == '__main__':
         dt = 1e-2
         ARCTAN = False
         TSSMC = False
-        ISMC = False
+        ISMC = True
         #ucoeff = 1.5
         ucoeff = 2
-        umax = 2.0e1
+        umax = 1.5e1
         umin = -umax
         sigma_base = np.array([[1e0, 1e0, 1e0, 1e0]]).T #sliding surface definition
         sigma = sigma_base.copy() #sliding surface definition
@@ -767,7 +764,7 @@ if __name__ == '__main__':
         else:
             switch = lambda s: np.sign(s)
         target = np.array([[0.0, 0, 0.0, 0]]).T
-        x0 = np.array([[-0, -.0, np.pi/4, -0.0]]).T
+        x0 = np.array([[-0, -.0, np.pi/8, -0.0]]).T
         #x0 = np.array([[-0, -.0, 0.0001, -1.8]]).T
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
@@ -864,14 +861,15 @@ if __name__ == '__main__':
                 s = np.dot(sigma.T, x)
                 sign = np.sign(s)
                 #control = -umax * mag * sign
-                control = umax * sign
-                control += -(1/(np.dot(sigma.T, gx))) * (np.dot(sigma.T, hx))
+                control = -umax * sign
+                #control += -(1/(np.dot(sigma.T, gx))) * (np.dot(sigma.T, hx))
                 control = np.clip(control, -umax, umax)
             else:
                 ## FOSMC
-                #sx = np.dot(sigma.T, x_)
+                sx = np.dot(sigma.T, x_)
                 #u = lambda sigma, x: -ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * switch(np.dot(sigma.T, x))
-                u = lambda sigma, x: umax * switch(np.dot(sigma.T, x))
+                u = lambda sigma, x: -umax * switch(np.dot(sigma.T, x))
+                #u = lambda sigma, x: -umax * switch(sx)
                 #u = lambda sigma, x: umax * (1/(np.dot(sigma.T, gx))) * (np.abs(np.dot(sigma.T, hx))) * switch(np.dot(sigma.T, x))
                 #du_ds = lambda sigma, x : -ucoeff * (gx / hx) * 1/(1+(np.dot(sigma.T, x))**2) * x
                 #print("du/ds: ", du_ds(sigma, x_))
