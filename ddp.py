@@ -625,8 +625,8 @@ class SMC(DDP):
             #print("B: ", self.model.B)
             #print("A: ", self.model.A)
             #print("xt: ", xt)
-            print("DOT: ", (dB))
-            print("|DOT|: ", np.linalg.det(dB))
+            #print("DOT: ", (dB))
+            #print("|DOT|: ", np.linalg.det(dB))
             magnitude = -(np.linalg.inv(dB)) #TODO: Verify this step
             #print("dB inv: ", magnitude)
             #print("dA: ", dA)
@@ -634,8 +634,8 @@ class SMC(DDP):
             magnitude = np.dot(magnitude, dA)
             if len(sign.shape) < 2:
                 sign = sign[..., np.newaxis]
-            print("mag: ", magnitude.shape)
-            print("sign: ", sign.shape)
+            #print("mag: ", magnitude.shape)
+            #print("sign: ", sign.shape)
             if False:
                 out = -(magnitude / np.abs(magnitude)) * sign
                 #out = np.dot(magnitude, sign)
@@ -658,7 +658,7 @@ class SMC(DDP):
             magnitude *= np.dot(ds_dx.T, self.model.f)
             if len(sign.shape) < 2:
                 sign = sign[..., np.newaxis]
-            print("mag: ", magnitude)
+            #print("mag: ", magnitude)
             #print("sign: ", sign)
             #out = magnitude * sign
             if False:
@@ -713,8 +713,8 @@ class GD_SMC(SMC):
             if len(hx.shape) < 1:
                 hx = hx[..., np.newaxis]
             gx = self.model.g.copy()
-        print("hx: ", hx.shape)
-        print("gx: ", gx.shape)
+        #print("hx: ", hx.shape)
+        #print("gx: ", gx.shape)
         i = 0
         while (umax < mag).any() and i < 20: #or .any()?!
             for c in range(sigma.shape[1]):
@@ -753,34 +753,9 @@ class GD_SMC(SMC):
                     grad = grad.flatten()
                 sigma[:,c] = sigma[:,c] - self.alpha * grad
                 sigma[:,c] = np.clip(sigma[:,c], 1e-1, float('inf'))
-                #print("GRAD: ", grad)
-                #print("New sigma: ", sigma[:,c])
-            #sf = -np.dot(sigma.T, hx)
-            #sg = np.dot(sigma.T, gx)
-            #sg_inv = np.linalg.inv(sg)
-            #if sf.size == 1 and sg.size == 1:
-            #    sf = sf[0]
-            #    sg = sg[0]
-            #    mag = np.abs((sf / sg))
-            #else:
-            #    mag = np.abs(np.dot(sg_inv, sf))
-            #if (umax < mag).all(): #or .any()?!
-            #    break
-
-            #if sf.size == 1 and sg.size == 1:
-            #    grad = hx * 1/sg 
-            #    print("Grad: ", grad)
-            #    grad += -(1/sg * gx * 1/sg) * sf
-            #else:
-            #    grad = -np.dot(np.dot(sg_inv, np.dot(gx, sg_inv)), sf)
-            #    grad += np.dot(hx, sg_inv) 
-            #print("Grad+: ", grad)
-            #sigma = sigma - alpha * grad
-            #sigma = np.clip(sigma, 1e-1, float('inf'))
-
             i += 1
         sigma += np.eye(sigma.shape[0], M = sigma.shape[1]) * 1e-1
-        print("GD SURFACE: ", sigma)
+        #print("GD SURFACE: ", sigma)
         self.surface = sigma
 
 
@@ -874,7 +849,7 @@ if __name__ == '__main__':
     if NONLINEAR_CARTPOLE_TEST:
         lamb_factor = 10
         lamb_max = 1000
-        horizon = 8
+        horizon = 4
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -912,11 +887,11 @@ if __name__ == '__main__':
         target = np.array([0, 0, 0.0, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.7, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.0, 0], dtype = np.float64)
-        x0 = np.array([0, .0, 0.20, 0.1],dtype=np.float64)
+        x0 = np.array([0, .0, 1*np.pi, 0.1],dtype=np.float64)
         #x0 = np.array([0, 1, 0.0, 1.00],dtype=np.float64)
         #x0 = np.array([0, 1, 0, 5.00],dtype=np.float64)
-        #diff_func = lambda t,x : x - np.array([x[0], x[1], t[2], t[3]])
-        diff_func = lambda t,x : x - t
+        diff_func = lambda t,x : x - np.array([x[0], x[1], t[2], t[3]])
+        #diff_func = lambda t,x : x - t
         #diff_func = lambda t,x : t - x
                    
         #def diff_func(t, x, null_ind = []):
@@ -928,14 +903,14 @@ if __name__ == '__main__':
         #    return x-t
         #cost_func = lambda h,dt:1e4 * (5 * 1e-2) / (horizon * dt)
         null_ind = [0, 1, 3] #TODO: control INPUT, not ERROR?!
-        cost_func = lambda h,dt:1e1
+        cost_func = lambda h,dt:1e4
         #input("COST WEIGHT: %s" % (cost_func(horizon, dt)))
         #cost_func = lambda h,dt:1e4
         Q = np.eye(state_size) * cost_func(horizon, dt) * 1
-        Q[2] *= 5
+        Q[2] *= 1
         #Qf = Q
-        Qf = np.eye(state_size) * cost_func(horizon, dt) * 1e1
-        R = np.eye(action_size) * 1e2 * 1
+        Qf = np.eye(state_size) * cost_func(horizon, dt) * 1e0
+        R = np.eye(action_size) * 1e0
 
         priority_cost = True
         if priority_cost:
@@ -968,6 +943,7 @@ if __name__ == '__main__':
                 interval = horizon, ts = dt, #THESE DON'T MATTER FOR THIS
                 mode = 'point', 
                 target = (target if target is not None else np.zeros((state_size)))) #unnecess
+        env.error_func = lambda t,x : sum(x - np.array([x[0], x[1], t[2], t[3]]))
 
         model = ControlEnvironmentModel(env)
         action_constraints = None
@@ -1049,9 +1025,9 @@ if __name__ == '__main__':
             #cost_func = lambda h,dt:1e4
             Q = np.eye(state_size) * cost_func(horizon, dt) * 1
             #Qf = Q
-            Qf = np.eye(state_size) * cost_func(horizon, dt) * 0
+            Qf = np.eye(state_size) * cost_func(horizon, dt) * 1e-1
             #R = np.eye(action_size) * cost_func(horizon, dt) * 0 #NO controls applied
-            R = np.eye(action_size) * 1e3
+            R = np.eye(action_size) * 1e4
             if priority_cost:
                 for i in null_ind:
                     Q[i][i] = np.sqrt(Q[i][i])
@@ -1082,6 +1058,7 @@ if __name__ == '__main__':
                 for j in range(MPC_STEPS):
                     u = U[j]
                     #U = [np.zeros(action_size) for i in range(int(horizon/dt))]
+                    #u = np.clip(u, -1e1, 1e1)
                     env.step(u)
                 xt = env.state.copy()
                 #if abs(sum(diff_func(xt, target))) < MPC_THRESHOLD:

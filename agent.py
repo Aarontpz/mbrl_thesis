@@ -777,7 +777,7 @@ class MPCAgent(Agent):
 
 ##  Pytorch helper functions /classes
 
-class PyTorchMLP(torch.nn.Module):
+class PyTorchMLP(torch.nn.Sequential):
     def __init__(self, device, indim, outdim, hdims : [] = [], 
             activations : [] = [], initializer = None, batchnorm = False,
             bias = True):
@@ -824,29 +824,65 @@ class PyTorchMLP(torch.nn.Module):
             x = self.layers[l](x)
         return x
 
+#TODO: Consolidate these Modules and the modules used in clustered modelling
 class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
-    '''Approximates the dynamics of a system .'''
-    def __init__(self, A_shape, B_shape, *args, **kwargs):
+    '''Approximates the dynamics of a system . Composed of a shared
+    feature extractor (PyTorchMLP) connected to two modules outputting f 
+    and g values for the equation: x' = x + dt(f + g*u)'''
+    def __init__(self, A_shape, B_shape, seperate_modules = False, linear_g = True, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        
+        self.linear_g = linear_g
+        self.seperate_modules = seperate_modules
+
         self.a_shape = A_shape
         self.a_size = reduce(lambda x,y:x*y, A_shape)
         self.b_shape = B_shape
         self.b_size = reduce(lambda x,y:x*y, B_shape)
-        self.f_module = torch.nn.Linear(self.outdim, A_shape[1], bias = True)
-        self.g_module = torch.nn.Linear(self.outdim, self.b_size, bias = True)
+        self.f_layer = torch.nn.Linear(self.outdim, A_shape[1], bias = True)
+        
+        if self.seperate_modules:
+            self.g_module = PyTorchMLP(*args, **kwargs)
+        elif self.linear_g: #cannot have both, since PyTorchMLP is not guarenteed to be linear / non-affine
+            self.g_layer = PyTorchMLP(self.device, B_shape[1],
+                    B_shape[0], hdims = [200,], 
+                    activations = [None, None], bias = False)
+                    #B_shape[0], hdims = [], 
+                    #activations = [None], bias = False)
+        else:
+            self.g_layer = torch.nn.Linear(self.outdim, self.b_size, bias = True)
+
+             
 
     def forward(self, x, *args, **kwargs):
         if type(x) == np.ndarray:
             x = torch.tensor(x, requires_grad = True, device = self.device).float()
-        #if type(u) == np.ndarray:
-        #    u = torch.tensor(u, requires_grad = True, device = self.device)
-        ##print("type(x): %s type(u): %s" % (type(x), type(u)))
-        #inp = torch.cat((x, u), 0).float()
         inp = x
         mlp_out = super().forward(inp)
-        f = self.f_module(mlp_out)
-        g = self.g_module(mlp_out)
+        f = self.f_layer(mlp_out)
+        if not self.seperate_modules and not self.linear_g:
+            g = self.g_layer(mlp_out)
+        elif self.seperate_modules:
+            out = self.g_module(inp)
+            g = self.g_layer(out)
+        elif self.linear_g:
+            g = self.du(x, u = np.zeros((1, self.b_shape[1]))) 
         return f, g
+    
+    def du(self, xt, u = None, create_graph = True):
+        #dm_du = grad(self.g_layer, u, create_graph = False)
+        #dm_du = dm_du.detach().numpy()
+        dm_du = np.eye(self.b_shape[1])
+        for l in (self.g_layer.layers):
+            #print("LAYER: ", l)
+            #print("Weight Shape", l.weight.shape) 
+            if self.device == torch.device('cuda'):
+                weight = l.weight.cpu().detach().numpy()
+            else:
+                weight = l.weight.detach().numpy()
+            dm_du = np.dot(weight, dm_du) 
+        return dm_du
+
         
 class PyTorchLinearSystemDynamicsLinearModule(PyTorchMLP):
     '''.'''
@@ -1637,8 +1673,8 @@ class PyTorchForwardClusterLocalModel(ForwardClusterLocalModel):
                 self.linear_g = linear_g
                 if self.mlp_layer:
                     self.f_layer = PyTorchMLP(device, obs_size, 
-                            obs_size, hdims = [100],
-                            activations = ['relu', None], bias = True)
+                            obs_size, hdims = [200],
+                            activations = [None, 'relu'], bias = True)
                 else:
                     self.f_layer = torch.nn.Linear(obs_size, obs_size, bias = False)
                 if self.mlp_layer and not self.linear_g:
@@ -1648,10 +1684,10 @@ class PyTorchForwardClusterLocalModel(ForwardClusterLocalModel):
                             activations = [None, None], bias = True)
                 else:
                     self.g_layer = PyTorchMLP(device, action_size,
-                            #obs_size, hdims = [100,], 
-                            #activations = [None, None], bias = False)
-                            obs_size, hdims = [], 
-                            activations = [None], bias = False)
+                            obs_size, hdims = [100,], 
+                            activations = [None, None], bias = False)
+                            #obs_size, hdims = [], 
+                            #activations = [None], bias = False)
                     #self.g_layer = torch.nn.Linear(action_size, obs_size, bias = False)
                     
                 self.f_layer.to(device)
@@ -1972,7 +2008,6 @@ class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
         '''Operate on f_, g_ returned from ForwardDynamicsModule in order
         to compute x' = f + g*u, assuming the system is linear w.r.t
         controls'''
-        g = g.reshape(self.module.b_shape)
         if type(xt) == type(np.array([0])):
             xt = torch.tensor(xt, requires_grad = True, device = self.module.device).float()
             xt = xt.unsqueeze(0)
@@ -1982,6 +2017,10 @@ class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
             ut = torch.tensor(ut, requires_grad = True, device = self.module.device).float()
             ut = ut.unsqueeze(0)
             ut = ut.transpose(0, 1)
+        if self.module.linear_g:
+            g = self.module.g_layer(ut)
+            return f + g
+        g = g.reshape(self.module.b_shape)
         gu = torch.mm(g, ut)
         return f + gu #s.t. xt+1 = xt + dt * (f+gu), linear w.r.t controls
 
@@ -1989,9 +2028,12 @@ class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
         f, g = self.module(xt)
         #raise Exception("Todo: conclude this for GeneralModels")
         self.f = f.cpu().detach().numpy()
-        self.g = g.cpu().detach().numpy()
         #self.f.resize(self.module.a_shape)
-        self.g.resize(self.module.b_shape)
+        if not self.module.linear_g:
+            self.g = g.cpu().detach().numpy()
+            self.g.resize(self.module.b_shape)
+        else:
+            self.g = self.module.du(xt)
         print("f: ", self.f.shape)
         print("g: ", self.g.shape)
         return self.f, self.g

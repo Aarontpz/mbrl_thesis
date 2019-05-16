@@ -114,11 +114,13 @@ class Dataset:
 class DAgger(Dataset):
     '''When sampling, samples from PREVIOUS episode / trainer step
     with probability recent_prob, else samples from AGGREGATE.'''
-    def __init__(self, recent_prob = 0.5, *args, **kwargs):
+    def __init__(self, max_samples = float('inf'), recent_prob = 0.5, *args, **kwargs):
         self.aggregate = []
         self.recent_prob = recent_prob
         super().__init__(*args, **kwargs)
         self.aggregate_examples = False #because we AUTOMATICALLY aggregate samples lol
+
+        self.max_samples = max_samples
 
     def sample(self, batch_size = None):
         sample_recent = random.random() < self.recent_prob
@@ -141,7 +143,9 @@ class DAgger(Dataset):
 
     def trainer_step(self, trainer):
         self.aggregate.extend(self.samples) #add PREVIOUS self.samples to aggregate
-        print("Aggregate Size: ", len(self.aggregate))
+        if len(self.aggregate) > self.max_samples:
+            self.aggregate = self.aggregate[self.max_samples:]
+            print("Aggregate Size: ", len(self.aggregate))
         super().trainer_step(trainer)
 
 

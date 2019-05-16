@@ -752,11 +752,12 @@ if __name__ == '__main__':
         dt = 1e-2
         ARCTAN = False
         TSSMC = False
-        ISMC = True
+        ISMC = False
         #ucoeff = 1.5
-        ucoeff = 2
         umax = 1.5e1
         umin = -umax
+        ucoeff = umax / 2
+        #ucoeff = umax
         sigma_base = np.array([[1e0, 1e0, 1e0, 1e0]]).T #sliding surface definition
         sigma = sigma_base.copy() #sliding surface definition
         if ARCTAN:
@@ -861,14 +862,14 @@ if __name__ == '__main__':
                 s = np.dot(sigma.T, x)
                 sign = np.sign(s)
                 #control = -umax * mag * sign
-                control = -umax * sign
+                control = ucoeff * sign
                 #control += -(1/(np.dot(sigma.T, gx))) * (np.dot(sigma.T, hx))
                 control = np.clip(control, -umax, umax)
             else:
                 ## FOSMC
                 sx = np.dot(sigma.T, x_)
                 #u = lambda sigma, x: -ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(np.dot(sigma.T, hx))) * switch(np.dot(sigma.T, x))
-                u = lambda sigma, x: -umax * switch(np.dot(sigma.T, x))
+                u = lambda sigma, x: ucoeff * switch(np.dot(sigma.T, x_))
                 #u = lambda sigma, x: -umax * switch(sx)
                 #u = lambda sigma, x: umax * (1/(np.dot(sigma.T, gx))) * (np.abs(np.dot(sigma.T, hx))) * switch(np.dot(sigma.T, x))
                 #du_ds = lambda sigma, x : -ucoeff * (gx / hx) * 1/(1+(np.dot(sigma.T, x))**2) * x
@@ -876,7 +877,7 @@ if __name__ == '__main__':
                 #d_du.append(du_ds(sigma, x_))
                 #u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(dx)) * np.sign(sx)
                 control = u(sigma, x_)
-                #control += (1/(np.dot(sigma.T, gx))) * np.abs((np.dot(sigma.T, hx)))
+                control += (1/(np.dot(sigma.T, gx))) * ((np.dot(sigma.T, hx)))
                 control = np.clip(control, umin, umax)
                 print("Control: ", control)
 

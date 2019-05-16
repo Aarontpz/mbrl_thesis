@@ -47,6 +47,8 @@ parser.add_argument("--maxmin-normalization", type=int, default = 0, help="Boole
 
 parser.add_argument("--dataset-recent-prob", type=float, default=0.5, help="Sets ratio of selecting recent samples vs stored samples.")
 
+parser.add_argument("--dataset-max-samples", type=float, default=float('inf'), help="Sets ratio of selecting recent samples vs stored samples.")
+
 ##** MBRL-specific arguments
 parser.add_argument("--ddp-mode", type=str, help="Determines 'DDP' / control method (ismc, ilqg)", default = 'ismc')
 parser.add_argument("--local-linear-model", type=str, help="Specifies local-linear model type (if any)", default = 'pytorch')
@@ -54,7 +56,7 @@ parser.add_argument("--local-clusters", type=int, help="Number of clusters for l
 parser.add_argument("--local-neighbors", type=int, help="Number of neighbors to overfit on for local model", default = 0)
 parser.add_argument("--model-type", type=str, help="Specifies model mode (linear vs forward)", default = 'linear')
 
-parser.add_argument("--smc-switching-function", type=str, default='arctan')
+parser.add_argument("--smc-switching-function", type=str, default='sign')
 
 ##** PG-specific arguments
 parser.add_argument("--gamma", type=float, default = 0.98, help="Reward discount factor for reinforcement learning methods")
@@ -74,7 +76,7 @@ parser.add_argument('--value-momentum', type=float, default=1e-4)
 
 ##** NN-specific arguments (agent INDEPENDENT, IMPORTANT!)
 parser.add_argument('--mlp-activations', nargs='+', type=str, default=[None])
-parser.add_argument('--mlp-hdims', nargs='+', type=int, default=[])
+parser.add_argument('--mlp-hdims', nargs='*', type=int, default=[])
 parser.add_argument('--mlp-outdim', type=int, default = 500)
 parser.add_argument('--lr', type=float, default=1e-3, help="NN Learning Rate")
 parser.add_argument('--momentum', type=float, default=1e-4)
@@ -768,7 +770,7 @@ def update_max_min(observation : np.ndarray,
     mn = np.minimum(mn, observation)
     return mx, mn
 
-def save_pytorch_module(module, optimizer, filepath):
+def save_pytorch_module(module, filepath):
     '''https://discuss.pytorch.org/t/saving-and-loading-a-model-in-pytorch/2610/23'''
     state_dict = module.module.state_dict()
     for key in state_dict.keys():
@@ -1039,7 +1041,7 @@ if __name__ == '__main__':
             
             print("Local Linear Model: ", args.local_linear_model)
             print("Model Mode: ", args.model_type)
-            dataset = DAgger(recent_prob = args.dataset_recent_prob, aggregate_examples = False, shuffle = True)
+            dataset = DAgger(max_samples = args.dataset_max_samples, recent_prob = args.dataset_recent_prob, aggregate_examples = False, shuffle = True)
             if args.local_linear_model is not None:
                 dataset = Dataset(aggregate_examples = False, shuffle = True)
             if args.model_type == 'linear':
@@ -1159,7 +1161,7 @@ if __name__ == '__main__':
                     height_ind = 14 #height field corresponds
                     if args.task_type == 'stand':
                         target[height_ind] = 1.2
-                        target[upright_ind] = 1.0 #TODO: confirm this
+                        target[upright_ind] = 2.0 #TODO: confirm this
                         target_inds = [height_ind, upright_ind]
                     else:
                         raise Exception("Extract COM for this env.")
@@ -1449,10 +1451,12 @@ if __name__ == '__main__':
                         raise Exception("Rundir already exists?!")
                 with open(modelpath, 'wb') as f:
                     if args.agent_type == 'mbrl':
-                        #pickle.dump(agent, f, pickle.HIGHEST_PROTOCOL)
-                        pickle.dump(agent.mpc_ddp.model.cluster, f, pickle.HIGHEST_PROTOCOL) #WEW
+                        if issubclass(type(agent.mpc_ddp.model), ClusterLocalModel):
+                            pickle.dump(agent.mpc_ddp.model.cluster, f, pickle.HIGHEST_PROTOCOL) #WEW
+                        else: #save global model module
+                            save_pytorch_module(agent.mpc_ddp.model, f)
                     elif args.agent_type  == 'policy':
-                        save_pytorch_module(agent, trainer.opt, f)
+                        save_pytorch_module(agent, f)
                 with open(historypath, 'wb') as f:
                     history_dict = {'reward':agent.net_reward_history, 'averages':averages}
                     pickle.dump(history_dict, f, pickle.HIGHEST_PROTOCOL)
