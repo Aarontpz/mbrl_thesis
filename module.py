@@ -43,10 +43,10 @@ class PyTorchMLP(torch.nn.Sequential):
                 self.rec = torch.nn.GRUCell(prev_size, rec_size)
             else:
                 self.rec = torch.nn.LSTMCell(prev_size, rec_size)
+            #self.reset_states()
          
 
         self.layers = torch.nn.ModuleList(layers)
-        self.reset_states()
 
     def reset_states(self):
         #self.hx = Variable(torch.zeros(self.rec_batch, self.rec_size), requires_grad = True).to(self.device)
@@ -66,7 +66,7 @@ class PyTorchMLP(torch.nn.Sequential):
         for l in range(len(self.layers)):
             x = self.layers[l](x)
         if self.rec_size > 0:
-            if not hasattr(self, 'hx'):
+            if not hasattr(self, 'hx') or self.hx is None:
                 self.reset_states()
             if self.rec_type == 'gru':
                 #print("Hx: ", self.hx)

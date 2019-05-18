@@ -66,7 +66,10 @@ parser.add_argument("--entropy-coeff", type=float, default = 5e-3, help="Coeff t
 
 parser.add_argument("--train-autoencoder", type=int, default = 0, help="If != 0, uses autoencoder to transform inputs before inputting to policy network.")
 
+
 #important that we retain the ability to have differnet Policy/Value nets
+parser.add_argument('--seperate-value-module', type = bool, default = False, help='If None, create identical module to action module. If False, no module. "If True / not either of those, somehow supply a value module."')
+
 parser.add_argument('--value-mlp-activations')
 parser.add_argument('--value-mlp-hdims')
 parser.add_argument('--value-mlp-outdim')
@@ -582,7 +585,7 @@ def create_pytorch_policy_agent(env, obs_size,
                 policy_entropy_history = True, energy_penalty = False)
     agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
             action_size, 
-            seperate_value_module = None, seperate_value_module_input = False,
+            seperate_value_module = args.seperate_value_module, seperate_value_module_input = False,
             value_head = True,
             action_bias = True, value_bias = True, sigma_head = sigma_head, 
             device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
@@ -678,8 +681,8 @@ def launch_best_agent(env, agent):
         pass
 
 def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = None):
-    #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    #device = torch.device("cpu")
     #agent.device = device
     #agent.module.to(device)
     while True: 
@@ -711,17 +714,27 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                 else:
                     clone = create_agent(PyTorchAgent, args.lib_type, env_type, device, [1, obs_size], 
                         action_size, discrete_actions = DISCRETE_AGENT, 
-                        action_constraints = action_constraints, has_value_function = True, 
+                        action_constraints = action_constraints, has_value_function = True, energy_penalty = False, 
                         encode_inputs = None, encoder = None)
                     if (agent.module.rec_size > 0):
-                        hx = copy.deepcopy(agent.module.hx)
+                        hx = agent.module.hx
+                        del agent.module.hx
+                        #print("HX: ", hx)
+                        #print("Agent hx: ", agent.module.hx)
                         if hasattr(agent.module, 'cx'):
-                            cx = copy.deepcopy(agent.module.cx)
-                    module = copy.deepcopy(agent.module)
+                            cx = (agent.module.cx)
+                            del agent.module.cx 
+                    module = copy.copy(agent.module)
+                    #module = copy.deepcopy(agent.module)
                     #agent.module = None
                     #clone = copy.deepcopy(agent)
                     clone.module = module
                     clone.module.to(device)
+                    clone.module.device = device
+                    if (agent.module.rec_size > 0):
+                        agent.module.hx = hx
+                        agent.module.cx = cx
+                    
                     launch_viewer(env, clone)    
                 print("RESUMING!")
 
@@ -1369,183 +1382,184 @@ if __name__ == '__main__':
         ##
         i = 0
         while i < args.max_iterations: #and error > threshold
-            print("ITERATION: ", i)
-            # Exploration / evaluation step
-            for episode in range(EPISODES_BEFORE_TRAINING):
-                if args.lib_type == 'dm':
-                    timestep = env.reset()        
-                    while not timestep.last() and step < MAX_TIMESTEPS:
-                        reward = timestep.reward
-                        if reward is None:
-                            reward = 0.0
-                        #print("TIMESTEP %s: %s" % (step, timestep))
-                        observation = timestep.observation
-                        observation = agent.transform_observation(observation)
-                        #print("OBS: ", observation)
-                        if args.maxmin_normalization:
-                            if type(observation) == torch.Tensor:
-                                observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
-                            else:
-                                observation = normalize_max_min(observation, mx, mn)
-                            #print("Observation:", observation)
-                        action = agent.step(observation)
-                        if type(action) is torch.Tensor:
-                            action = action.cpu().numpy()
-                        #print("Observation: ", observation)
-                        #action = agent(timestep)
-                        #print("Action: ", action)
-                        agent.store_reward(reward)
-                        timestep = env.step(action)
-                        #print("Reward: %s" % (timestep.reward))
-                elif args.lib_type == 'gym':
-                    env.reset()
-                    observation, reward, done, info = env.step(env.action_space.sample())
-                    while not done and step < MAX_TIMESTEPS:
-                        if args.maxmin_normalization:
+            with lock: #now you cannot TRAIN and VIEW at the same time, assisting in copying modules?
+                print("ITERATION: ", i)
+                # Exploration / evaluation step
+                for episode in range(EPISODES_BEFORE_TRAINING):
+                    if args.lib_type == 'dm':
+                        timestep = env.reset()        
+                        while not timestep.last() and step < MAX_TIMESTEPS:
+                            reward = timestep.reward
+                            if reward is None:
+                                reward = 0.0
+                            #print("TIMESTEP %s: %s" % (step, timestep))
+                            observation = timestep.observation
                             observation = agent.transform_observation(observation)
-                            observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
-                        action = agent.step(observation).cpu().numpy()
-                        env.render()
-                        observation, reward, done, info = env.step(action)
-                        agent.store_reward(reward)
-                elif args.lib_type == 'control':
-                    env.reset()
-                    while not env.episode_is_done() and step < MAX_TIMESTEPS:
-                        obs = env.get_state()
-                        action = agent.step(obs)
-                        if isinstance(action, torch.Tensor):
-                            action = agent.step(obs).cpu().numpy()
-                        env.step(action)
-                        reward = env.get_reward()
-                        agent.store_reward(reward)
+                            #print("OBS: ", observation)
+                            if args.maxmin_normalization:
+                                if type(observation) == torch.Tensor:
+                                    observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
+                                else:
+                                    observation = normalize_max_min(observation, mx, mn)
+                                #print("Observation:", observation)
+                            action = agent.step(observation)
+                            if type(action) is torch.Tensor:
+                                action = action.cpu().numpy()
+                            #print("Observation: ", observation)
+                            #action = agent(timestep)
+                            #print("Action: ", action)
+                            agent.store_reward(reward)
+                            timestep = env.step(action)
+                            #print("Reward: %s" % (timestep.reward))
+                    elif args.lib_type == 'gym':
+                        env.reset()
+                        observation, reward, done, info = env.step(env.action_space.sample())
+                        while not done and step < MAX_TIMESTEPS:
+                            if args.maxmin_normalization:
+                                observation = agent.transform_observation(observation)
+                                observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
+                            action = agent.step(observation).cpu().numpy()
+                            env.render()
+                            observation, reward, done, info = env.step(action)
+                            agent.store_reward(reward)
+                    elif args.lib_type == 'control':
+                        env.reset()
+                        while not env.episode_is_done() and step < MAX_TIMESTEPS:
+                            obs = env.get_state()
+                            action = agent.step(obs)
+                            if isinstance(action, torch.Tensor):
+                                action = agent.step(obs).cpu().numpy()
+                            env.step(action)
+                            reward = env.get_reward()
+                            agent.store_reward(reward)
 
-                if args.maxmin_normalization:
-                    new_mx, new_mn = update_max_min(observation, new_mx, new_mn)
-                agent.terminate_episode() #oops forgot this lmao
-            # Update step
-            if not PRETRAINED:
-                trainer.step()
-                print("Agent Net Loss: ", agent.net_loss_history[-1])
-            if args.train_autoencoder != 0:
-                autoencoder_trainer.step()
-                autoencoder_trainer.plot_loss_histories()
-            if i % 50 == 0 and i > 0: #periodic tasks
-                print("Performing Periodic Tasks")
-                if args.maxmin_normalization: 
-                    print("(stored) max: %s\n min: %s\n"%(new_mx, new_mn))
-                    store_max_min(new_mx, new_mn, args.lib_type, args.env_type, norm_dir = 'norm') 
-            
-            if args.lib_type == 'control':
-                if 'mb' in args.agent_type: #look for model-based. Disgusting
-                    env.generate_vector_field_plot()
-                    env.generate_vector_field_plot(agent.mpc_ddp.model)
+                    if args.maxmin_normalization:
+                        new_mx, new_mn = update_max_min(observation, new_mx, new_mn)
+                    agent.terminate_episode() #oops forgot this lmao
+                # Update step
+                if not PRETRAINED:
+                    trainer.step()
+                    print("Agent Net Loss: ", agent.net_loss_history[-1])
+                if args.train_autoencoder != 0:
+                    autoencoder_trainer.step()
+                    autoencoder_trainer.plot_loss_histories()
+                if i % 50 == 0 and i > 0: #periodic tasks
+                    print("Performing Periodic Tasks")
+                    if args.maxmin_normalization: 
+                        print("(stored) max: %s\n min: %s\n"%(new_mx, new_mn))
+                        store_max_min(new_mx, new_mn, args.lib_type, args.env_type, norm_dir = 'norm') 
+                
+                if args.lib_type == 'control':
+                    if 'mb' in args.agent_type: #look for model-based. Disgusting
+                        env.generate_vector_field_plot()
+                        env.generate_vector_field_plot(agent.mpc_ddp.model)
 
-            if i % args.save_rate == 0 and i > 0: #perform milestone save
-                #create directory(s) (task / agent)
-                runs = [dI for dI in os.listdir(taskdir) if os.path.isdir(os.path.join(taskdir,dI)) and args.agent_type in dI]
-                cur_runs = len(runs)
+                if i % args.save_rate == 0 and i > 0: #perform milestone save
+                    #create directory(s) (task / agent)
+                    runs = [dI for dI in os.listdir(taskdir) if os.path.isdir(os.path.join(taskdir,dI)) and args.agent_type in dI]
+                    cur_runs = len(runs)
 
-                modelpath = os.path.join(rundir, 'model_%s'%(i))
-                historypath = os.path.join(rundir, 'history_%s'%(i))
-                argspath = os.path.join(rundir, 'args')
-                if num_runs == cur_runs: #make rundir
-                    if not os.path.exists(rundir): 
-                        os.mkdir(rundir)
-                    else:
-                        raise Exception("Rundir already exists?!")
-                with open(modelpath, 'wb') as f:
-                    if args.agent_type == 'mbrl':
-                        if issubclass(type(agent.mpc_ddp.model), ClusterLocalModel):
-                            pickle.dump(agent.mpc_ddp.model.cluster, f, pickle.HIGHEST_PROTOCOL) #WEW
-                        else: #save global model module
-                            save_pytorch_module(agent.mpc_ddp.model, f)
-                    elif args.agent_type  == 'policy':
-                        save_pytorch_module(agent, f)
-                with open(historypath, 'wb') as f:
-                    history_dict = {'reward':agent.net_reward_history, 'averages':averages}
-                    pickle.dump(history_dict, f, pickle.HIGHEST_PROTOCOL)
-                if not os.path.exists(argspath):
-                    with open(argspath, 'wb') as f:
-                        pickle.dump(args, f, pickle.HIGHEST_PROTOCOL)
-
-            agent.reset_histories()
-            if args.agent_type == 'policy' and not PRETRAINED:
-                print("Agent Net Action loss: ", agent.value_loss_history[i])
-                print("Agent Net Value loss: ", agent.action_loss_history[i])
-            print("Agent Net Reward: ", agent.net_reward_history[-1])
-            #i += EPISODES_BEFORE_TRAINING 
-            if DISPLAY_HISTORY is True:
-                try:
-                    if args.lib_type == 'control' and args.train_autoencoder and i > 5:
-                        #TODO: encapsulate this AE testing...and all else
-                        #we now display forward dynamics to compare with 
-                        #control trajectory
-                        env.generate_state_history_plot()
-                        #shift in predicted states, plot for side-by-side
-                        #comparison
-                        print("Compare with Autoencoder results!")
-                        ae_history = [] 
-                        for j in range(len(env.state_history)): 
-                            s = env.state_history[j]
-                            s = torch.tensor(s).to(device).float()
-                            a = torch.tensor(np.ones(1)).to(device).float()
-                            forward = autoencoder.forward_predict(s, a)
-                            ae_history.append(forward)
-                        #print("HISTORY: ", ae_history)
-                        env.generate_state_history_plot(ae_history)
-                        #plt.pause(0.01)
-                        #plt.clf()
-
-                            
-                    plt.figure(1)
-                    plt.subplot(2, 1, 1)
-                    #plt.title("Algorithm:%s \n\
-                    #        Activations: %s  Hdims: %s Outdims: %s\n\
-                    #        lr=%s betas=%s eps=%s min_eps=%s eps_decay=%s\n\
-                    #        gamma = %s"\
-                    #        %(TRAINER_TYPE, mlp_activations,
-                    #        mlp_hdims, mlp_outdim, 
-                    #        lr, ADAM_BETAS, EPS, EPS_MIN, EPS_DECAY, GAMMA))
-                    plt.title("Agent reward / loss history")
-                    #graph.set_xdata(range(len(total_reward_history)))
-                    #graph.set_ydata([r for r in total_reward_history])
-                    #plt.scatter(range(len(total_reward_history)), [r.numpy()[0] for r in total_reward_history])
-                    plt.xlim(0, len(agent.net_reward_history))
-                    plt.ylim(min(agent.net_reward_history) - min(agent.net_reward_history) / 2, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
-                    plt.ylabel("Net \n Reward")
-                    plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.5, c='b')
-                    if MA_LEN > 0 and len(agent.net_reward_history) > 0:
-                        MA += agent.net_reward_history[-1]
-                        val = MA #in order to divide
-                        if i >= MA_LEN - 1: 
-                            MA -= agent.net_reward_history[i - MA_LEN]
-                            val = val / MA_LEN
+                    modelpath = os.path.join(rundir, 'model_%s'%(i))
+                    historypath = os.path.join(rundir, 'history_%s'%(i))
+                    argspath = os.path.join(rundir, 'args')
+                    if num_runs == cur_runs: #make rundir
+                        if not os.path.exists(rundir): 
+                            os.mkdir(rundir)
                         else:
-                            val = val / (i + 1)
-                        averages.append(val)
-                        #plt.plot(np.convolve(np.ones((MA_LEN,)), agent.net_reward_history, mode=m)) #alternative modes: 'full', 'same', 'valid'
-                        plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
-                        print("MA Reward: ", val)
-                    plt.subplot(2, 1, 2)
-                    plt.ylabel("Net \n Loss")
-                    if type(agent.net_loss_history[0]) == float:
-                        plt.scatter(range(len(agent.net_loss_history)), [r for r in agent.net_loss_history], s=1.5)
-                    else:
-                        plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
-                    if DISPLAY_AV_LOSS is True:
-                        plt.figure(2)
-                        plt.clf()
+                            raise Exception("Rundir already exists?!")
+                    with open(modelpath, 'wb') as f:
+                        if args.agent_type == 'mbrl':
+                            if issubclass(type(agent.mpc_ddp.model), ClusterLocalModel):
+                                pickle.dump(agent.mpc_ddp.model.cluster, f, pickle.HIGHEST_PROTOCOL) #WEW
+                            else: #save global model module
+                                save_pytorch_module(agent.mpc_ddp.model, f)
+                        elif args.agent_type  == 'policy':
+                            save_pytorch_module(agent, f)
+                    with open(historypath, 'wb') as f:
+                        history_dict = {'reward':agent.net_reward_history, 'averages':averages}
+                        pickle.dump(history_dict, f, pickle.HIGHEST_PROTOCOL)
+                    if not os.path.exists(argspath):
+                        with open(argspath, 'wb') as f:
+                            pickle.dump(args, f, pickle.HIGHEST_PROTOCOL)
+
+                agent.reset_histories()
+                if args.agent_type == 'policy' and not PRETRAINED:
+                    print("Agent Net Action loss: ", agent.value_loss_history[i])
+                    print("Agent Net Value loss: ", agent.action_loss_history[i])
+                print("Agent Net Reward: ", agent.net_reward_history[-1])
+                #i += EPISODES_BEFORE_TRAINING 
+                if DISPLAY_HISTORY is True:
+                    try:
+                        if args.lib_type == 'control' and args.train_autoencoder and i > 5:
+                            #TODO: encapsulate this AE testing...and all else
+                            #we now display forward dynamics to compare with 
+                            #control trajectory
+                            env.generate_state_history_plot()
+                            #shift in predicted states, plot for side-by-side
+                            #comparison
+                            print("Compare with Autoencoder results!")
+                            ae_history = [] 
+                            for j in range(len(env.state_history)): 
+                                s = env.state_history[j]
+                                s = torch.tensor(s).to(device).float()
+                                a = torch.tensor(np.ones(1)).to(device).float()
+                                forward = autoencoder.forward_predict(s, a)
+                                ae_history.append(forward)
+                            #print("HISTORY: ", ae_history)
+                            env.generate_state_history_plot(ae_history)
+                            #plt.pause(0.01)
+                            #plt.clf()
+
+                                
+                        plt.figure(1)
                         plt.subplot(2, 1, 1)
-                        plt.ylabel("Action Loss")
-                        plt.scatter(range(len(agent.action_loss_history)), [l.numpy() for l in agent.action_loss_history], s=0.1)
+                        #plt.title("Algorithm:%s \n\
+                        #        Activations: %s  Hdims: %s Outdims: %s\n\
+                        #        lr=%s betas=%s eps=%s min_eps=%s eps_decay=%s\n\
+                        #        gamma = %s"\
+                        #        %(TRAINER_TYPE, mlp_activations,
+                        #        mlp_hdims, mlp_outdim, 
+                        #        lr, ADAM_BETAS, EPS, EPS_MIN, EPS_DECAY, GAMMA))
+                        plt.title("Agent reward / loss history")
+                        #graph.set_xdata(range(len(total_reward_history)))
+                        #graph.set_ydata([r for r in total_reward_history])
+                        #plt.scatter(range(len(total_reward_history)), [r.numpy()[0] for r in total_reward_history])
+                        plt.xlim(0, len(agent.net_reward_history))
+                        plt.ylim(min(agent.net_reward_history) - min(agent.net_reward_history) / 2, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
+                        plt.ylabel("Net \n Reward")
+                        plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.5, c='b')
+                        if MA_LEN > 0 and len(agent.net_reward_history) > 0:
+                            MA += agent.net_reward_history[-1]
+                            val = MA #in order to divide
+                            if i >= MA_LEN - 1: 
+                                MA -= agent.net_reward_history[i - MA_LEN]
+                                val = val / MA_LEN
+                            else:
+                                val = val / (i + 1)
+                            averages.append(val)
+                            #plt.plot(np.convolve(np.ones((MA_LEN,)), agent.net_reward_history, mode=m)) #alternative modes: 'full', 'same', 'valid'
+                            plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
+                            print("MA Reward: ", val)
                         plt.subplot(2, 1, 2)
-                        plt.ylabel("Value Loss")
-                        plt.xlabel("Time")
-                        plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
-                        plt.draw()
-                    plt.pause(0.01)
-                except Exception as e:
-                    print("ERROR: ", e)
-            i += 1
+                        plt.ylabel("Net \n Loss")
+                        if type(agent.net_loss_history[0]) == float:
+                            plt.scatter(range(len(agent.net_loss_history)), [r for r in agent.net_loss_history], s=1.5)
+                        else:
+                            plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
+                        if DISPLAY_AV_LOSS is True:
+                            plt.figure(2)
+                            plt.clf()
+                            plt.subplot(2, 1, 1)
+                            plt.ylabel("Action Loss")
+                            plt.scatter(range(len(agent.action_loss_history)), [l.numpy() for l in agent.action_loss_history], s=0.1)
+                            plt.subplot(2, 1, 2)
+                            plt.ylabel("Value Loss")
+                            plt.xlabel("Time")
+                            plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
+                            plt.draw()
+                        plt.pause(0.01)
+                    except Exception as e:
+                        print("ERROR: ", e)
+                i += 1
     else:
         launch_viewer(env, agent)
