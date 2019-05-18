@@ -579,7 +579,7 @@ def create_pytorch_policy_agent(env, obs_size,
                 action_size, discrete_actions = DISCRETE_AGENT, 
                 action_constraints = action_constraints, has_value_function = True,
                 terminal_penalty = 0.0, 
-                policy_entropy_history = True, energy_penalty_history = True)
+                policy_entropy_history = True, energy_penalty = False)
     agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
             action_size, 
             seperate_value_module = None, seperate_value_module_input = False,
@@ -634,7 +634,7 @@ def create_pytorch_agnostic_mbrl(cost,
                     has_value_function = True,
                     terminal_penalty = 0.0, 
                     policy_entropy_history = True, 
-                    energy_penalty_history = True)
+                    energy_penalty = False)
     if hasattr(agent.mpc_ddp.model, 'module'):
         criterion = torch.nn.MSELoss() 
         module = agent.mpc_ddp.model.module
@@ -713,6 +713,10 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                         action_size, discrete_actions = DISCRETE_AGENT, 
                         action_constraints = action_constraints, has_value_function = True, 
                         encode_inputs = None, encoder = None)
+                    if (agent.module.rec_size > 0):
+                        hx = copy.deepcopy(agent.module.hx)
+                        if hasattr(agent.module, 'cx'):
+                            cx = copy.deepcopy(agent.module.cx)
                     module = copy.deepcopy(agent.module)
                     #agent.module = None
                     #clone = copy.deepcopy(agent)
@@ -1389,7 +1393,7 @@ if __name__ == '__main__':
                             action = action.cpu().numpy()
                         #print("Observation: ", observation)
                         #action = agent(timestep)
-                        print("Action: ", action)
+                        #print("Action: ", action)
                         agent.store_reward(reward)
                         timestep = env.step(action)
                         #print("Reward: %s" % (timestep.reward))

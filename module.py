@@ -6,7 +6,7 @@ import random as random
 class PyTorchMLP(torch.nn.Sequential):
     def __init__(self, device, indim, outdim, hdims : [] = [], 
             activations : [] = [], initializer = None, batchnorm = False,
-            bias = True, rec_size = 128, rec_type = 'gru', rec_batch = 1):
+            bias = True, rec_size = 128, rec_type = 'lstm', rec_batch = 1):
         super(PyTorchMLP, self).__init__()
         self.indim = indim
         self.outdim = outdim
@@ -49,10 +49,10 @@ class PyTorchMLP(torch.nn.Sequential):
         self.reset_states()
 
     def reset_states(self):
-        self.hx = Variable(torch.zeros(self.rec_batch, self.rec_size), requires_grad = True).to(self.device)
-        self.cx = Variable(torch.zeros(self.rec_batch, self.rec_size), requires_grad = True).to(self.device)
-        #self.hx = (torch.zeros(self.rec_batch, self.rec_size), requires_grad = True).to(self.device)
-        #self.cx = (torch.zeros(self.rec_batch, self.rec_size), requires_grad = True).to(self.device)
+        #self.hx = Variable(torch.zeros(self.rec_batch, self.rec_size), requires_grad = True).to(self.device)
+        #self.cx = Variable(torch.zeros(self.rec_batch, self.rec_size), requires_grad = True).to(self.device)
+        self.hx = (torch.zeros(self.rec_batch, self.rec_size, requires_grad = True)).to(self.device)
+        self.cx = (torch.zeros(self.rec_batch, self.rec_size, requires_grad = True)).to(self.device)
     
     def create_activation(self, active):
         if active == 'relu':
@@ -66,14 +66,16 @@ class PyTorchMLP(torch.nn.Sequential):
         for l in range(len(self.layers)):
             x = self.layers[l](x)
         if self.rec_size > 0:
+            if not hasattr(self, 'hx'):
+                self.reset_states()
             if self.rec_type == 'gru':
-                print("Hx: ", self.hx)
-                print("X: ", x.shape)
+                #print("Hx: ", self.hx)
+                #print("X: ", x.shape)
                 x = self.rec(x.unsqueeze(0), self.hx)
                 self.hx = x 
             else:
-                x, (hx, cx) = self.rec(x, (self.hx, self.cx))
-                self.hx = hx
+                x, cx = self.rec(x.unsqueeze(0), (self.hx, self.cx))
+                self.hx = x
                 self.cx = cx
         return x
 

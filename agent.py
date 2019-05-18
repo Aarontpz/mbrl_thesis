@@ -394,6 +394,8 @@ class PyTorchAgent(Agent):
         return super(PyTorchAgent, self).evaluate(obs, *args, **kwargs)
 
     def terminate_episode(self):
+        if self.module.rec_size > 0:
+            self.module.reset_states()
         self.obs_mean = torch.zeros(self.input_dimensions).to(self.device)
         self.obs_var = torch.zeros(self.input_dimensions).to(self.device)
         super(PyTorchAgent, self).terminate_episode()

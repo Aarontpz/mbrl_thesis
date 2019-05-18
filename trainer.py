@@ -220,11 +220,8 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
         value_scores = self.agent.value_history
         assert(len(value_scores) == len(action_scores)) #necessary
         
-        #TODO: Make this run with mini-batches?!
         if hasattr(module, 'rec_size') and module.rec_size > 0: 
-            #TODO: don't do full FF, to save computations? 
-            #compartmentalize .forward()
-            module.reset_states(module.batch_size, False) 
+            module.reset_states() 
         #for score in action_score_history:
         #    make_dot(score).view()
         #    input()
@@ -237,6 +234,8 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
         else:
             replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
         for start in replay_starts:
+            if hasattr(module, 'rec_size') and module.rec_size > 0: 
+                module.reset_states() 
             end = self.get_trajectory_end(start, end = None)
             #print("END: ", end)
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
