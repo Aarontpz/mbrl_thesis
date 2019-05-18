@@ -201,7 +201,6 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 #input()
                 self.cost.normal_mode() #this is...sorta grossth
                 sim_new_trajectory = False
-
             V = l[-1].copy() #initialize cost-to-go at TERMINAL state
             Vx = lx[-1].copy()
             Vxx = lxx[-1].copy()
@@ -526,8 +525,6 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
                 xt_ = xt_.flatten()
             if len(dx) > 1:
                 dx = dx.flatten()
-            print("Xt_ : ", xt_.shape)
-            print("dx : ", dx.shape)
             xt_ += dx * self.dt
             #xt_ += dx
             #xt_[0] = xt_[0] % np.pi
@@ -553,6 +550,9 @@ class ILQG(DDP): #TODO: technically THIS is just iLQR, no noise terms cause NO
     def dq_dx(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
         return lx + np.dot(Vx, fx) 
     def dq_du(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
+        print("LU: ", lu.shape)
+        print("Vx: %s \nFu: %s" % (Vx.shape, fu.shape))
+        print("Vx*fu: ", np.dot(Vx, fu).shape)
         return lu + np.dot(Vx, fu) #lu[term] = 0]
     def dq_dxx(self, lx, lu, lxx, luu, lxu, fx, fu, fuu, fxx, Vx, Vxx, *args, **kwargs):
         return lxx + np.dot(fx.T, np.dot(Vxx, fx))
@@ -849,7 +849,7 @@ if __name__ == '__main__':
     if NONLINEAR_CARTPOLE_TEST:
         lamb_factor = 10
         lamb_max = 1000
-        horizon = 4
+        horizon = 8
         initialization = 0.0
         #initialization = 1.0
         dt = 1e-2
@@ -887,7 +887,7 @@ if __name__ == '__main__':
         target = np.array([0, 0, 0.0, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.7, 0], dtype = np.float64)
         #target = np.array([-1.0, 0, 0.0, 0], dtype = np.float64)
-        x0 = np.array([0, .0, 1*np.pi, 0.1],dtype=np.float64)
+        x0 = np.array([0, .0, 3*np.pi/4, 0.1],dtype=np.float64)
         #x0 = np.array([0, 1, 0.0, 1.00],dtype=np.float64)
         #x0 = np.array([0, 1, 0, 5.00],dtype=np.float64)
         diff_func = lambda t,x : x - np.array([x[0], x[1], t[2], t[3]])

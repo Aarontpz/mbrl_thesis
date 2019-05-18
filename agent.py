@@ -1587,8 +1587,9 @@ class LinearClusterLocalModel(ClusterLocalModel, LinearSystemModel):
             #self.B = np.ndarray(self.b_shape)
             self.initialize_model_free_arrays()
         else:
-            #if xt.shape[1] > xt.shape[0]:
-            #    xt = xt.T
+            if xt.shape[1] > xt.shape[0]:
+                xt = xt.T
+            print("Xt: ", xt.shape)
             region = self.predict_cluster(xt.T)
             #print("PREV REGION: %s REGION: %s" % (self.prev_region, region))
             if self.prev_region is not None:

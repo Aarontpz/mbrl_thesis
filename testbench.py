@@ -1242,7 +1242,7 @@ if __name__ == '__main__':
             #diff_func = DiffFunc(target_inds)
             diff_func = lambda t,x:x - t 
             print("Q: ", Q)
-            cost = LQC(Q, R, Qf, target = target, 
+            cost = LQC(Q, R, Qf = Qf, target = target, 
                     diff_func = diff_func)
             if args.lib_type == 'control':
                 env.cost = cost #to get meaningful reward data

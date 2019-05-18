@@ -126,7 +126,10 @@ class LQC(CostModel):
         if self.terminal:
             super().normal_mode()
             self.Q = self.tmp_Q
+    
     def set_target(self, target):
+        if len(target.shape) > 1:
+            target = target.flatten()
         self.target = target
 
     def clear_target(self):
@@ -137,7 +140,6 @@ class LQC(CostModel):
         '''Calculate df/dx, given timestep
         size dt'''
         assert(dt is not None)
-        #print("Dx: ",self.Q.d_dx(xt, dt = dt) * dt)
         #print("MODE: ", self.terminal)
         if self.target is not None:
             xt = self.diff_func(self.target, xt)
@@ -146,7 +148,6 @@ class LQC(CostModel):
         '''Calculate df^2/(dxdx), given timestep
         size dt'''
         assert(dt is not None)
-        #print("Dxx: ",self.Q.d_dxx(xt, dt = dt) * dt)
         if self.target is not None:
             xt = self.diff_func(self.target, xt)
         return self.Q.d_dxx(xt, dt = dt) * dt
@@ -154,13 +155,11 @@ class LQC(CostModel):
         '''Calculate df/du, given timestep
         size dt'''
         assert(dt is not None)
-        #print("Du: ",self.R.d_dx(ut, dt = dt) * dt)
         return self.R.d_dx(ut, dt = dt) * dt
     def d_duu(self, xt=None, ut=None, dt=None, *args, **kwargs):
         '''Calculate df^2/(dudu), given timestep
         size dt'''
         assert(dt is not None)
-        #print("Duu: ",self.R.d_dxx(ut, dt = dt) * dt)
         return self.R.d_dxx(ut, dt = dt) * dt
     def d_dxu(self, xt=None, ut=None, dt=None, *args, **kwargs):
         '''Calculate df^2/(dxdu), given timestep
