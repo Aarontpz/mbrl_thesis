@@ -25,10 +25,13 @@ import collections
 import os
 import argparse
 
+import csv
+
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--load", type=int, help="Load arguments/model in given run (requires lib-type, env-type, task-type, agent-type, and ITERATION corresponding to which 'milestone' of previous run to load)", default = 0)
-parser.add_argument("--load-iteration", type=str, help="Load arguments/model in given run (requires lib-type, env-type, task-type, agent-type, and ITERATION corresponding to which 'milestone' of previous run to load)", default = None)
+parser.add_argument("--load-run", type=str, help="Load arguments/model in given run (requires lib-type, env-type, task-type, agent-type, and ITERATION corresponding to which 'milestone' of previous run to load)", default = None)
+
 parser.add_argument("--save-rate", type=int, help="Iterations between saves", default = 250)
 #parser.add_argument("--save-location", type=str, help="Directory to save run details to.")
 
@@ -66,9 +69,15 @@ parser.add_argument("--entropy-coeff", type=float, default = 5e-3, help="Coeff t
 
 parser.add_argument("--train-autoencoder", type=int, default = 0, help="If != 0, uses autoencoder to transform inputs before inputting to policy network.")
 
+parser.add_argument("--replays", type = int, default = 1, help ="Training passes for any model type.")
+
 
 #important that we retain the ability to have differnet Policy/Value nets
 parser.add_argument('--seperate-value-module', type = bool, default = False, help='If None, create identical module to action module. If False, no module. "If True / not either of those, somehow supply a value module."')
+
+parser.add_argument('--rec-size', type = int, default = 0, help='Determines feature length of recurrent layer for PyTorch MLP. If 0, no layer.')
+parser.add_argument('--rec-batch', type = int, default = 1, help='Batch length for recurrent layer.')
+parser.add_argument('--rec-type', type = str, default = 'gru', help='Specify recurrent layer type, if any (gru, lstm)')
 
 parser.add_argument('--value-mlp-activations')
 parser.add_argument('--value-mlp-hdims')
@@ -573,7 +582,8 @@ def create_pytorch_policy_agent(env, obs_size,
         mlp_hdims, mlp_activations, mlp_outdim, mlp_base,
         lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
         discrete_actions = False, 
-        has_value_function = False) -> (Agent, Trainer): 
+        has_value_function = False, 
+        rec_size = 0, rec_type = 'gru', rec_batch = 1) -> (Agent, Trainer): 
     mlp_indim = obs_size
     #mlp_outdim = mlp_indim * WIDENING_CONST #based on state size (approximation)
     print("MLP INDIM: %s HDIM: %s OUTDIM: %s " % (obs_size, mlp_hdims, mlp_outdim))
@@ -589,7 +599,8 @@ def create_pytorch_policy_agent(env, obs_size,
             value_head = True,
             action_bias = True, value_bias = True, sigma_head = sigma_head, 
             device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
-            activations = mlp_activations, initializer = mlp_initializer).to(device)
+            activations = mlp_activations, initializer = mlp_initializer,
+            rec_type = rec_type, rec_size = rec_size, rec_batch = rec_batch).to(device)
     
     optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
     #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
@@ -704,12 +715,28 @@ def console(env, agent, lock, lib_type = 'dm', env_type = 'walker', encoder = No
                         action_constraints = action_constraints, has_value_function = True, 
                         encode_inputs = encode_inputs, encoder = encoder_clone)
                 elif (issubclass(type(agent), DDPMPCAgent)):
-                    clone = copy.deepcopy(agent)
+                    clone = copy.copy(agent)
                     #clone.cost = copy.deepcopy(agent.cost)
                     print("Clone: ", clone)
                     if hasattr(clone.mpc_ddp.model, 'module'):
-                        clone.mpc_ddp.model.module = copy.deepcopy(agent.mpc_ddp.model.module).to(device)
-                        clone.mpc_ddp.model.module.device = device
+                        #clone.mpc_ddp.model.module = copy.deepcopy(agent.mpc_ddp.model.module).to(device)
+                        model = agent.mpc_ddp.model
+                        if (model.module.rec_size > 0):
+                            hx = model.module.hx
+                            del model.module.hx
+                            if hasattr(model.module, 'cx'):
+                                cx = (model.module.cx)
+                                del model.module.cx 
+                        module = copy.copy(model.module)
+                        #module = copy.deepcopy(agent.module)
+                        #agent.module = None
+                        #clone = copy.deepcopy(agent)
+                        clone.mpc_ddp.model.module = module
+                        clone.mpc_ddp.model.module.to(device)
+                        if (model.module.rec_size > 0):
+                            model.module.hx = hx
+                            model.module.cx = cx
+                        #clone.mpc_ddp.model.module.device = device
                     launch_viewer(env, clone)    
                 else:
                     clone = create_agent(PyTorchAgent, args.lib_type, env_type, device, [1, obs_size], 
@@ -799,6 +826,9 @@ def save_pytorch_module(module, filepath):
     #    'optimizer':optim},
     #    filepath)
 
+def load_pytorch_module(module, filepath):
+    module.module.load_state_dict(torch.load(f))
+
 
 LIB = 'pytorch'
 MAX_TIMESTEPS = 100000
@@ -840,20 +870,23 @@ MA_LEN = -1
 MA_LEN = 15
 
 if __name__ == '__main__':
+    LOAD_ARG = False
     args = parser.parse_args() 
     dirname = os.getcwd()
     taskdir = os.path.join(dirname, 'history/%s_%s'%(args.env_type, args.task_type))
     if not os.path.exists(taskdir): 
         os.mkdir(taskdir)
     if args.load != 0:  #load previous run HERE
-        run = tmp_args.load #corresponds to "[agent_type]_run" dir
+        LOAD_ARG = True
+        run = args.load_run #corresponds to "[agent_type]_run" dir
         loaddir = os.path.join(taskdir, '%s_%s'%(args.agent_type, run))
-        argspath = os.path.join(rundir, 'args')
+        argspath = os.path.join(loaddir, 'args')
         if os.path.exists(loaddir):
             rundir = loaddir
             num_runs = run #so we don't attempt to create rundir again
             with open(argspath, 'rb') as f:
                 args = pickle.load(f)
+                print("Args: ", args)
         else:
             raise Exception("Directory/Run to load does not exist!")
     else:
@@ -899,8 +932,12 @@ if __name__ == '__main__':
     mlp_hdims = args.mlp_hdims
     mlp_activations = args.mlp_activations
     mlp_outdim = args.mlp_outdim
+    rec_size = args.rec_size
+    rec_type = args.rec_type
+    rec_batch = args.rec_batch
 
 
+    replay_iterations = args.replays
 
     MA = 0
     averages = []
@@ -911,457 +948,489 @@ if __name__ == '__main__':
     trainer = None 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    if args.load != 0:
-        print("Loading agent from: %s" % (args.load))
-    else:
-        print("Creating agent!")
-        #device = torch.device("cpu") 
-         
-        if args.agent_type == 'mpc': 
-            agent, trainer = create_pytorch_mpc_agent(env_type, lib_type, 
-                    env, obs_size, action_size, action_constraints,
-                    mlp_hdims, mlp_activations, 
-                    num_processes = 1,
-                    horizon = 40, 
-                    k_shoots = 20,
-                    discrete_actions = DISCRETE_AGENT, 
-                    has_value_function = False) 
-            trainer.step() #RUN PRETRAINING STEP
-            PRETRAINED = True
-
-        #pertinent from pg 9 of 1708.02596: "...ADAM optimizer lr = 0.001, batch size 512.
-        #prior to training both the inputs and outputs in the dataset were preprocessed to have
-        #zero mean, std dev = 1"
-        #TODO TODO:^this could include a value function too?! SEPERATE VALUE FUNCTION
-        # to benefit from MPC AND model-free agent sampling, since value functions are ubiquitous
-
-        elif args.agent_type == 'policy':
-            #raise Exception("Static vs Variable variance, anneal variance to avoid agent converging to whacky actions. Penalize magnitude of action?")
-            #mlp_activations = [None, 'relu', None] #+1 for outdim activation, remember extra action/value modules
-            #mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
-            if DISCRETE_AGENT:
-                mlp_base = PyTorchDiscreteACMLP
-            else:
-                mlp_base = PyTorchContinuousGaussACMLP
-            agent, trainer = create_pytorch_policy_agent(env, obs_size, 
-                action_size, action_constraints,
-                mlp_hdims, mlp_activations, mlp_outdim, mlp_base,
-                lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
-                discrete_actions = False, 
-                has_value_function = False) 
-
-            print("AGENT MODULE (pre-autoencoder?)", agent.module)
-            ## Autoencoder addition
-            autoencoder_base = PyTorchLinearAutoencoder
-            autoencoder = None
-            autoencoder_trainer = None
-            #AE_BATCHES = None
-            TRAIN_FORWARD = True
-            TRAIN_ACTION = True
-
-            mlp_outdim = None
-            DEPTH = 2
-            UNIFORM_LAYERS = True
-            REDUCTION_FACTOR = 0.7
-            COUPLED_SA = False #have S/A feed into same encoded space or not
-            PREAGENT = True
-            PREAGENT_VALUE_FUNC = True #(True, None) or False
-            PREAGENT_VALUE_INPUT = not (PREAGENT_VALUE_FUNC in (None, False))
-            FORWARD_DYNAMICS = False #False reflects potential for linear transformation
-            LINEAR_FORWARD = False #imposes linear function on forward dynamics
-            AE_ACTIVATIONS = ['relu']
-            ENCODED_ACTIVATIONS = []
-
-            ae_lr = 0.5e-3
-            ae_ADAM_BETAS = (0.9, 0.999)
-            ae_MOMENTUM = 1e-3
-            ae_MOMENTUM = 0
-
-            AE_BATCHES = 64
-            AE_REPLAYS = 10
-            #DATASET_RECENT_PROB = 0.5
-            if action_size > 1:
-                forward_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + math.floor(action_size * REDUCTION_FACTOR**DEPTH)
-            else:
-                forward_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + 1
-            #TODO: ^ this works...in both cases (coupled_sa or not)
-            forward_outdim = obs_size * (REDUCTION_FACTOR**DEPTH)
-            forward_hdims = [obs_size * WIDENING_CONST] 
-            forward_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
-            
-            if LINEAR_FORWARD:
-                raise Exception("Reduce to the sum of TWO matrices representing \
-                        Ax + Bu where x=state and u=action")
-                forward_mlp = PyTorchMLP(device, forward_indim, forward_outdim, 
-                        hdims = forward_hdims, activations = forward_activations, 
-                        initializer = mlp_initializer).to(device)
-            else:
-                forward_mlp = PyTorchMLP(device, forward_indim, math.floor(forward_outdim), 
-                        hdims = forward_hdims, activations = forward_activations, 
-                        initializer = mlp_initializer).to(device)   
-
-            if args.train_autoencoder != 0:
-                raise Exception("Add autoencoder-specific args, such as coupled_sa, reduction_factor, widening_const, etc")
-
-                AUTOENCODER_DATASET = Dataset(aggregate_examples = False, shuffle = True)
-                #AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
-                autoencoder = LinearSAAutoencoder(autoencoder_base, 
-                        obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
-                        device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR,
-                        UNIFORM_LAYERS)
-                print("AUTOENCODER: ", autoencoder)
-                ae_optimizer = optim.Adam(autoencoder.parameters(), lr = ae_lr, betas = ae_ADAM_BETAS)
-                #ae_optimizer = optim.SGD(autoencoder.parameters(), lr = ae_lr, momentum = ae_MOMENTUM)
-                ae_scheduler = None
-                #ae_scheduler = torch.optim.lr_scheduler.StepLR(ae_optimizer, step_size = 300, gamma = 0.85)
-                autoencoder_trainer = PyTorchSAAutoencoderTrainer(
-                        autoencoder, AUTOENCODER_DATASET, AE_BATCHES, TRAIN_FORWARD, TRAIN_ACTION,
-                        device, ae_optimizer, ae_scheduler, 
-                        agent, env, 
-                        replay = AE_REPLAYS, max_traj_len = max_traj_len, gamma = args.gamma,
-                        num_episodes = EPISODES_BEFORE_TRAINING)
-                if PREAGENT and not COUPLED_SA:
-                    print("Feeding ENCODED state information into PolicyGradient agent!")
-                    value_module = None
-                    if PREAGENT_VALUE_FUNC == True:
-                        value_module = torch.nn.Sequential(agent.module.value_mlp, #copy for safekeeping :)
-                                agent.module.value_module)
-                        #value_module = agent.module.value_mlp
-                    mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH)  
-                    agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, [], 
-                            action_size, 
-                            seperate_value_module = value_module, 
-                            seperate_value_module_input = PREAGENT_VALUE_INPUT,
-                            value_head = not PREAGENT_VALUE_FUNC, 
-                            action_bias = True, value_bias = True, sigma_head = sigma_head, 
-                            device = device, indim = mlp_indim, outdim = action_size, hdims = mlp_hdims,
-                            activations = mlp_activations, initializer = mlp_initializer,
-                            ).to(device)
-                    agent.encode_inputs = True
-                    agent.encoder = autoencoder
-                    print("Post-encoder Module: ", agent.module)
-                    optimizer = optim.Adam(agent.module.parameters(), lr = args.lr, betas = ADAM_BETAS)
-                    #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
-                    scheduler = None
-                    #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 200, gamma = 0.85)
-                    trainer.opt = optimizer
-                    trainer.scheduler = scheduler
-                else:
-                    agent.encode_inputs = False
-        
-        elif args.agent_type == 'mbrl':
-            BATCH_SIZE = 64 
-            COLLECT_FORWARD_LOSS = False
-            DT = 1e-2 
-            if args.lib_type == 'dm':
-                DT = env.control_timestep()
-            
-            print("Local Linear Model: ", args.local_linear_model)
-            print("Model Mode: ", args.model_type)
-            dataset = DAgger(max_samples = args.dataset_max_samples, recent_prob = args.dataset_recent_prob, aggregate_examples = False, shuffle = True)
-            if args.local_linear_model is not None:
-                dataset = Dataset(aggregate_examples = False, shuffle = True)
-            if args.model_type == 'linear':
-                pytorch_class = PyTorchLinearSystemDynamicsLinearModule
-                pytorch_model = PyTorchLinearSystemModel 
-            else:
-                pytorch_class = PyTorchForwardDynamicsLinearModule
-                pytorch_model = PyTorchForwardDynamicsModel 
-
-            
-            ## SMC-SPECIFIC ARGS
-            SURFACE_BASE = None
-            #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
-            #surface = np.eye(obs_size, M=action_size)
-            surface = np.ones([obs_size, action_size]) * 1.0
-
-            ## DDP-SPECIFIC ARGS 
-            LQG_FULL_ITERATIONS = True
-            LAMB_FACTOR = 10
-            LAMB_MAX = 1000
-            DDP_INIT = 0.0
-            HORIZON = 0.5e-1
-            DDP_MAX_ITERATIONS = 2
-            K_SHOOTS = 1
-            UPDATE_DDP_MODEL = True
-            ILQG_SMC = False
-            REUSE_SHOOTS = False if args.ddp_mode == 'ilqg' else False
-
-            if args.local_linear_model == 'sklearn': 
-                system_model = SKLearnLinearClusterLocalModel(
-                        (obs_size, obs_size), (obs_size, action_size),
-                        n_clusters = args.local_clusters,
-                        compute_labels = True, 
-                        dt = DT)
-            elif args.local_linear_model == 'pytorch': 
-                if args.model_type == 'linear':
-                    system_model = PyTorchLinearClusterLocalModel(True, 
-                            device,
-                            (obs_size, obs_size), (obs_size, action_size),
-                            n_clusters = args.local_clusters, 
-                            neighbors = args.local_neighbors,
-                            compute_labels = True, 
-                            dt = DT)
-                else:
-                    system_model = PyTorchForwardClusterLocalModel(True, 
-                            device,
-                            (obs_size, 1), (obs_size, action_size),
-                            n_clusters = args.local_clusters, 
-                            neighbors = args.local_neighbors,
-                            compute_labels = True, 
-                            dt = DT)
-            else:
-                if pytorch_class == PyTorchForwardDynamicsLinearModule:
-                    pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
-                        activations = mlp_activations, initializer = mlp_initializer).to(device)
-                elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
-                    pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
-                        activations = mlp_activations, initializer = mlp_initializer).to(device)
-                system_model = pytorch_model(pytorch_module, DT) 
-                print("System Module: ", pytorch_module)
-
-            #TODO TODO: Neural Network generation of quadratic cost
-            #function, using RL
-            cost = None
-            if args.lib_type == 'dm':
-                target_inds = []
-                if args.env_type == 'humanoid':
-                    target = np.zeros(obs_size)
-                    head_height_ind = 60 + 3 #61 from angle+extrem+vel
-                    #torso_vertx_ind = 0
-                    #torso_verty_ind = 0
-                    torso_vertz_ind = 60 + 4
-                    com_velx_ind = 60
-                    #com_vely_ind = 0
-                    #com_velz_ind = 0
-
-                    target_head_height = 1.4
-                    target_vertz_val = 0.9 #MINIMAL upright value
-                    target_com_velx_val = 0#TRY to have it run in straight line
-                    target[head_height_ind] = target_head_height
-                    target[torso_vertz_ind] = target_vertz_val #TODO: confirm this
-                    target[com_velx_ind] = target_com_velx_val
-                    target_inds = [head_height_ind, torso_vertz_ind, com_velx_ind]
-                    
-                    if args.task_type == 'walk':
-                        target_com_velx_val = 1
-                    elif args.task_type == 'run':
-                        target_com_velx_val = 10
-                    Q = np.eye(obs_size) * 1e8
-                    Qf = Q
-                    R = np.eye(action_size) * 1e3
-                if args.env_type == 'ballcup':
-                    target = np.zeros(obs_size)
-                    target_pos = env.physics.named.data.site_xpos['target', ['x', 'z']]
-                    target_x = target_pos[0] 
-                    target_x_ind = 2
-                    target_z = target_pos[1] - 0.2 #account for offset of ball
-                    target_z_ind = 3
-                    target[target_x_ind] = target_x
-                    target[target_z_ind] = target_z
-                    target_inds = [target_x_ind, target_z_ind]
-                    #target, target_inds = env.get_target()
-                    Q = np.eye(obs_size) * 1e8
-                    Qf = Q
-                    R = np.eye(action_size) * 1e3
-                    #Q, Qf, R = agent.get_lqc_terms()
-                     
-
-                if args.env_type == 'walker':
-                    #cost is manually set as walker height and
-                    #center-of-mass horizontal velocity, conditioned
-                    #on task type
-                    #raise Exception("Hip angle != 0?! Is this...a problem for all envs? Can't assume 0,0 is valid...")
-                    print("ENV TYPE IS WALKER")
-                    target = np.zeros(obs_size)
-                    upright_ind = 0 #1st "orientation" corresponds
-                    height_ind = 14 #height field corresponds
-                    if args.task_type == 'stand':
-                        target[height_ind] = 1.2
-                        target[upright_ind] = 2.0 #TODO: confirm this
-                        target_inds = [height_ind, upright_ind]
-                    else:
-                        raise Exception("Extract COM for this env.")
-                        #com_vel_ind = 30 #NO obs directly corresponds to com velocity
-                        #target_inds = [height_ind, upright_ind, com_vel_ind]
-                    Q = np.eye(obs_size) * 1e8
-                    Qf = Q
-                    R = np.eye(action_size) * 1e3
-                if args.env_type == 'cartpole':
-                    #cost is manually set as deviation from pole upright
-                    #position.
-                    print("ENV TYPE IS CARTPOLE")
-                    target = np.zeros(obs_size)
-                    theta_ind = 1 #based on pole-angle cosine, rep theta
-                    target_theta = -0.0 #target pole position
-                    target[theta_ind] = target_theta
-                    target_inds = [theta_ind]
-                    Q = np.eye(obs_size) * 1e8
-                    Qf = Q
-                    R = np.eye(action_size) * 1e3
-                if args.env_type == 'acrobot':
-                    #cost is manually set as deviation from upright position
-                    print("ENV TYPE IS ACROBOT")
-                    target = np.zeros(obs_size)
-                    tip_target_start = 6
-                    tip_target = env.physics.named.data.site_xpos['target']
-                    target[tip_target_start:] = tip_target
-                    target_inds = [tip_target_start + i for i in range(tip_target.shape[0])]
-                    #target_inds = [tip_target_start + (tip_target.shape[0]) - 1]
-                    Q = np.eye(obs_size) * 1e8
-                    Qf = Q
-                    R = np.eye(action_size) * 1e3
-            elif args.lib_type == 'control':
-                if args.env_type == 'inverted':
-                    #cost is manually set as deviation from pole upright
-                    #position.
-                    print("ENV TYPE IS INVERTED PENDULUM (control environment)")
-                    target = np.zeros(obs_size)
-                    theta_ind = 0 
-                    target_theta = 0.0 
-                    target[theta_ind] = target_theta
-                    target_inds = [theta_ind]
-                    Q = np.eye(obs_size) * 1e2
-                    Qf = Q * 1e2
-                    R = np.eye(action_size) * 1e1
-                elif args.env_type == 'cartpole':
-                    #cost is manually set as deviation from pole upright
-                    #position.
-                    print("ENV TYPE IS CARTPOLE (control environment)")
-                    target = np.zeros(obs_size)
-                    theta_ind = 2 #based on pole-angle cosine, rep theta
-                    target_theta = 0.0 #target pole position
-                    target[theta_ind] = target_theta
-                    target_inds = [theta_ind]
-                    Q = np.eye(obs_size) * 1e2
-                    Qf = Q * 1e2
-                    R = np.eye(action_size) * 1e1
-            print("TARGET: ", target)
-            if len(target.shape) < 2:
-                target = target[..., np.newaxis]
-            priority_cost = True
-            if priority_cost:
-                for i in range(obs_size):
-                    if i not in target_inds:
-                        Q[i][i] = np.sqrt(Q[i][i])
-            else:
-                for i in range(obs_size):
-                    if i not in target_inds:
-                        Q[i][i] = 0
-            class DiffFunc:
-                def __init__(self, target_inds):
-                    self.inds = target_inds
-                def __call__(self, t, x):
-                    x_ = np.zeros(x.shape)
-                    for i in self.inds:
-                        x_[i] = x[i] - t[i]
-                    return x_
-            #diff_func = DiffFunc(target_inds)
-            diff_func = lambda t,x:x - t 
-            print("Q: ", Q)
-            cost = LQC(Q, R, Qf = Qf, target = target, 
-                    diff_func = diff_func)
-            if args.lib_type == 'control':
-                env.cost = cost #to get meaningful reward data
-            ddp = None
-            if args.ddp_mode == 'ilqg':
-                ddp = ILQG(LQG_FULL_ITERATIONS,
-                        LAMB_FACTOR, LAMB_MAX, DDP_INIT,
-                        obs_space, obs_size,
-                        [1, action_size], action_size,
-                        system_model, cost,
-                        None, 
-                        action_constraints, 
-                        horizon = int(HORIZON/DT), dt = DT, 
-                        max_iterations = DDP_MAX_ITERATIONS,
-                        eps = 1e-2,
-                        update_model = UPDATE_DDP_MODEL
-                        )
-                if ILQG_SMC == True:
-                    print("Surface Function: ", surface)
-                    smc = SMC(surface,
-                            target, diff_func,
-                            args.smc_switching_function,
-                            obs_space, obs_size,
-                            [1, action_size], action_size,
-                            system_model, cost,
-                            None, 
-                            action_constraints, 
-                            horizon = int(HORIZON/DT), dt = DT, 
-                            max_iterations = DDP_MAX_ITERATIONS,
-                            eps = 1e-2,
-                            update_model = UPDATE_DDP_MODEL
-                            )
-                    ddp.set_smc(smc)
-
-            elif args.ddp_mode == 'smc':
-                #The idea is to make surface non-uniform (singular) 
-                #across control variables, but also to construct
-                #a generally good surface (target * 1e1 to focus emphasis
-                #on target variables)
-                target_vars = np.zeros((obs_size, 1)) #for guiding SMC
-                for i in target_inds:
-                    target_vars[i] = 1
-                surface = surface + target_vars * 5e0 + np.eye(obs_size, M = action_size) * 1e-2
-                #surface = surface + target * 1e1
-                print("Obs Size: ", obs_size)
-                print("Action Size: ", action_size)
-                print("Surface Function: ", surface)
-                ddp = SMC(surface,
-                        target, diff_func,
-                        args.smc_switching_function,
-                        obs_space, obs_size,
-                        [1, action_size], action_size,
-                        system_model, cost,
-                        None, 
-                        action_constraints, 
-                        horizon = int(HORIZON/DT), dt = DT, 
-                        max_iterations = DDP_MAX_ITERATIONS,
-                        eps = 1e-2,
-                        update_model = UPDATE_DDP_MODEL
-                        )
-            elif args.ddp_mode == 'ismc':
-                #The idea is to make surface non-uniform (singular) 
-                #across control variables, but also to construct
-                #a generally good surface (target * 1e1 to focus emphasis
-                #on target variables)
-                target_vars = np.zeros((obs_size, 1)) #for guiding SMC
-                for i in target_inds:
-                    target_vars[i] = 1
-                surface = surface + target_vars * 5e0 + np.eye(obs_size, M = action_size) * 1e-2
-                #surface = surface + target * 1e1
-                print("Obs Size: ", obs_size)
-                print("Action Size: ", action_size)
-                print("Surface Function: ", surface)
-                ddp = GD_SMC(1e-1, surface,
-                        target, diff_func,
-                        args.smc_switching_function,
-                        obs_space, obs_size,
-                        [1, action_size], action_size,
-                        system_model, cost,
-                        None, 
-                        action_constraints, 
-                        horizon = int(HORIZON/DT), dt = DT, 
-                        max_iterations = DDP_MAX_ITERATIONS,
-                        eps = 1e-2,
-                        update_model = UPDATE_DDP_MODEL
-                        )
-            
-            
-            agent, trainer =  create_pytorch_agnostic_mbrl(cost, 
-                ddp, REUSE_SHOOTS,
-                EPS, EPS_MIN, EPS_DECAY, 
-                dataset,
-                DT, HORIZON, K_SHOOTS,
-                BATCH_SIZE, COLLECT_FORWARD_LOSS, 
-                replay_iterations, None,
-                args.lib_type, args.env_type,
+          
+    print("Creating agent!")
+    if args.agent_type == 'mpc': 
+        agent, trainer = create_pytorch_mpc_agent(env_type, lib_type, 
                 env, obs_size, action_size, action_constraints,
                 mlp_hdims, mlp_activations, 
-                lr = args.lr, adam_betas = ADAM_BETAS, momentum = args.momentum, 
-                discrete_actions = False, 
+                num_processes = 1,
+                horizon = 40, 
+                k_shoots = 20,
+                discrete_actions = DISCRETE_AGENT, 
                 has_value_function = False) 
+        trainer.step() #RUN PRETRAINING STEP
+        PRETRAINED = True
+
+    #pertinent from pg 9 of 1708.02596: "...ADAM optimizer lr = 0.001, batch size 512.
+    #prior to training both the inputs and outputs in the dataset were preprocessed to have
+    #zero mean, std dev = 1"
+    #TODO TODO:^this could include a value function too?! SEPERATE VALUE FUNCTION
+    # to benefit from MPC AND model-free agent sampling, since value functions are ubiquitous
+
+    elif args.agent_type == 'policy':
+        #raise Exception("Static vs Variable variance, anneal variance to avoid agent converging to whacky actions. Penalize magnitude of action?")
+        #mlp_activations = [None, 'relu', None] #+1 for outdim activation, remember extra action/value modules
+        #mlp_hdims = [obs_size * WIDENING_CONST, obs_size * WIDENING_CONST] 
+        if DISCRETE_AGENT:
+            mlp_base = PyTorchDiscreteACMLP
+        else:
+            mlp_base = PyTorchContinuousGaussACMLP
+        agent, trainer = create_pytorch_policy_agent(env, obs_size, 
+            action_size, action_constraints,
+            mlp_hdims, mlp_activations, mlp_outdim, mlp_base,
+            lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
+            discrete_actions = False, 
+            has_value_function = False, rec_size = rec_size, rec_type = rec_type, rec_batch = rec_batch) 
+
+        print("AGENT MODULE (pre-autoencoder?)", agent.module)
+        ## Autoencoder addition
+        autoencoder_base = PyTorchLinearAutoencoder
+        autoencoder = None
+        autoencoder_trainer = None
+        #AE_BATCHES = None
+        TRAIN_FORWARD = True
+        TRAIN_ACTION = True
+
+        mlp_outdim = None
+        DEPTH = 2
+        UNIFORM_LAYERS = True
+        REDUCTION_FACTOR = 0.7
+        COUPLED_SA = False #have S/A feed into same encoded space or not
+        PREAGENT = True
+        PREAGENT_VALUE_FUNC = True #(True, None) or False
+        PREAGENT_VALUE_INPUT = not (PREAGENT_VALUE_FUNC in (None, False))
+        FORWARD_DYNAMICS = False #False reflects potential for linear transformation
+        LINEAR_FORWARD = False #imposes linear function on forward dynamics
+        AE_ACTIVATIONS = ['relu']
+        ENCODED_ACTIVATIONS = []
+
+        ae_lr = 0.5e-3
+        ae_ADAM_BETAS = (0.9, 0.999)
+        ae_MOMENTUM = 1e-3
+        ae_MOMENTUM = 0
+
+        AE_BATCHES = 64
+        AE_REPLAYS = 10
+        #DATASET_RECENT_PROB = 0.5
+        if action_size > 1:
+            forward_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + math.floor(action_size * REDUCTION_FACTOR**DEPTH)
+        else:
+            forward_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH) + 1
+        #TODO: ^ this works...in both cases (coupled_sa or not)
+        forward_outdim = obs_size * (REDUCTION_FACTOR**DEPTH)
+        forward_hdims = [obs_size * WIDENING_CONST] 
+        forward_activations = ['relu', None] #+1 for outdim activation, remember extra action/value modules
+        
+        if LINEAR_FORWARD:
+            raise Exception("Reduce to the sum of TWO matrices representing \
+                    Ax + Bu where x=state and u=action")
+            forward_mlp = PyTorchMLP(device, forward_indim, forward_outdim, 
+                    hdims = forward_hdims, activations = forward_activations, 
+                    initializer = mlp_initializer).to(device)
+        else:
+            forward_mlp = PyTorchMLP(device, forward_indim, math.floor(forward_outdim), 
+                    hdims = forward_hdims, activations = forward_activations, 
+                    initializer = mlp_initializer).to(device)   
+
+        if args.train_autoencoder != 0:
+            raise Exception("Add autoencoder-specific args, such as coupled_sa, reduction_factor, widening_const, etc")
+
+            AUTOENCODER_DATASET = Dataset(aggregate_examples = False, shuffle = True)
+            #AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
+            autoencoder = LinearSAAutoencoder(autoencoder_base, 
+                    obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
+                    device, DEPTH, AE_ACTIVATIONS, ENCODED_ACTIVATIONS, REDUCTION_FACTOR,
+                    UNIFORM_LAYERS)
+            print("AUTOENCODER: ", autoencoder)
+            ae_optimizer = optim.Adam(autoencoder.parameters(), lr = ae_lr, betas = ae_ADAM_BETAS)
+            #ae_optimizer = optim.SGD(autoencoder.parameters(), lr = ae_lr, momentum = ae_MOMENTUM)
+            ae_scheduler = None
+            #ae_scheduler = torch.optim.lr_scheduler.StepLR(ae_optimizer, step_size = 300, gamma = 0.85)
+            autoencoder_trainer = PyTorchSAAutoencoderTrainer(
+                    autoencoder, AUTOENCODER_DATASET, AE_BATCHES, TRAIN_FORWARD, TRAIN_ACTION,
+                    device, ae_optimizer, ae_scheduler, 
+                    agent, env, 
+                    replay = AE_REPLAYS, max_traj_len = max_traj_len, gamma = args.gamma,
+                    num_episodes = EPISODES_BEFORE_TRAINING)
+            if PREAGENT and not COUPLED_SA:
+                print("Feeding ENCODED state information into PolicyGradient agent!")
+                value_module = None
+                if PREAGENT_VALUE_FUNC == True:
+                    value_module = torch.nn.Sequential(agent.module.value_mlp, #copy for safekeeping :)
+                            agent.module.value_module)
+                    #value_module = agent.module.value_mlp
+                mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH)  
+                agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, [], 
+                        action_size, 
+                        seperate_value_module = value_module, 
+                        seperate_value_module_input = PREAGENT_VALUE_INPUT,
+                        value_head = not PREAGENT_VALUE_FUNC, 
+                        action_bias = True, value_bias = True, sigma_head = sigma_head, 
+                        device = device, indim = mlp_indim, outdim = action_size, hdims = mlp_hdims,
+                        activations = mlp_activations, initializer = mlp_initializer, 
+                        rec_size = rec_size, rec_type = rec_type, rec_batch = rec_batch
+                        ).to(device)
+                agent.encode_inputs = True
+                agent.encoder = autoencoder
+                print("Post-encoder Module: ", agent.module)
+                optimizer = optim.Adam(agent.module.parameters(), lr = args.lr, betas = ADAM_BETAS)
+                #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
+                scheduler = None
+                #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 200, gamma = 0.85)
+                trainer.opt = optimizer
+                trainer.scheduler = scheduler
+            else:
+                agent.encode_inputs = False
     
+    elif args.agent_type == 'mbrl':
+        BATCH_SIZE = 128  #TODO: make this a argparse param
+        COLLECT_FORWARD_LOSS = False
+        DT = 1e-2 
+        if args.lib_type == 'dm':
+            DT = env.control_timestep()
+        
+        print("Local Linear Model: ", args.local_linear_model)
+        print("Model Mode: ", args.model_type)
+        #if rec_size > 0: #we need SEQUENTIAL points
+        #    dataset = DAgger(max_samples = args.dataset_max_samples, recent_prob = args.dataset_recent_prob, aggregate_examples = False, shuffle = False)
+        #else:
+        dataset = DAgger(max_samples = args.dataset_max_samples, recent_prob = args.dataset_recent_prob, aggregate_examples = False, correlated_samples = True)
+
+        if args.local_linear_model is not None and args.local_linear_model != 'None':
+            dataset = Dataset(aggregate_examples = False, correlated_samples = True)
+        if args.model_type == 'linear':
+            pytorch_class = PyTorchLinearSystemDynamicsLinearModule
+            pytorch_model = PyTorchLinearSystemModel 
+        else:
+            pytorch_class = PyTorchForwardDynamicsLinearModule
+            pytorch_model = PyTorchForwardDynamicsModel 
+
+        
+        ## SMC-SPECIFIC ARGS
+        SURFACE_BASE = None
+        #surface = np.concatenate([np.eye(obs_size) for i in range(action_size)])
+        #surface = np.eye(obs_size, M=action_size)
+        surface = np.ones([obs_size, action_size]) * 1.0
+
+        ## DDP-SPECIFIC ARGS 
+        LQG_FULL_ITERATIONS = True
+        LAMB_FACTOR = 10
+        LAMB_MAX = 1000
+        DDP_INIT = 0.0
+        HORIZON = 0.5e-1
+        DDP_MAX_ITERATIONS = 2
+        K_SHOOTS = 1
+        UPDATE_DDP_MODEL = True
+        ILQG_SMC = False
+        REUSE_SHOOTS = False if args.ddp_mode == 'ilqg' else False
+
+        if args.local_linear_model == 'sklearn': 
+            system_model = SKLearnLinearClusterLocalModel(
+                    (obs_size, obs_size), (obs_size, action_size),
+                    n_clusters = args.local_clusters,
+                    compute_labels = True, 
+                    dt = DT)
+        elif args.local_linear_model == 'pytorch': 
+            if args.model_type == 'linear':
+                system_model = PyTorchLinearClusterLocalModel(True, 
+                        device,
+                        (obs_size, obs_size), (obs_size, action_size),
+                        n_clusters = args.local_clusters, 
+                        neighbors = args.local_neighbors,
+                        compute_labels = True, 
+                        dt = DT)
+            else:
+                system_model = PyTorchForwardClusterLocalModel(True, 
+                        device,
+                        (obs_size, 1), (obs_size, action_size),
+                        n_clusters = args.local_clusters, 
+                        neighbors = args.local_neighbors,
+                        compute_labels = True, 
+                        dt = DT)
+        else:
+            if pytorch_class == PyTorchForwardDynamicsLinearModule:
+                pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                    activations = mlp_activations, initializer = mlp_initializer,
+                    rec_type = rec_type, rec_size = rec_size, rec_batch = rec_batch).to(device)
+            elif pytorch_class == PyTorchLinearSystemDynamicsLinearModule:
+                pytorch_module = pytorch_class((obs_size,  obs_size), (obs_size, action_size), device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
+                    activations = mlp_activations, initializer = mlp_initializer,
+                    rec_type = rec_type, rec_size = rec_size, rec_batch = rec_batch).to(device)
+            system_model = pytorch_model(pytorch_module, DT) 
+            print("System Module: ", pytorch_module)
+
+        #TODO TODO: Neural Network generation of quadratic cost
+        #function, using RL
+        cost = None
+        if args.lib_type == 'dm':
+            target_inds = []
+            if args.env_type == 'humanoid':
+                target = np.zeros(obs_size)
+                head_height_ind = 60 + 3 #61 from angle+extrem+vel
+                #torso_vertx_ind = 0
+                #torso_verty_ind = 0
+                torso_vertz_ind = 60 + 4
+                com_velx_ind = 60
+                #com_vely_ind = 0
+                #com_velz_ind = 0
+
+                target_head_height = 1.4
+                target_vertz_val = 0.9 #MINIMAL upright value
+                target_com_velx_val = 0#TRY to have it run in straight line
+                target[head_height_ind] = target_head_height
+                target[torso_vertz_ind] = target_vertz_val #TODO: confirm this
+                target[com_velx_ind] = target_com_velx_val
+                target_inds = [head_height_ind, torso_vertz_ind, com_velx_ind]
+                
+                if args.task_type == 'walk':
+                    target_com_velx_val = 1
+                elif args.task_type == 'run':
+                    target_com_velx_val = 10
+                Q = np.eye(obs_size) * 1e8
+                Qf = Q
+                R = np.eye(action_size) * 1e3
+            if args.env_type == 'ballcup':
+                target = np.zeros(obs_size)
+                target_pos = env.physics.named.data.site_xpos['target', ['x', 'z']]
+                target_x = target_pos[0] 
+                target_x_ind = 2
+                target_z = target_pos[1] - 0.2 #account for offset of ball
+                target_z_ind = 3
+                target[target_x_ind] = target_x
+                target[target_z_ind] = target_z
+                target_inds = [target_x_ind, target_z_ind]
+                #target, target_inds = env.get_target()
+                Q = np.eye(obs_size) * 1e8
+                Qf = Q
+                R = np.eye(action_size) * 1e3
+                #Q, Qf, R = agent.get_lqc_terms()
+                 
+
+            if args.env_type == 'walker':
+                #cost is manually set as walker height and
+                #center-of-mass horizontal velocity, conditioned
+                #on task type
+                #raise Exception("Hip angle != 0?! Is this...a problem for all envs? Can't assume 0,0 is valid...")
+                print("ENV TYPE IS WALKER")
+                target = np.zeros(obs_size)
+                upright_ind = 0 #1st "orientation" corresponds
+                height_ind = 14 #height field corresponds
+                if args.task_type == 'stand':
+                    target[height_ind] = 1.2
+                    target[upright_ind] = 2.0 #TODO: confirm this
+                    target_inds = [height_ind, upright_ind]
+                else:
+                    raise Exception("Extract COM for this env.")
+                    #com_vel_ind = 30 #NO obs directly corresponds to com velocity
+                    #target_inds = [height_ind, upright_ind, com_vel_ind]
+                Q = np.eye(obs_size) * 1e8
+                Qf = Q
+                R = np.eye(action_size) * 1e3
+            if args.env_type == 'cartpole':
+                #cost is manually set as deviation from pole upright
+                #position.
+                print("ENV TYPE IS CARTPOLE")
+                target = np.zeros(obs_size)
+                theta_ind = 1 #based on pole-angle cosine, rep theta
+                target_theta = -0.0 #target pole position
+                target[theta_ind] = target_theta
+                target_inds = [theta_ind]
+                Q = np.eye(obs_size) * 1e8
+                Qf = Q
+                R = np.eye(action_size) * 1e3
+            if args.env_type == 'acrobot':
+                #cost is manually set as deviation from upright position
+                print("ENV TYPE IS ACROBOT")
+                target = np.zeros(obs_size)
+                tip_target_start = 6
+                tip_target = env.physics.named.data.site_xpos['target']
+                target[tip_target_start:] = tip_target
+                target_inds = [tip_target_start + i for i in range(tip_target.shape[0])]
+                #target_inds = [tip_target_start + (tip_target.shape[0]) - 1]
+                Q = np.eye(obs_size) * 1e8
+                Qf = Q
+                R = np.eye(action_size) * 1e3
+        elif args.lib_type == 'control':
+            if args.env_type == 'inverted':
+                #cost is manually set as deviation from pole upright
+                #position.
+                print("ENV TYPE IS INVERTED PENDULUM (control environment)")
+                target = np.zeros(obs_size)
+                theta_ind = 0 
+                target_theta = 0.0 
+                target[theta_ind] = target_theta
+                target_inds = [theta_ind]
+                Q = np.eye(obs_size) * 1e2
+                Qf = Q * 1e2
+                R = np.eye(action_size) * 1e1
+            elif args.env_type == 'cartpole':
+                #cost is manually set as deviation from pole upright
+                #position.
+                print("ENV TYPE IS CARTPOLE (control environment)")
+                target = np.zeros(obs_size)
+                theta_ind = 2 #based on pole-angle cosine, rep theta
+                target_theta = 0.0 #target pole position
+                target[theta_ind] = target_theta
+                target_inds = [theta_ind]
+                Q = np.eye(obs_size) * 1e2
+                Qf = Q * 1e2
+                R = np.eye(action_size) * 1e1
+        print("TARGET: ", target)
+        if len(target.shape) < 2:
+            target = target[..., np.newaxis]
+        priority_cost = True
+        if priority_cost:
+            for i in range(obs_size):
+                if i not in target_inds:
+                    Q[i][i] = np.sqrt(Q[i][i])
+        else:
+            for i in range(obs_size):
+                if i not in target_inds:
+                    Q[i][i] = 0
+        class DiffFunc:
+            def __init__(self, target_inds):
+                self.inds = target_inds
+            def __call__(self, t, x):
+                x_ = np.zeros(x.shape)
+                for i in self.inds:
+                    x_[i] = x[i] - t[i]
+                return x_
+        #diff_func = DiffFunc(target_inds)
+        diff_func = lambda t,x:x - t 
+        print("Q: ", Q)
+        cost = LQC(Q, R, Qf = Qf, target = target, 
+                diff_func = diff_func)
+        if args.lib_type == 'control':
+            env.cost = cost #to get meaningful reward data
+        ddp = None
+        if args.ddp_mode == 'ilqg':
+            ddp = ILQG(LQG_FULL_ITERATIONS,
+                    LAMB_FACTOR, LAMB_MAX, DDP_INIT,
+                    obs_space, obs_size,
+                    [1, action_size], action_size,
+                    system_model, cost,
+                    None, 
+                    action_constraints, 
+                    horizon = int(HORIZON/DT), dt = DT, 
+                    max_iterations = DDP_MAX_ITERATIONS,
+                    eps = 1e-2,
+                    update_model = UPDATE_DDP_MODEL
+                    )
+            if ILQG_SMC == True:
+                print("Surface Function: ", surface)
+                smc = SMC(surface,
+                        target, diff_func,
+                        args.smc_switching_function,
+                        obs_space, obs_size,
+                        [1, action_size], action_size,
+                        system_model, cost,
+                        None, 
+                        action_constraints, 
+                        horizon = int(HORIZON/DT), dt = DT, 
+                        max_iterations = DDP_MAX_ITERATIONS,
+                        eps = 1e-2,
+                        update_model = UPDATE_DDP_MODEL
+                        )
+                ddp.set_smc(smc)
+
+        elif args.ddp_mode == 'smc':
+            #The idea is to make surface non-uniform (singular) 
+            #across control variables, but also to construct
+            #a generally good surface (target * 1e1 to focus emphasis
+            #on target variables)
+            target_vars = np.zeros((obs_size, 1)) #for guiding SMC
+            for i in target_inds:
+                target_vars[i] = 1
+            surface = surface + target_vars * 5e0 + np.eye(obs_size, M = action_size) * 1e-2
+            #surface = surface + target * 1e1
+            print("Obs Size: ", obs_size)
+            print("Action Size: ", action_size)
+            print("Surface Function: ", surface)
+            ddp = SMC(surface,
+                    target, diff_func,
+                    args.smc_switching_function,
+                    obs_space, obs_size,
+                    [1, action_size], action_size,
+                    system_model, cost,
+                    None, 
+                    action_constraints, 
+                    horizon = int(HORIZON/DT), dt = DT, 
+                    max_iterations = DDP_MAX_ITERATIONS,
+                    eps = 1e-2,
+                    update_model = UPDATE_DDP_MODEL
+                    )
+        elif args.ddp_mode == 'ismc':
+            #The idea is to make surface non-uniform (singular) 
+            #across control variables, but also to construct
+            #a generally good surface (target * 1e1 to focus emphasis
+            #on target variables)
+            target_vars = np.zeros((obs_size, 1)) #for guiding SMC
+            for i in target_inds:
+                target_vars[i] = 1
+            surface = surface + target_vars * 1e1 + np.eye(obs_size, M = action_size) * 1e-2
+            #surface = surface + target * 1e1
+            print("Obs Size: ", obs_size)
+            print("Action Size: ", action_size)
+            print("Surface Function: ", surface)
+            ddp = GD_SMC(1e-1, surface,
+                    target, diff_func,
+                    args.smc_switching_function,
+                    obs_space, obs_size,
+                    [1, action_size], action_size,
+                    system_model, cost,
+                    None, 
+                    action_constraints, 
+                    horizon = int(HORIZON/DT), dt = DT, 
+                    max_iterations = DDP_MAX_ITERATIONS,
+                    eps = 1e-2,
+                    update_model = UPDATE_DDP_MODEL
+                    )
+        
+        
+        agent, trainer =  create_pytorch_agnostic_mbrl(cost, 
+            ddp, REUSE_SHOOTS,
+            EPS, EPS_MIN, EPS_DECAY, 
+            dataset,
+            DT, HORIZON, K_SHOOTS,
+            BATCH_SIZE, COLLECT_FORWARD_LOSS, 
+            replay_iterations, None,
+            args.lib_type, args.env_type,
+            env, obs_size, action_size, action_constraints,
+            mlp_hdims, mlp_activations, 
+            lr = args.lr, adam_betas = ADAM_BETAS, momentum = args.momentum, 
+            discrete_actions = False, 
+            has_value_function = False) 
+    
+    i = 0
+    if LOAD_ARG != 0: #TODO: Must store/load "iteration"
+        print("Loading agent (module) from: %s" % (args.load))
+        models = [f for f in os.listdir(rundir) if os.path.isfile(os.path.join(rundir, f))] #TODO: there has to be a more elegant way to do this
+        models = [f for f in models if 'model' in f]
+        print("models: ", models)
+        i = max((int(f.split('_')[1]) for f in models))
+        print("Iteration: ", i)
+        modelpath = os.path.join(rundir, 'model_%s'%(i))
+        rewardpath = os.path.join(rundir, 'reward.csv')
+        argspath = os.path.join(rundir, 'args')
+        with open(modelpath, 'rb') as f:
+            if args.agent_type == 'mbrl':
+                if issubclass(type(agent.mpc_ddp.model), ClusterLocalModel):
+                    pickle.load(agent.mpc_ddp.model.cluster, f, pickle.HIGHEST_PROTOCOL) #WEW
+                else: #save global model module
+                    load_pytorch_module(agent.mpc_ddp.model, f)
+            elif args.agent_type == 'policy':
+                load_pytorch_module(agent, f)
+        with open(rewardpath, 'r') as f:
+            reader = csv.reader(f, delimiter = ',')
+            for row in reader:
+                agent.net_reward_history.append(float(row[0]))
+                averages.append(float(row[1]))
+            print("Rewards: ", agent.net_reward_history)
+            print("Averages: ", averages)
+            ind = max(0, len(averages) - 1 - MA_LEN)
+            MA = sum(averages[ind:])
+            print("MA: ", MA)
 
 
     if args.maxmin_normalization: 
@@ -1380,7 +1449,6 @@ if __name__ == '__main__':
         console_thread.daemon = True
         console_thread.start()
         ##
-        i = 0
         while i < args.max_iterations: #and error > threshold
             with lock: #now you cannot TRAIN and VIEW at the same time, assisting in copying modules?
                 print("ITERATION: ", i)
@@ -1460,7 +1528,7 @@ if __name__ == '__main__':
                     cur_runs = len(runs)
 
                     modelpath = os.path.join(rundir, 'model_%s'%(i))
-                    historypath = os.path.join(rundir, 'history_%s'%(i))
+                    rewardpath = os.path.join(rundir, 'reward.csv')
                     argspath = os.path.join(rundir, 'args')
                     if num_runs == cur_runs: #make rundir
                         if not os.path.exists(rundir): 
@@ -1475,28 +1543,25 @@ if __name__ == '__main__':
                                 save_pytorch_module(agent.mpc_ddp.model, f)
                         elif args.agent_type  == 'policy':
                             save_pytorch_module(agent, f)
-                    with open(historypath, 'wb') as f:
-                        history_dict = {'reward':agent.net_reward_history, 'averages':averages}
-                        pickle.dump(history_dict, f, pickle.HIGHEST_PROTOCOL)
+                    with open(rewardpath, 'w') as f:
+                        writer = csv.writer(f)
+                        writer.writerows(zip(agent.net_reward_history, averages))
+                        f.close()
                     if not os.path.exists(argspath):
                         with open(argspath, 'wb') as f:
                             pickle.dump(args, f, pickle.HIGHEST_PROTOCOL)
 
                 agent.reset_histories()
                 if args.agent_type == 'policy' and not PRETRAINED:
-                    print("Agent Net Action loss: ", agent.value_loss_history[i])
-                    print("Agent Net Value loss: ", agent.action_loss_history[i])
+                    if len(agent.value_loss_history) - 1 == i:
+                        print("Agent Net Action loss: ", agent.value_loss_history[i])
+                        print("Agent Net Value loss: ", agent.action_loss_history[i])
                 print("Agent Net Reward: ", agent.net_reward_history[-1])
                 #i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
                     try:
                         if args.lib_type == 'control' and args.train_autoencoder and i > 5:
-                            #TODO: encapsulate this AE testing...and all else
-                            #we now display forward dynamics to compare with 
-                            #control trajectory
                             env.generate_state_history_plot()
-                            #shift in predicted states, plot for side-by-side
-                            #comparison
                             print("Compare with Autoencoder results!")
                             ae_history = [] 
                             for j in range(len(env.state_history)): 
@@ -1505,29 +1570,16 @@ if __name__ == '__main__':
                                 a = torch.tensor(np.ones(1)).to(device).float()
                                 forward = autoencoder.forward_predict(s, a)
                                 ae_history.append(forward)
-                            #print("HISTORY: ", ae_history)
                             env.generate_state_history_plot(ae_history)
-                            #plt.pause(0.01)
-                            #plt.clf()
 
                                 
                         plt.figure(1)
-                        plt.subplot(2, 1, 1)
-                        #plt.title("Algorithm:%s \n\
-                        #        Activations: %s  Hdims: %s Outdims: %s\n\
-                        #        lr=%s betas=%s eps=%s min_eps=%s eps_decay=%s\n\
-                        #        gamma = %s"\
-                        #        %(TRAINER_TYPE, mlp_activations,
-                        #        mlp_hdims, mlp_outdim, 
-                        #        lr, ADAM_BETAS, EPS, EPS_MIN, EPS_DECAY, GAMMA))
-                        plt.title("Agent reward / loss history")
-                        #graph.set_xdata(range(len(total_reward_history)))
-                        #graph.set_ydata([r for r in total_reward_history])
-                        #plt.scatter(range(len(total_reward_history)), [r.numpy()[0] for r in total_reward_history])
+                        plt.title("Agent reward history")
                         plt.xlim(0, len(agent.net_reward_history))
                         plt.ylim(min(agent.net_reward_history) - min(agent.net_reward_history) / 2, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
                         plt.ylabel("Net \n Reward")
-                        plt.scatter(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], s=1.5, c='b')
+                        plt.xlabel("Timestep")
+                        plt.plot(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], c='b')
                         if MA_LEN > 0 and len(agent.net_reward_history) > 0:
                             MA += agent.net_reward_history[-1]
                             val = MA #in order to divide
@@ -1537,26 +1589,28 @@ if __name__ == '__main__':
                             else:
                                 val = val / (i + 1)
                             averages.append(val)
-                            #plt.plot(np.convolve(np.ones((MA_LEN,)), agent.net_reward_history, mode=m)) #alternative modes: 'full', 'same', 'valid'
                             plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
                             print("MA Reward: ", val)
-                        plt.subplot(2, 1, 2)
-                        plt.ylabel("Net \n Loss")
-                        if type(agent.net_loss_history[0]) == float:
-                            plt.scatter(range(len(agent.net_loss_history)), [r for r in agent.net_loss_history], s=1.5)
-                        else:
-                            plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
-                        if DISPLAY_AV_LOSS is True:
-                            plt.figure(2)
-                            plt.clf()
-                            plt.subplot(2, 1, 1)
-                            plt.ylabel("Action Loss")
-                            plt.scatter(range(len(agent.action_loss_history)), [l.numpy() for l in agent.action_loss_history], s=0.1)
-                            plt.subplot(2, 1, 2)
-                            plt.ylabel("Value Loss")
-                            plt.xlabel("Time")
-                            plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
-                            plt.draw()
+                        if args.load == 0:
+                            plt.figure(3)
+                            plt.title("Agent Loss history")
+                            plt.ylabel("Net \n Loss")
+                            plt.xlabel("Timestep")
+                            if type(agent.net_loss_history[0]) == float:
+                                plt.scatter(range(len(agent.net_loss_history)), [r for r in agent.net_loss_history], s=1.5)
+                            else:
+                                plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
+                            if DISPLAY_AV_LOSS is True:
+                                plt.figure(2)
+                                plt.clf()
+                                plt.subplot(2, 1, 1)
+                                plt.ylabel("Action Loss")
+                                plt.scatter(range(len(agent.action_loss_history)), [l.numpy() for l in agent.action_loss_history], s=0.1)
+                                plt.subplot(2, 1, 2)
+                                plt.ylabel("Value Loss")
+                                plt.xlabel("Time")
+                                plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
+                                plt.draw()
                         plt.pause(0.01)
                     except Exception as e:
                         print("ERROR: ", e)

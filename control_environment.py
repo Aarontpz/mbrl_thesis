@@ -740,8 +740,8 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    TEST_INVERTED_PENDULUM = False
-    TEST_CARTPOLE = True
+    TEST_INVERTED_PENDULUM = True
+    TEST_CARTPOLE = False
 
     if TEST_CARTPOLE:
         horizon = 10
@@ -752,11 +752,11 @@ if __name__ == '__main__':
         dt = 1e-2
         ARCTAN = False
         TSSMC = False
-        ISMC = False
+        ISMC = True
         #ucoeff = 1.5
         umax = 1.5e1
         umin = -umax
-        ucoeff = umax / 2
+        ucoeff = 3*umax / 4
         #ucoeff = umax
         sigma_base = np.array([[1e0, 1e0, 1e0, 1e0]]).T #sliding surface definition
         sigma = sigma_base.copy() #sliding surface definition
@@ -765,7 +765,7 @@ if __name__ == '__main__':
         else:
             switch = lambda s: np.sign(s)
         target = np.array([[0.0, 0, 0.0, 0]]).T
-        x0 = np.array([[-0, -.0, np.pi/8, -0.0]]).T
+        x0 = np.array([[-0, -.0, np.pi/2, 3.0]]).T
         #x0 = np.array([[-0, -.0, 0.0001, -1.8]]).T
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
@@ -967,7 +967,8 @@ if __name__ == '__main__':
         wn = 20
         umax = 2e-1
         ARCTAN = False
-        sigma_base = np.array([1, 1], dtype=np.float64) #sliding surface definition
+        ISMC = True
+        sigma_base = np.array([1e0, 1e0], dtype=np.float64) #sliding surface definition
         sigma_history = []
         record_sigma = True
         while not env.episode_is_done():
@@ -982,7 +983,6 @@ if __name__ == '__main__':
             g = np.array([0, 1]) #b vector
             f = np.array([x[1], np.cos(x[0]) - friction * x[1]])
             alpha = 1e-1
-            ISMC = True
             if ISMC:
                 sigma = sigma_base.copy()
                 sign = None

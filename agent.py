@@ -13,7 +13,6 @@ import torch.multiprocessing as mp
 
 import math
 
-from functools import reduce
 
 from ddp import *
 from model import *
@@ -146,8 +145,8 @@ class Agent:
         self.steps = 0
         self.terminal_history[-1] = 1
         self.reward_history[-1] = self.terminal_penalty
-        avg_reward = sum(self.reward_history) / len(self.reward_history)
-        #avg_reward = sum(self.reward_history)
+        #avg_reward = sum(self.reward_history) / len(self.reward_history)
+        avg_reward = sum(self.reward_history)
         self.net_reward_history.append(avg_reward)
 
     def reset_histories(self):
@@ -679,7 +678,7 @@ class DDPMPCAgent(MPCAgent):
             self.update_target(self.env) #for tasks with variable targets
         if random.random() < self.eps:
             self.eps = max(self.eps_min, self.eps - self.eps_decay)
-            print("EPS ACTION: ", self.sample_action(obs))
+            #print("EPS ACTION: ", self.sample_action(obs))
             #flush stored state/action pairs
             self.prev_states = []
             self.prev_actions = []
@@ -970,7 +969,7 @@ class ForwardClusterLocalModel(ClusterLocalModel, GeneralSystemModel):
                 self.initialize_model_free_arrays()
             else:
                 self.f, self.g = self.get_forward_model(model, xt)
-                print("f: %s" % (self.f))
+                #print("f: %s" % (self.f))
                 #input()
         return self.f, self.g
 
@@ -1456,8 +1455,8 @@ class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
             self.g.resize(self.module.b_shape)
         else:
             self.g = self.module.du(xt)
-        print("f: ", self.f.shape)
-        print("g: ", self.g.shape)
+        #print("f: ", self.f.shape)
+        #print("g: ", self.g.shape)
         return self.f, self.g
 
 class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):

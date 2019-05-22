@@ -3,10 +3,12 @@ from torch.autograd import Variable
 import numpy as np
 
 import random as random
+from functools import reduce
+
 class PyTorchMLP(torch.nn.Sequential):
     def __init__(self, device, indim, outdim, hdims : [] = [], 
             activations : [] = [], initializer = None, batchnorm = False,
-            bias = True, rec_size = 128, rec_type = 'lstm', rec_batch = 1):
+            bias = True, rec_size = 0, rec_type = 'gru', rec_batch = 1):
         super(PyTorchMLP, self).__init__()
         self.indim = indim
         self.outdim = outdim
@@ -98,18 +100,20 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
         self.a_size = reduce(lambda x,y:x*y, A_shape)
         self.b_shape = B_shape
         self.b_size = reduce(lambda x,y:x*y, B_shape)
-        self.f_layer = torch.nn.Linear(self.outdim, A_shape[1], bias = True)
         
+        outdim = self.outdim if not self.rec_size > 0 else self.rec_size
+
+        self.f_layer = torch.nn.Linear(outdim, A_shape[1], bias = True)
         if self.seperate_modules:
             self.g_module = PyTorchMLP(*args, **kwargs)
-        elif self.linear_g: #cannot have both, since PyTorchMLP is not guarenteed to be linear / non-affine
+        if self.linear_g: #cannot have both, since PyTorchMLP is not guarenteed to be linear / non-affine
             self.g_layer = PyTorchMLP(self.device, B_shape[1],
-                    B_shape[0], hdims = [200,], 
-                    activations = [None, None], bias = False)
+                    B_shape[0], hdims = [], 
+                    activations = [None], bias = False, rec_size = 0)
                     #B_shape[0], hdims = [], 
                     #activations = [None], bias = False)
         else:
-            self.g_layer = torch.nn.Linear(self.outdim, self.b_size, bias = True)
+            self.g_layer = torch.nn.Linear(outdim, self.b_size, bias = True)
 
              
 
@@ -126,6 +130,8 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
             g = self.g_layer(out)
         elif self.linear_g:
             g = self.du(x, u = np.zeros((1, self.b_shape[1]))) 
+        if f.shape[0] != self.a_shape[0]:
+            f = f.t()
         return f, g
     
     def du(self, xt, u = None, create_graph = True):
@@ -151,8 +157,9 @@ class PyTorchLinearSystemDynamicsLinearModule(PyTorchMLP):
         self.a_size = reduce(lambda x,y:x*y, A_shape)
         self.b_shape = B_shape
         self.b_size = reduce(lambda x,y:x*y, B_shape)
-        self.a_module = torch.nn.Linear(self.outdim, self.a_size, bias = True)
-        self.b_module = torch.nn.Linear(self.outdim, self.b_size, bias = True)
+        outdim = self.outdim if not self.rec_size > 0 else self.rec_size
+        self.a_module = torch.nn.Linear(outdim, self.a_size, bias = True)
+        self.b_module = torch.nn.Linear(outdim, self.b_size, bias = True)
 
     def forward(self, x, *args, **kwargs):
         if type(x) == np.ndarray:

@@ -67,10 +67,10 @@ class Trainer:
 
 class Dataset:
     '''By default Dataset acts as if it is storing samples from an MDP'''
-    def __init__(self, aggregate_examples = False, shuffle = True):
+    def __init__(self, aggregate_examples = False, correlated_samples = True):
         self.samples = []
         self.aggregate_examples = aggregate_examples
-        self.shuffle = shuffle
+        self.correlated_samples = correlated_samples
 
         self.ind = 0
     
@@ -78,11 +78,13 @@ class Dataset:
         batch = None
         if batch_size == None:
             batch_size = 0
-        if self.shuffle:
+        if not self.correlated_samples:
             batch = random.sample(self.samples, batch_size + 1)  
         else:
-            batch = self.samples[self.ind + batch_size]
-            self.ind += batch_size
+            ind = random.choice(range(len(self.samples)))
+            end = min(len(self.samples) - 1, ind + batch_size)
+            print("Start: %s End: %s" % (ind, end))
+            batch = self.samples[ind : end]
         return batch
         
 
@@ -132,13 +134,13 @@ class DAgger(Dataset):
         batch = None
         if batch_size == None:
             batch_size = 0
-        if batch_size > len(samples) - 1:
-            batch_size = len(samples) - 1
-        if self.shuffle:
-            batch = random.sample(samples, batch_size + 1)  
+        if self.correlated_samples:
+            ind = random.choice(range(len(samples)))
+            end = min(len(samples) - 1, ind + batch_size)
+            print("Start: %s End: %s" % (ind, end))
+            batch = samples[ind : end]
         else:
-            batch = samples[self.ind + batch_size]
-            self.ind += batch_size
+            batch = random.sample(samples, batch_size + 1)  
         return batch
 
     def trainer_step(self, trainer):
@@ -242,7 +244,7 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
             net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
             net_value_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
             rewards = self.get_discounted_rewards(self.agent.reward_history[start:end], scale = True).to(device)
-            #print("START: %s END: %s" % (start, end))
+            print("START: %s END: %s" % (start, end))
             for ind in range(start, end - 1): #-1 because terminal state doesn't matter?
                 #print("Rewards: ", len(rewards))
                 #print("Ind: ", ind)
@@ -503,7 +505,7 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
         #independent of dataset
     
     def compute_model_loss(self, s, a, r, s_, *args, **kwargs):
-        print("S: %s \n A: %s" % (s, a))
+        #print("S: %s \n A: %s" % (s, a))
         estimate = self.model.forward_predict(s, a, self.model.dt, *args, **kwargs)
         if type(s_) == np.ndarray:
             s_ = torch.tensor(s_, requires_grad = False, device = self.device).float()
@@ -515,12 +517,16 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
         device = self.device
         optimizer = self.opt
         dataset = self.dataset
+        #print("Dataset: ", dataset)
         dataset.trainer_step(self) 
+        model = self.model
 
         loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
         net_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
         net_forward_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         for r in range(self.replay):
+            if hasattr(model.module, 'rec_size') and model.module.rec_size > 0: 
+                model.module.reset_states() 
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
             sample = dataset.sample(self.batch_size) 
             for i in range(len(sample)):
