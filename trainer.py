@@ -135,6 +135,8 @@ class DAgger(Dataset):
         if batch_size == None:
             batch_size = 0
         if self.correlated_samples:
+            if batch_size > len(samples): #to do full runs
+                return self.samples
             ind = random.choice(range(len(samples)))
             end = min(len(samples) - 1, ind + batch_size)
             print("Start: %s End: %s" % (ind, end))

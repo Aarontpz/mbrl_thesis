@@ -178,6 +178,32 @@ def create_dm_walker_agent(agent_base, *args, **kwargs):
     
     return DMWalkerAgent(*args, **kwargs)
 
+def create_dm_ballcup_agent(agent_base, *args, **kwargs):
+    '''Helper function to implement "transform_observation", and, in the case of MPC agents,
+    a reward function, for the ball-in-cup environment.'''
+    class DMBallCupAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            if type(obs) == type(collections.OrderedDict()):
+                orientation = obs['position']
+                vel = obs['velocity']
+                state = np.concatenate((orientation, vel))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
+            else:
+                return obs
+            return Variable(torch.tensor(state).float(), requires_grad = True)
+            #return state
+    
+        def reward(self, st, at, *args, **kwargs):
+            global TASK_NAME #GROOOOOOSSSSSSSTHH
+            if TASK_NAME in ['walk', 'run']:
+                return env.physics.horizontal_velocity() #TODO: this is only valid for walk / run tasks
+            else: 
+                return 0.0
+    
+    return DMBallCupAgent(*args, **kwargs)
 
 def create_dm_acrobot_agent(agent_base, *args, **kwargs):
     '''Helper function to implement "transform_observation", and, in the case of MPC agents,
@@ -294,7 +320,7 @@ def create_ddp_dm_humanoid_agent(agent_base, *args, **kwargs):
             pass
 
     return DDPHumanoidAgent(*args, **kwargs)
-def create_ddp_dm_walker_agent(agent_base, *args, **kwargs):
+def create_ddp_dm_walker_agent(env, task, agent_base, *args, **kwargs):
     '''Transform_observation transforms observation into Numpy array. '''
     class DDP_DMWalkerAgent(agent_base):
         def transform_observation(self, obs) -> Variable:
@@ -304,10 +330,21 @@ def create_ddp_dm_walker_agent(agent_base, *args, **kwargs):
                 orientation = obs['orientations']
                 vel = obs['velocity']
                 height = np.asarray([obs['height'],])
-                state = np.concatenate((orientation, vel, height))
+                if self.task in ['run', 'walk']:
+                    com = np.asarray([env.physics.horizontal_velocity()])
+                    state = np.concatenate((orientation, vel, height, com))
+                else:
+                    state = np.concatenate((orientation, vel, height,))
             elif type(obs) == type(np.zeros(0)):
                 state = obs
             #return Variable(torch.tensor(state).float(), requires_grad = True)
+            #print("Obs: ", obs)
+            #print("State: ", state)
+            #print("State[23]: ", state[23])
+            #print("Height: ", obs['height'])
+            #print("State[24]: ", state[24])
+            #print("Height: ", env.physics.horizontal_velocity())
+
             return state
     
         def reward(self, st, at, *args, **kwargs):
@@ -316,8 +353,10 @@ def create_ddp_dm_walker_agent(agent_base, *args, **kwargs):
                 return env.physics.horizontal_velocity() #TODO: this is only valid for walk / run tasks
             else: 
                 return 0.0
-    
-    return DDP_DMWalkerAgent(*args, **kwargs)
+    agent = DDP_DMWalkerAgent(*args, **kwargs)   
+    agent.env = env
+    agent.task = task
+    return agent
 
 def create_ddp_dm_ballcup_agent(env, agent_base, *args, **kwargs):
     '''Transform_observation transforms observation into Numpy array. '''
@@ -345,7 +384,7 @@ def create_ddp_dm_ballcup_agent(env, agent_base, *args, **kwargs):
             target_z_ind = 3
             target[target_x_ind] = target_x
             target[target_z_ind] = target_z
-            print("TARGET: ", target)
+            #print("TARGET: ", target)
             self.mpc_ddp.model.target = target
             self.mpc_ddp.cost.target = target
     
@@ -425,13 +464,13 @@ def create_ddp_dm_acrobot_agent(env, agent_base, *args, **kwargs):
     return agent
 
 #NOTE: I really need to clean this initialization code up :(
-def create_ddp_agent(lib_type, env_type, env, agent_base = DDPMPCAgent, *args, **kwargs):
+def create_ddp_agent(lib_type, task_type, env_type, env, agent_base = DDPMPCAgent, *args, **kwargs):
     agent = None
     if lib_type == 'dm':
         if env_type == 'humanoid':
             agent = create_ddp_dm_humanoid_agent(agent_base, *args, **kwargs)   
         elif env_type == 'walker':
-            agent = create_ddp_dm_walker_agent(DDPMPCAgent, *args, **kwargs) 
+            agent = create_ddp_dm_walker_agent(env, task_type, DDPMPCAgent, *args, **kwargs) 
         elif env_type == 'acrobot':
             agent = create_ddp_dm_acrobot_agent(env, DDPMPCAgent, *args, **kwargs) #requires access to additional state in order to function
         elif env_type == 'cartpole':
@@ -458,6 +497,8 @@ def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwar
             return create_dm_acrobot_agent(agent_base, *args, **kwargs)
         elif env_type == 'humanoid':
             return create_dm_humanoid_agent(agent_base, *args, **kwargs)
+        elif env_type == 'ballcup':
+            agent = create_dm_ballcup_agent(agent_base, *args, **kwargs) 
     else:
         return create_numpy_agent(agent_base, *args, **kwargs)
     return agent
@@ -471,6 +512,8 @@ def initialize_dm_environment(env_type, task_name, agent_type, *args, **kwargs):
     obs_space = env.observation_spec()
     if env_type == 'walker':
         obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0] + 1 #+1 for height
+        if agent_type in ['mbrl'] and task_name in ['walk', 'run']:
+            obs_size += 1 #for com
     if env_type == 'acrobot':
         obs_size = obs_space['orientations'].shape[0] + obs_space['velocity'].shape[0]
         if agent_type in ['mbrl']: #add "tip" information. Just the tip
@@ -630,7 +673,7 @@ def create_pytorch_agnostic_mbrl(cost,
         dt, horizon, k_shoots,
         batch_size, collect_forward_loss,
         replays, criterion,
-        lib_type, env_type, 
+        lib_type, task_type, env_type, 
         env, obs_size, action_size, action_constraints,
         mlp_hdims, mlp_activations, 
         lr = 1e-3, adam_betas = (0.9, 0.999), momentum = 1e-3, 
@@ -638,7 +681,8 @@ def create_pytorch_agnostic_mbrl(cost,
         has_value_function = False, ) -> (Agent, Trainer): 
     #NOTE: I'm going insane with this pseudoOOP it's compulsive right now D:
     #NOTE: I really need to clean this initialization code up :(
-    agent = create_ddp_agent(lib_type, env_type, env, DDPMPCAgent, ddp, 
+    agent = create_ddp_agent(lib_type, task_type, 
+            env_type, env, DDPMPCAgent, ddp, 
                     reuse_shoots, 
                     eps_base, eps_min, eps_decay, 
                     horizon, k_shoots, 
@@ -653,6 +697,7 @@ def create_pytorch_agnostic_mbrl(cost,
         criterion = torch.nn.MSELoss() 
         module = agent.mpc_ddp.model.module
         optimizer = optim.Adam(module.parameters(), lr = lr, betas = ADAM_BETAS)
+        #optimizer = optim.RMSprop(module.parameters(), lr = lr)
         #optimizer = optim.SGD(module.parameters(), lr = lr, momentum = MOMENTUM)
         scheduler = None
         #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
@@ -1084,7 +1129,8 @@ if __name__ == '__main__':
                 agent.encode_inputs = False
     
     elif args.agent_type == 'mbrl':
-        BATCH_SIZE = 128  #TODO: make this a argparse param
+        #BATCH_SIZE = 128  #TODO: make this a argparse param
+        BATCH_SIZE = float('inf')  #TODO: make this a argparse param
         COLLECT_FORWARD_LOSS = False
         DT = 1e-2 
         if args.lib_type == 'dm':
@@ -1215,15 +1261,14 @@ if __name__ == '__main__':
                 print("ENV TYPE IS WALKER")
                 target = np.zeros(obs_size)
                 upright_ind = 0 #1st "orientation" corresponds
-                height_ind = 14 #height field corresponds
-                if args.task_type == 'stand':
-                    target[height_ind] = 1.2
-                    target[upright_ind] = 2.0 #TODO: confirm this
-                    target_inds = [height_ind, upright_ind]
-                else:
-                    raise Exception("Extract COM for this env.")
-                    #com_vel_ind = 30 #NO obs directly corresponds to com velocity
-                    #target_inds = [height_ind, upright_ind, com_vel_ind]
+                height_ind = 23 #height field corresponds
+                target[height_ind] = 1.2
+                target[upright_ind] = 2.0 #TODO: confirm this
+                target_inds = [height_ind, upright_ind]
+                if args.task_type != 'stand':
+                    com_ind = 24
+                    target[com_ind] = 1 if args.task_type == 'walk' else 8
+                    #target_inds.append(com_ind)
                 Q = np.eye(obs_size) * 1e8
                 Qf = Q
                 R = np.eye(action_size) * 1e3
@@ -1368,7 +1413,7 @@ if __name__ == '__main__':
             target_vars = np.zeros((obs_size, 1)) #for guiding SMC
             for i in target_inds:
                 target_vars[i] = 1
-            surface = surface + target_vars * 1e1 + np.eye(obs_size, M = action_size) * 1e-2
+            surface = surface + target_vars * 2e0 + np.eye(obs_size, M = action_size) * 1e-2
             #surface = surface + target * 1e1
             print("Obs Size: ", obs_size)
             print("Action Size: ", action_size)
@@ -1395,7 +1440,7 @@ if __name__ == '__main__':
             DT, HORIZON, K_SHOOTS,
             BATCH_SIZE, COLLECT_FORWARD_LOSS, 
             replay_iterations, None,
-            args.lib_type, args.env_type,
+            args.lib_type, args.task_type, args.env_type,
             env, obs_size, action_size, action_constraints,
             mlp_hdims, mlp_activations, 
             lr = args.lr, adam_betas = ADAM_BETAS, momentum = args.momentum, 
@@ -1428,7 +1473,7 @@ if __name__ == '__main__':
                 averages.append(float(row[1]))
             print("Rewards: ", agent.net_reward_history)
             print("Averages: ", averages)
-            ind = max(0, len(averages) - 1 - MA_LEN)
+            ind = max(0, len(averages) + 1 - MA_LEN)
             MA = sum(averages[ind:])
             print("MA: ", MA)
 
