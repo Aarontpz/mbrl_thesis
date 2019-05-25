@@ -2,7 +2,8 @@ import torch
 from torch.autograd import Variable
 import numpy as np
 
-import random as random
+import random
+import math
 from functools import reduce
 
 class PyTorchMLP(torch.nn.Sequential):

@@ -40,7 +40,7 @@ parser.add_argument("--env-type", type=str, help="Environment type (walker, cart
 parser.add_argument("--task-type", type=str, help="Environment-specific task (walk, stand, balance, swingup,...)", default = 'stand')
 
 parser.add_argument("--agent-type", type=str, help="Specify agent algorithm (policy [policy gradient], mbrl [model-based RL])", default = 'policy')
-parser.add_argument("--max-iterations", type=int, help="Maximum number of iterations to train / evaluate agent for.", default=5000)
+parser.add_argument("--max-iterations", type=int, help="Maximum number of iterations to train / evaluate agent for.", default=2500)
 parser.add_argument("--random-baseline", type=int, default = 0, help="Sample actions uniformly if agent is eps-greedy and this argument != 0")
 parser.add_argument("--eps-base", type=float, default=5e-2)
 parser.add_argument("--eps-min", type=float, default=1e-2)
@@ -983,6 +983,9 @@ if __name__ == '__main__':
 
 
     replay_iterations = args.replays
+    if args.agent_type == 'policy' and args.trainer_type == 'PPO':
+        EPISODES_BEFORE_TRAINING = 3 #so we benefit from reusing sampled trajectories with PPO / TRPO
+        print("RUNNING SEVERAL EPISODES BEFORE TRAINING!")
 
     MA = 0
     averages = []
@@ -1034,8 +1037,8 @@ if __name__ == '__main__':
         autoencoder = None
         autoencoder_trainer = None
         #AE_BATCHES = None
-        TRAIN_FORWARD = True
-        TRAIN_ACTION = True
+        TRAIN_FORWARD = False
+        TRAIN_ACTION = False
 
         mlp_outdim = None
         DEPTH = 2
@@ -1043,7 +1046,7 @@ if __name__ == '__main__':
         REDUCTION_FACTOR = 0.7
         COUPLED_SA = False #have S/A feed into same encoded space or not
         PREAGENT = True
-        PREAGENT_VALUE_FUNC = True #(True, None) or False
+        PREAGENT_VALUE_FUNC = False #(True, None) or False
         PREAGENT_VALUE_INPUT = not (PREAGENT_VALUE_FUNC in (None, False))
         FORWARD_DYNAMICS = False #False reflects potential for linear transformation
         LINEAR_FORWARD = False #imposes linear function on forward dynamics
@@ -1079,9 +1082,9 @@ if __name__ == '__main__':
                     initializer = mlp_initializer).to(device)   
 
         if args.train_autoencoder != 0:
-            raise Exception("Add autoencoder-specific args, such as coupled_sa, reduction_factor, widening_const, etc")
+            #raise Exception("Add autoencoder-specific args, such as coupled_sa, reduction_factor, widening_const, etc")
 
-            AUTOENCODER_DATASET = Dataset(aggregate_examples = False, shuffle = True)
+            AUTOENCODER_DATASET = Dataset(aggregate_examples = False, correlated_samples = False)
             #AUTOENCODER_DATASET = DAgger(recent_prob = DATASET_RECENT_PROB, aggregate_examples = False, shuffle = True)
             autoencoder = LinearSAAutoencoder(autoencoder_base, 
                     obs_size, action_size, forward_mlp, COUPLED_SA, FORWARD_DYNAMICS,
@@ -1106,7 +1109,7 @@ if __name__ == '__main__':
                             agent.module.value_module)
                     #value_module = agent.module.value_mlp
                 mlp_indim = math.floor(obs_size * REDUCTION_FACTOR**DEPTH)  
-                agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, [], 
+                agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints,
                         action_size, 
                         seperate_value_module = value_module, 
                         seperate_value_module_input = PREAGENT_VALUE_INPUT,
@@ -1602,7 +1605,7 @@ if __name__ == '__main__':
                         print("Agent Net Action loss: ", agent.value_loss_history[i])
                         print("Agent Net Value loss: ", agent.action_loss_history[i])
                 print("Agent Net Reward: ", agent.net_reward_history[-1])
-                #i += EPISODES_BEFORE_TRAINING 
+                i += EPISODES_BEFORE_TRAINING 
                 if DISPLAY_HISTORY is True:
                     try:
                         if args.lib_type == 'control' and args.train_autoencoder and i > 5:
@@ -1625,17 +1628,19 @@ if __name__ == '__main__':
                         plt.ylabel("Net \n Reward")
                         plt.xlabel("Timestep")
                         plt.plot(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], c='b')
-                        if MA_LEN > 0 and len(agent.net_reward_history) > 0:
-                            MA += agent.net_reward_history[-1]
-                            val = MA #in order to divide
-                            if i >= MA_LEN - 1: 
-                                MA -= agent.net_reward_history[i - MA_LEN]
-                                val = val / MA_LEN
-                            else:
-                                val = val / (i + 1)
-                            averages.append(val)
+                        for j in reversed(range(EPISODES_BEFORE_TRAINING)):
+                            if MA_LEN > 0 and len(agent.net_reward_history) > 0:
+                                MA += agent.net_reward_history[-(j+1)]
+                                val = MA #in order to divide
+                                if i >= MA_LEN - 1: 
+                                    MA -= agent.net_reward_history[i - MA_LEN + j]
+                                    val = val / MA_LEN
+                                else:
+                                    val = val / (i - j)
+                                averages.append(val)
+                                print("MA Reward: ", val)
+                        if MA_LEN > 0:
                             plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
-                            print("MA Reward: ", val)
                         if args.load == 0:
                             plt.figure(3)
                             plt.title("Agent Loss history")
@@ -1659,6 +1664,5 @@ if __name__ == '__main__':
                         plt.pause(0.01)
                     except Exception as e:
                         print("ERROR: ", e)
-                i += 1
     else:
         launch_viewer(env, agent)
