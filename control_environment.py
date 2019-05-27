@@ -740,8 +740,8 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    TEST_INVERTED_PENDULUM = True
-    TEST_CARTPOLE = False
+    TEST_INVERTED_PENDULUM = False
+    TEST_CARTPOLE = True
 
     if TEST_CARTPOLE:
         horizon = 10
@@ -756,9 +756,9 @@ if __name__ == '__main__':
         #ucoeff = 1.5
         umax = 1.5e1
         umin = -umax
-        ucoeff = 3*umax / 4
-        #ucoeff = umax
-        sigma_base = np.array([[1e0, 1e0, 1e0, 1e0]]).T #sliding surface definition
+        #ucoeff = 3*umax / 4
+        ucoeff = umax
+        sigma_base = np.array([[1e0, 1e0, 5e0, 1e0]]).T #sliding surface definition
         sigma = sigma_base.copy() #sliding surface definition
         if ARCTAN:
             switch = lambda s: np.arctan(s) * 2/np.pi
@@ -857,6 +857,8 @@ if __name__ == '__main__':
                     sigma = np.clip(sigma, 1e-1, float('inf'))
                     i += 1
                     #input()
+                if umax < mag:
+                    sigma = sigma_base.copy()
                 print("Final Sigma: ", sigma)
                 print("Final Mag: %s" % (mag))
                 s = np.dot(sigma.T, x)
@@ -965,7 +967,7 @@ if __name__ == '__main__':
         env.state = np.array([np.pi, 0e0])
         gamma = 0.7
         wn = 20
-        umax = 2e-1
+        umax = 8e-1
         ARCTAN = False
         ISMC = True
         sigma_base = np.array([1e0, 1e0], dtype=np.float64) #sliding surface definition
@@ -1004,6 +1006,8 @@ if __name__ == '__main__':
                     sigma = np.clip(sigma, 1e-1, float('inf'))
                     i += 1
                     #input()
+                if umax < mag:
+                    sigma = sigma_base.copy()
                 print("Final Sigma: ", sigma)
                 print("Final Mag: %s" % (mag))
                 s = np.dot(sigma.T, x)

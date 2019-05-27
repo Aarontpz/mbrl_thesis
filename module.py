@@ -9,7 +9,8 @@ from functools import reduce
 class PyTorchMLP(torch.nn.Sequential):
     def __init__(self, device, indim, outdim, hdims : [] = [], 
             activations : [] = [], initializer = None, batchnorm = False,
-            bias = True, rec_size = 0, rec_type = 'gru', rec_batch = 1):
+            bias = True, rec_size = 0, rec_type = 'gru', rec_batch = 1,
+            rec_out = False):
         super(PyTorchMLP, self).__init__()
         self.indim = indim
         self.outdim = outdim
@@ -20,6 +21,7 @@ class PyTorchMLP(torch.nn.Sequential):
         self.rec_size = rec_size
         self.rec_type = rec_type
         self.rec_batch = rec_batch
+        self.rec_out = rec_out
         assert(len(activations) == len(hdims) + 1)
         
         layers = []
@@ -32,16 +34,18 @@ class PyTorchMLP(torch.nn.Sequential):
                 if active is not None:
                     layers.append(active)
             prev_size = hdims[i]
-        linear = torch.nn.Linear(prev_size, outdim, bias = bias)
-        layers.append(linear)
-        final_ind = len(hdims)
-        if activations[final_ind] is not None:
-            active = self.create_activation(activations[final_ind])
-            if active is not None:
-                layers.append(active)
+        if not self.rec_out:
+            linear = torch.nn.Linear(prev_size, outdim, bias = bias)
+            layers.append(linear)
+            final_ind = len(hdims)
+            if activations[final_ind] is not None:
+                active = self.create_activation(activations[final_ind])
+                if active is not None:
+                    layers.append(active)
         
         if rec_size > 0:
-            prev_size = outdim #for...clarity's sake? 
+            if not self.rec_out:
+                prev_size = outdim #for...clarity's sake? 
             if rec_type == 'gru':
                 self.rec = torch.nn.GRUCell(prev_size, rec_size)
             else:
@@ -82,8 +86,11 @@ class PyTorchMLP(torch.nn.Sequential):
                 self.cx = cx
         return x
 
-
-
+    def get_outdim(self):
+        outdim = self.outdim
+        if self.rec_size > 0:
+            outdim = self.rec_size
+        return outdim
 
 
 #TODO: Consolidate these Modules and the modules used in clustered modelling
@@ -102,7 +109,7 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
         self.b_shape = B_shape
         self.b_size = reduce(lambda x,y:x*y, B_shape)
         
-        outdim = self.outdim if not self.rec_size > 0 else self.rec_size
+        outdim = self.get_outdim()
 
         self.f_layer = torch.nn.Linear(outdim, A_shape[1], bias = True)
         if self.seperate_modules:
@@ -158,7 +165,7 @@ class PyTorchLinearSystemDynamicsLinearModule(PyTorchMLP):
         self.a_size = reduce(lambda x,y:x*y, A_shape)
         self.b_shape = B_shape
         self.b_size = reduce(lambda x,y:x*y, B_shape)
-        outdim = self.outdim if not self.rec_size > 0 else self.rec_size
+        outdim = self.get_outdim()
         self.a_module = torch.nn.Linear(outdim, self.a_size, bias = True)
         self.b_module = torch.nn.Linear(outdim, self.b_size, bias = True)
 
@@ -255,14 +262,14 @@ class PyTorchLinearAutoencoder(torch.nn.Module):
             for l in range(len(self.encoder)):
                 x = self.encoder[l](x)
             #print("Len: %s Encoded Space: %s" % (len(x), self.encoded_space))
-            assert(len(x) == self.encoded_space)
+            #assert(len(x) == self.encoded_space)
         return x
 
     def decode(self, x):
         #print("Inp: ", len(x))
         #print("Encoded: ", self.encoded_space)
         if len(self.decoder) > 0:
-            assert(len(x) == self.encoded_space)
+            #assert(len(x) == self.encoded_space)
             for l in range(len(self.decoder)):
                 x = self.decoder[l](x)
         return x
@@ -406,7 +413,7 @@ class PyTorchDiscreteACMLP(PyTorchMLP):
         self.action_space = action_space
         super(PyTorchDiscreteACMLP, self).__init__(*args, **kwargs)
 
-        outdim = self.outdim if not self.rec_size > 0 else self.rec_size
+        outdim = self.get_outdim()
 
         self.seperate_value_module_input = seperate_value_module_input
         self.sigma_head = sigma_head
@@ -447,7 +454,7 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
             *args, **kwargs):
         self.action_space = action_space
         super(PyTorchContinuousGaussACMLP, self).__init__(*args, **kwargs)
-        outdim = self.outdim if not self.rec_size > 0 else self.rec_size
+        outdim = self.get_outdim()
 
         self.seperate_value_module_input = seperate_value_module_input
         self.sigma_head = sigma_head

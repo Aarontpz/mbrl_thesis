@@ -540,6 +540,7 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
         net_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
         net_forward_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         for r in range(self.replay):
+            print("Replay %s with batch size %s"% (r, self.batch_size))
             if hasattr(model.module, 'rec_size') and model.module.rec_size > 0: 
                 model.module.reset_states() 
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory

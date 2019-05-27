@@ -645,6 +645,7 @@ class SMC(DDP):
                 #print("Sign: ", sign)
                 #print("Yeah", self.action_constraints[1] * sign.T)
                 out = self.action_constraints[1] * sign.T
+                out += magnitude
             #if len(out.shape) < 2:
             #    out = out[..., np.newaxis]
             #print("OUT SHAPE: ", out.shape)
@@ -654,8 +655,10 @@ class SMC(DDP):
             #print("g: ", self.model.g)
             #print("DOT: ", np.linalg.det(np.dot(ds_dx.T, self.model.g)))
             #print("DOT: ", (np.dot(ds_dx.T, self.model.g)))
-            magnitude = -(2 * np.linalg.inv(np.dot(ds_dx.T, self.model.g))) #TODO: Verify this step
-            magnitude *= np.dot(ds_dx.T, self.model.f)
+            #magnitude = -(np.linalg.inv(np.dot(ds_dx.T, self.model.g))) #TODO: Verify this step
+            #magnitude *= np.dot(ds_dx.T, self.model.f)
+            magnitude = -(np.linalg.inv(np.dot(ds_dx.T, self.model.g))) #TODO: Verify this step
+            magnitude = np.dot(magnitude, np.dot(ds_dx.T, self.model.f))
             if len(sign.shape) < 2:
                 sign = sign[..., np.newaxis]
             #print("mag: ", magnitude)
@@ -671,6 +674,7 @@ class SMC(DDP):
                 #print("Sign: ", sign)
                 #print("Yeah", self.action_constraints[1] * sign.T)
                 out = self.action_constraints[1] * sign.T
+                #out += magnitude.T
             #if len(out.shape) < 2:
             #    out = out[..., np.newaxis]
             #print("OUT SHAPE: ", out)

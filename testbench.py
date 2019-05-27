@@ -980,11 +980,12 @@ if __name__ == '__main__':
     rec_size = args.rec_size
     rec_type = args.rec_type
     rec_batch = args.rec_batch
-
+    rec_out = True if args.train_autoencoder else False
 
     replay_iterations = args.replays
     if args.agent_type == 'policy' and args.trainer_type == 'PPO':
-        EPISODES_BEFORE_TRAINING = 3 #so we benefit from reusing sampled trajectories with PPO / TRPO
+        EPISODES_BEFORE_TRAINING = 4 #so we benefit from reusing sampled trajectories with PPO / TRPO
+        max_traj_len = 300
         print("RUNNING SEVERAL EPISODES BEFORE TRAINING!")
 
     MA = 0
@@ -1117,7 +1118,7 @@ if __name__ == '__main__':
                         action_bias = True, value_bias = True, sigma_head = sigma_head, 
                         device = device, indim = mlp_indim, outdim = action_size, hdims = mlp_hdims,
                         activations = mlp_activations, initializer = mlp_initializer, 
-                        rec_size = rec_size, rec_type = rec_type, rec_batch = rec_batch
+                        rec_size = rec_size, rec_type = rec_type, rec_batch = rec_batch, rec_out = rec_out
                         ).to(device)
                 agent.encode_inputs = True
                 agent.encoder = autoencoder
