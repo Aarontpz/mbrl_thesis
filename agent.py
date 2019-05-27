@@ -147,10 +147,10 @@ class Agent:
         self.reward_history[-1] = self.terminal_penalty
         #avg_reward = sum(self.reward_history) / len(self.reward_history)
         ind = [i for i in range(len(self.terminal_history)) if self.terminal_history[i] == 1] #get all terminated indices
-        print("Indices: ", ind)
+        #print("Indices: ", ind)
         ind = 0 if len(ind) <= 1 else ind[-2] #get previous terminated indice
-        print("Index: ", ind)
-        avg_reward = sum(self.reward_history[ind+1:])
+        #print("Index: ", ind)
+        avg_reward = sum(self.reward_history[ind:])
         self.net_reward_history.append(avg_reward)
 
     def reset_histories(self):

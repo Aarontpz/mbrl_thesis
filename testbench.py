@@ -1606,7 +1606,9 @@ if __name__ == '__main__':
                         print("Agent Net Action loss: ", agent.value_loss_history[i])
                         print("Agent Net Value loss: ", agent.action_loss_history[i])
                 print("Agent Net Reward: ", agent.net_reward_history[-1])
+                
                 i += EPISODES_BEFORE_TRAINING 
+
                 if DISPLAY_HISTORY is True:
                     try:
                         if args.lib_type == 'control' and args.train_autoencoder and i > 5:
@@ -1634,12 +1636,13 @@ if __name__ == '__main__':
                                 MA += agent.net_reward_history[-(j+1)]
                                 val = MA #in order to divide
                                 if i >= MA_LEN - 1: 
-                                    MA -= agent.net_reward_history[i - MA_LEN + j]
+                                    MA -= agent.net_reward_history[i - MA_LEN - j]
                                     val = val / MA_LEN
                                 else:
                                     val = val / (i - j)
                                 averages.append(val)
                                 print("MA Reward: ", val)
+                                #print("j %s  -(j+1): %s i - MA_LEN - j: %s i - j: %s " % (j, -(j+1), i-MA_LEN-j, i-j))
                         if MA_LEN > 0:
                             plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
                         if args.load == 0:
