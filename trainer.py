@@ -319,8 +319,8 @@ class PyTorchACTrainer(PyTorchPolicyGradientTrainer):
 
 class PyTorchPPOTrainer(PyTorchPolicyGradientTrainer):
     def compute_action_loss(self, R, ind, *args, **kwargs):
-        action_score = self.agent.action_score_history[ind]
-        #value_score = self.agent.value_history[ind] 
+        action_score = self.agent.action_score_history[ind].detach()
+        #value = self.agent.value_history[ind] 
         state = self.agent.state_history[ind]
         action, value, normal = self.agent.evaluate(state) 
         advantage = R - value.detach() #TODO:estimate advantage w/ average disc_reward vs value_scores
