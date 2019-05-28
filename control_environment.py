@@ -340,7 +340,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
             #d_dx = dx + np.array([0, 1]) * (u) - np.array([0, 1])*dx[1]
             d_dx = dx + np.array([0, 1]) * (u)
             return d_dx
-        du = np.array([0, 1]) * u
+        du = np.array([0, 1]) * -u
         #print("Dx: %s \n Du: %s" % (dx, du))
         super().dx(x, u)
         return dx + du
@@ -363,7 +363,8 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         theta_p = 0 
         s = np.array([theta, theta_p], dtype = np.float32)
         if noise:
-            s += np.random.uniform(low=-.5, high=0.5, size=2)
+            s[0] += np.random.uniform(low=0, high=np.pi, size=1)
+            s[1] += np.random.uniform(low=-0.5, high=0.5, size=1)
         return s
 
     def episode_is_done(self):

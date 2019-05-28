@@ -429,6 +429,7 @@ def create_ddp_dm_cartpole_agent(agent_base, *args, **kwargs):
                 state = np.concatenate((pos, vel))
             elif type(obs) == type(np.zeros(0)):
                 state = obs
+            #print("Angular Vel: ", state[4])
             #return Variable(torch.tensor(state).float(), requires_grad = False)
             return state
     
@@ -984,8 +985,9 @@ if __name__ == '__main__':
 
     replay_iterations = args.replays
     if args.agent_type == 'policy' and args.trainer_type == 'PPO':
-        EPISODES_BEFORE_TRAINING = 4 #so we benefit from reusing sampled trajectories with PPO / TRPO
-        max_traj_len = 300
+        EPISODES_BEFORE_TRAINING = 1 #so we benefit from reusing sampled trajectories with PPO / TRPO
+        #max_traj_len = float('inf')
+        max_traj_len = 128
         print("RUNNING SEVERAL EPISODES BEFORE TRAINING!")
 
     MA = 0
@@ -1282,9 +1284,12 @@ if __name__ == '__main__':
                 print("ENV TYPE IS CARTPOLE")
                 target = np.zeros(obs_size)
                 theta_ind = 1 #based on pole-angle cosine, rep theta
-                target_theta = -0.0 #target pole position
+                target_theta = 1.0 #target pole position
                 target[theta_ind] = target_theta
-                target_inds = [theta_ind]
+                target_angular_vel_ind = 4 #target pole angular velocity
+                target_angular_vel = 0.0
+                target[target_angular_vel_ind] = target_angular_vel
+                target_inds = [theta_ind, target_angular_vel_ind]
                 Q = np.eye(obs_size) * 1e8
                 Qf = Q
                 R = np.eye(action_size) * 1e3
@@ -1318,8 +1323,8 @@ if __name__ == '__main__':
                 #position.
                 print("ENV TYPE IS CARTPOLE (control environment)")
                 target = np.zeros(obs_size)
-                theta_ind = 2 #based on pole-angle cosine, rep theta
-                target_theta = 0.0 #target pole position
+                theta_ind = 1 #based on pole-angle cosine, rep theta
+                target_theta = 1.0 #target pole position
                 target[theta_ind] = target_theta
                 target_inds = [theta_ind]
                 Q = np.eye(obs_size) * 1e2
@@ -1513,6 +1518,7 @@ if __name__ == '__main__':
                             observation = timestep.observation
                             observation = agent.transform_observation(observation)
                             #print("OBS: ", observation)
+                            #print(env.physics.angular_vel())
                             if args.maxmin_normalization:
                                 if type(observation) == torch.Tensor:
                                     observation = normalize_max_min(observation.detach().cpu().numpy(), mx, mn)
@@ -1554,7 +1560,7 @@ if __name__ == '__main__':
                         new_mx, new_mn = update_max_min(observation, new_mx, new_mn)
                     agent.terminate_episode() #oops forgot this lmao
                 # Update step
-                if not PRETRAINED:
+                if not PRETRAINED and args.random_baseline == 0:
                     trainer.step()
                     print("Agent Net Loss: ", agent.net_loss_history[-1])
                 if args.train_autoencoder != 0:

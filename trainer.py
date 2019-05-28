@@ -240,13 +240,15 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
         net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         net_value_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         net_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        rewards = self.get_discounted_rewards(self.agent.reward_history[:], scale = True).to(device)
+        run = 0
         for start in replay_starts:
             if hasattr(module, 'rec_size') and module.rec_size > 0: 
                 module.reset_states() 
             end = self.get_trajectory_end(start, end = None)
             #print("END: ", end)
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
-            rewards = self.get_discounted_rewards(self.agent.reward_history[start:end], scale = True).to(device)
+            #rewards = self.get_discounted_rewards(self.agent.reward_history[start:end], scale = True).to(device)
             print("START: %s END: %s" % (start, end))
             for ind in range(start, end - 1): #-1 because terminal state doesn't matter?
                 #print("Rewards: ", len(rewards))
@@ -256,7 +258,11 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                 #    obs = get_observation_tensor(state_history[i])
                 #    _ = module.forward(obs)
                 R = rewards[ind - start]
-                action_loss = self.compute_action_loss(R, ind)
+                if run == 0: #run A2C update instead of PPO, even if PPO trainer
+                    action_loss = PyTorchACTrainer.compute_action_loss(self, R, ind)
+#class PyTorchACTrainer(PyTorchPolicyGradientTrainer):
+                else:
+                    action_loss = self.compute_action_loss(R, ind)
                 value_loss = self.compute_value_loss(R, ind)
                 if self.entropy_coeff > 0.0 and not self.entropy_bonus and self.agent.module.sigma_head:
                     entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
@@ -267,7 +273,6 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                     action_penalty = self.agent.energy_history[ind]
                     #print("Action penalty: ", action_penalty)
                     action_loss += self.energy_coeff * action_penalty
-                #print("Action Loss: %s\n Value Loss: %s" % (action_loss, value_loss))
                 #make_dot(action_loss).view()
                 #input()
                 #make_dot(value_loss).view()
@@ -280,9 +285,11 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
             if self.scheduler is not None:
                 self.scheduler.step()
             loss.backward(retain_graph = True)
+            print("Loss: %s" % (loss))
             optimizer.step()
             optimizer.zero_grad() #HAHAHAHA
             net_loss += loss
+            run += 1
         self.agent.net_loss_history.append(net_loss.cpu().detach())
         self.agent.action_loss_history.append(net_action_loss.detach().cpu())
         self.agent.value_loss_history.append(net_value_loss.detach().cpu())
@@ -313,8 +320,10 @@ class PyTorchACTrainer(PyTorchPolicyGradientTrainer):
 class PyTorchPPOTrainer(PyTorchPolicyGradientTrainer):
     def compute_action_loss(self, R, ind, *args, **kwargs):
         action_score = self.agent.action_score_history[ind]
-        value_score = self.agent.value_history[ind] 
-        advantage = R - value_score.detach() #TODO:estimate advantage w/ average disc_reward vs value_scores
+        #value_score = self.agent.value_history[ind] 
+        state = self.agent.state_history[ind]
+        action, value, normal = self.agent.evaluate(state) 
+        advantage = R - value.detach() #TODO:estimate advantage w/ average disc_reward vs value_scores
         if self.entropy_bonus:
             advantage += self.entropy_coeff * self.agent.policy_entropy_history[ind]
         if self.agent.discrete:
@@ -322,8 +331,6 @@ class PyTorchPPOTrainer(PyTorchPolicyGradientTrainer):
             log_prob = action_score.log().max().to(device)
             action_loss = (-log_prob * advantage).squeeze(0)
         else:
-            state = self.agent.state_history[ind]
-            action, value, normal = self.agent.evaluate(state) 
             new_score = normal.log_prob(action)
             rt = torch.exp(new_score - action_score) #action_score is recorded prob of action AT SAMPLE TIME
             eps = 0.2 #recommended in PPO paper
@@ -333,9 +340,11 @@ class PyTorchPPOTrainer(PyTorchPolicyGradientTrainer):
         return action_loss
     
     def compute_value_loss(self, R, ind, *args, **kwargs):
+        #state = self.agent.state_history[ind]
+        #action, value, normal = self.agent.evaluate(state) 
         value_criterion = torch.nn.MSELoss()
-        value_score = self.agent.value_history[ind] 
-        value_loss = self.value_coeff * value_criterion(value_score, R) 
+        value = self.agent.value_history[ind] 
+        value_loss = self.value_coeff * value_criterion(value, R) 
         return value_loss
 
 class PyTorchSAAutoencoderTrainer(PyTorchTrainer):

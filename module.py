@@ -116,10 +116,10 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
             self.g_module = PyTorchMLP(*args, **kwargs)
         if self.linear_g: #cannot have both, since PyTorchMLP is not guarenteed to be linear / non-affine
             self.g_layer = PyTorchMLP(self.device, B_shape[1],
-                    B_shape[0], hdims = [100], 
-                    activations = [None, None], bias = False, rec_size = 0)
-                    #B_shape[0], hdims = [], 
-                    #activations = [None], bias = False)
+                    #B_shape[0], hdims = [100], 
+                    #activations = [None, None], bias = False, rec_size = 0)
+                    B_shape[0], hdims = [], 
+                    activations = [None], bias = False)
         else:
             self.g_layer = torch.nn.Linear(outdim, self.b_size, bias = True)
 
