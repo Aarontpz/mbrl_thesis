@@ -597,12 +597,12 @@ class SMC(DDP):
             xt = xt[..., np.newaxis]
         #print('Target: %s Xt: %s' % (self.target.shape, xt.shape))
         #x = xt.copy()
-        xt = self.diff_func(self.target, xt)
         if self.update_model:
             #if len(xt.shape) > 1:
             #    xt = xt.flatten()
             self.model.update(xt)
         #self.update_surface(x)
+        xt = self.diff_func(self.target, xt)
         self.update_surface(xt)
         #raise Exception("Figure out the-above")
         return None, self.compute_control(xt) #TODO: make this NOT a subclass of DDP so we don't need this janky None returnval?
@@ -645,7 +645,7 @@ class SMC(DDP):
                 #print("Sign: ", sign)
                 #print("Yeah", self.action_constraints[1] * sign.T)
                 out = self.action_constraints[1] * sign.T
-                out += magnitude
+                #out += magnitude
             #if len(out.shape) < 2:
             #    out = out[..., np.newaxis]
             #print("OUT SHAPE: ", out.shape)
@@ -657,7 +657,7 @@ class SMC(DDP):
             #print("DOT: ", (np.dot(ds_dx.T, self.model.g)))
             #magnitude = -(np.linalg.inv(np.dot(ds_dx.T, self.model.g))) #TODO: Verify this step
             #magnitude *= np.dot(ds_dx.T, self.model.f)
-            magnitude = -(np.linalg.inv(np.dot(ds_dx.T, self.model.g))) #TODO: Verify this step
+            magnitude = (np.linalg.inv(np.dot(ds_dx.T, self.model.g))) #TODO: Verify this step
             magnitude = np.dot(magnitude, np.dot(ds_dx.T, self.model.f))
             if len(sign.shape) < 2:
                 sign = sign[..., np.newaxis]
@@ -756,7 +756,7 @@ class GD_SMC(SMC):
                 if len(grad.shape) > 1:
                     grad = grad.flatten()
                 sigma[:,c] = sigma[:,c] - self.alpha * grad
-                sigma[:,c] = np.clip(sigma[:,c], 1e-1, float('inf'))
+                sigma[:,c] = np.clip(sigma[:,c], 1e-2, 1e1)
             i += 1
         sigma += np.eye(sigma.shape[0], M = sigma.shape[1]) * 1e-1
         #print("GD SURFACE: ", sigma)

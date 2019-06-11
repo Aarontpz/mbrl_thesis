@@ -171,19 +171,10 @@ class PyTorchTrainer(Trainer):
             R = r + self.gamma * R
             disc_rewards.insert(0, R)
         rewards = torch.FloatTensor(disc_rewards)
-        if scale:
+        if scale: #normalize rewards
             rewards = (rewards - rewards.mean()) / (rewards.std() + np.finfo(np.float32).eps)
         #print("REWARDS AFTER: ", rewards)
         return rewards
-    
-    def get_advantage(self, start, end = None) -> torch.tensor: 
-        assert(len(self.agent.value_history) >= start) #make sure value estimates exist
-        if end is None: 
-            end = self.get_trajectory_end(end)
-        R = self.get_discounted_reward(start, end)
-        V_st = self.agent.value_history[start] 
-        V_st_k = self.gamma**(end - start) * self.agent.value_history[end]
-        return R + V_st_k - V_st
     
     def get_sample_s(self, s):
         return s[0]
@@ -205,12 +196,33 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
         super(PyTorchPolicyGradientTrainer, self).__init__(*args, **kwargs)
 
     @abc.abstractmethod
-    def compute_action_loss(self, R, ind, *args, **kwargs):
+    def compute_action_loss(self, advantage, ind, *args, **kwargs):
+        pass
+
+    def compute_value_loss(self, rewards, ind, bootstrap = True, *args, **kwargs):
+        value_criterion = torch.nn.MSELoss()
+        state = self.agent.state_history[ind]
+        action, value, normal = self.agent.evaluate(state) 
+        #value = self.agent.value_history[ind] 
+        if bootstrap:
+            state_ = self.agent.state_history[ind+1]
+            r = self.agent.reward_history[ind]
+            _, value_, __ = self.agent.evaluate(state_) 
+            value_loss = self.value_coeff * value_criterion(value, r + self.gamma*value_) 
+        else:
+            value_loss = self.value_coeff * value_criterion(value, rewards[ind]) 
+        return value_loss
+
+    @abc.abstractmethod
+    def compute_entropy_loss(self, ind, *args, **kwargs):
         pass
 
     @abc.abstractmethod
-    def compute_value_loss(self, R, ind, *args, **kwargs):
-        pass
+    def compute_advantages(self, rewards, values, gamma = 0.99, normalize = True):
+        advantages = torch.tensor([rewards[i] - values[i].detach() for i in range(len(values))], device = self.device) 
+        if normalize:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-4)
+        return advantages
 
     def step(self):
         super(PyTorchPolicyGradientTrainer, self).step()
@@ -239,8 +251,13 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
             replay_starts = [random.choice(range(len(action_scores))) for i in range(self.replay)] #sample replay buffer "replay" times 
         net_action_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         net_value_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        net_entropy_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
         net_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        rewards = self.get_discounted_rewards(self.agent.reward_history[:], scale = True).to(device)
+        rewards = self.get_discounted_rewards(self.agent.reward_history[:], scale = False).to(device)
+        #advantages = self.compute_advantages(rewards, value_scores, self.gamma, False)
+        advantages = self.compute_advantages(self.agent.reward_history[:], 
+                value_scores, self.gamma, normalize = False, compute_values = False) #generalized advantage
+        
         run = 0
         for start in replay_starts:
             if hasattr(module, 'rec_size') and module.rec_size > 0: 
@@ -258,15 +275,14 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                 #    obs = get_observation_tensor(state_history[i])
                 #    _ = module.forward(obs)
                 R = rewards[ind - start]
-                if run == 0: #run A2C update instead of PPO, even if PPO trainer
-                    action_loss = PyTorchACTrainer.compute_action_loss(self, R, ind)
-#class PyTorchACTrainer(PyTorchPolicyGradientTrainer):
-                else:
-                    action_loss = self.compute_action_loss(R, ind)
-                value_loss = self.compute_value_loss(R, ind)
-                if self.entropy_coeff > 0.0 and not self.entropy_bonus and self.agent.module.sigma_head:
-                    entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
-                    action_loss += entropy_loss #WEIGHTED
+                #if run == 0: #run A2C update instead of PPO, even if PPO trainer
+                #    action_loss = PyTorchACTrainer.compute_action_loss(self, R, ind)
+#class PyTorchAC#Trainer(PyTorchPolicyGradientTrainer):
+                #else:
+                #action_loss = self.compute_action_loss(R, ind)
+                advantage = advantages[ind]
+                action_loss = self.compute_action_loss(advantage, ind)
+                value_loss = self.compute_value_loss(rewards, ind, bootstrap = True)
                 #if self.agent.module.value_module is not False:
                 #    pass
                 if hasattr(self.agent, 'energy_history'):
@@ -278,30 +294,40 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
                 #make_dot(value_loss).view()
                 #input()
                 loss += action_loss + value_loss #TODO TODO: verify this is valid, seperate for different modules?
+                if self.entropy_coeff > 0.0 and not self.entropy_bonus and self.agent.module.sigma_head:
+                    #entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
+                    entropy_loss = self.compute_entropy_loss(ind)
+                    #print("Entropy Loss:  ", entropy_loss)
+                    loss += entropy_loss
+                    net_entropy_loss += entropy_loss
                 net_action_loss += action_loss
+                #net_value_loss += value_loss / (end - 1 - start)
                 net_value_loss += value_loss
-            #torch.nn.utils.clip_grad_norm_(module.parameters(), 100)
+            #if True:
+            #    loss /= (end-1 - start) #get mean by dividing by # of samples per minibatch
             optimizer.zero_grad() #HAHAHAHA
             if self.scheduler is not None:
                 self.scheduler.step()
             loss.backward(retain_graph = True)
+            torch.nn.utils.clip_grad_norm_(module.parameters(), 0.5)
             print("Loss: %s" % (loss))
             optimizer.step()
             optimizer.zero_grad() #HAHAHAHA
             net_loss += loss
             run += 1
+        print("Entropy Loss: ", net_entropy_loss)
         self.agent.net_loss_history.append(net_loss.cpu().detach())
         self.agent.action_loss_history.append(net_action_loss.detach().cpu())
         self.agent.value_loss_history.append(net_value_loss.detach().cpu())
 
 
 class PyTorchACTrainer(PyTorchPolicyGradientTrainer):
-    def compute_action_loss(self, R, ind, *args, **kwargs):
+    def compute_action_loss(self, advantage, ind, *args, **kwargs):
         action_score = self.agent.action_score_history[ind]
-        value_score = self.agent.value_history[ind] 
-        advantage = R - value_score.detach() #TODO:estimate advantage w/ average disc_reward vs value_scores
-        if self.entropy_bonus:
-            advantage += self.entropy_coeff * self.agent.policy_entropy_history[ind]
+        #value_score = self.agent.value_history[ind] 
+        #advantage = self.compute_advantage() #TODO:estimate advantage w/ average disc_reward vs value_scores
+        #if self.entropy_bonus:
+        #    advantage += self.entropy_coeff * self.agent.policy_entropy_history[ind]
         if self.agent.discrete:
             log_prob = action_score.log().max().to(device)
             action_loss = (-log_prob * advantage).squeeze(0)
@@ -309,23 +335,22 @@ class PyTorchACTrainer(PyTorchPolicyGradientTrainer):
             action_loss = (-action_score * advantage).squeeze(0)
         return action_loss
 
-    def compute_value_loss(self, R, ind, *args, **kwargs):
-        value_criterion = torch.nn.MSELoss()
-        value_score = self.agent.value_history[ind] 
-        value_loss = self.value_coeff * value_criterion(value_score, R) 
-        return value_loss
-
+    def compute_entropy_loss(self, ind, *args, **kwargs):
+        entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
+        return entropy_loss
 
 
 class PyTorchPPOTrainer(PyTorchPolicyGradientTrainer):
-    def compute_action_loss(self, R, ind, *args, **kwargs):
+    def compute_action_loss(self, advantage, ind, *args, **kwargs):
+        #value_score = self.agent.value_history[ind] 
         action_score = self.agent.action_score_history[ind].detach()
-        #value = self.agent.value_history[ind] 
         state = self.agent.state_history[ind]
         action, value, normal = self.agent.evaluate(state) 
-        advantage = R - value.detach() #TODO:estimate advantage w/ average disc_reward vs value_scores
-        if self.entropy_bonus:
-            advantage += self.entropy_coeff * self.agent.policy_entropy_history[ind]
+        #advantage = R - value_score.detach() #TODO:estimate advantage w/ average disc_reward vs value_scores
+        #advantage = R - value.detach() #TODO:estimate advantage w/ average disc_reward vs value_scores
+        #if self.entropy_bonus:
+        #    print("entropy bonus")
+        #    entropy_loss = self.entropy_coeff * self.agent.policy_entropy_history[ind]
         if self.agent.discrete:
             raise Exception("Hasn't been implemented for PPO")
             log_prob = action_score.log().max().to(device)
@@ -336,16 +361,150 @@ class PyTorchPPOTrainer(PyTorchPolicyGradientTrainer):
             eps = 0.2 #recommended in PPO paper
             #loss_clip = torch.sum(torch.min(rt * advantage, torch.clamp(rt, 1-eps, 1+eps) * advantage))
             loss_clip = -1 * torch.min(rt * advantage, torch.clamp(rt, min=1-eps, max=1+eps) * advantage)
+            #print("Loss_clip: ", loss_clip)
             action_loss = loss_clip.squeeze(0)
+            #action_loss += entropy_loss
         return action_loss
     
-    def compute_value_loss(self, R, ind, *args, **kwargs):
-        #state = self.agent.state_history[ind]
-        #action, value, normal = self.agent.evaluate(state) 
-        value_criterion = torch.nn.MSELoss()
-        value = self.agent.value_history[ind] 
-        value_loss = self.value_coeff * value_criterion(value, R) 
-        return value_loss
+    
+    def compute_entropy_loss(self, ind, *args, **kwargs):
+        state = self.agent.state_history[ind]
+        action, value, normal = self.agent.evaluate(state) 
+        entropy = -normal.entropy().mean()
+        return self.entropy_coeff * entropy
+
+    def compute_advantages(self, rewards, values, gamma = 0.99, normalize = True, compute_values = True):
+        advantages = []
+        for i in range(len(rewards) - 1):
+            if compute_values:
+                _, v, __ = self.agent.evaluate(self.agent.state_history[i])
+                ___, v_, ____ = self.agent.evaluate(self.agent.state_history[i+1])
+            else:
+                v = values[i]
+                v_ = values[i+1]
+            advantages.append(rewards[i] + gamma*v_.detach() - v.detach())
+        advantages.append(rewards[i+1] + gamma*v_.detach())
+        advantages = torch.tensor(advantages, device = self.device)
+        if normalize:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-4)
+        return advantages
+
+    #def compute_advantages(self, rewards, values, gamma = 0.99, *args, 
+    #        **kwargs):
+    #    '''Generalized advantage estimation, as described in PPO paper'''
+    #    advantages = []
+    #    for i in reversed(range(len(rewards): 
+    #        delta = rewards[i] - values[i]
+    #        advantage = delta + gamma * 
+    #        advantages.append()
+
+
+class PyTorchDynamicsTrainer(PyTorchTrainer):
+    '''Generic Dynamics Trainer abstract class. Kinda jank, considering
+    its initialization from a class that should really be called
+    "RLTrainer" but just keep those fields None for now and 
+    figure it out later. 
+    
+    Available args ('*' denotes
+    use in default step() and thus required): [<agent>, <*env>, <*replay>,
+    <max_traj_len>, <gamma>, <num_episodes>] why am I doing this
+    
+    "model" is the PyTorchMLP, "relation" is the means by which
+    the inputs (assumed to be some function of ()) get interpreted
+    as the next state, to compare to the actual one and/or finite
+    differences
+
+    Intended use case: 
+    **LinearSystenDynamicsModel
+    model = PyTorchMLP subclass with outdim = 2, output denoted f()
+    f() : xt, ut -> A, B for xt+1
+    relation: xt+1 = xt + dt(np.dot(A*xt) + np.dot(B*ut))
+    
+    **ForwardDynamicsModel
+    model = PyTorchMLP subclass with outdim = 1, output denoted f()
+    relation: xt+1 = xt + dt * f(xt, ut)
+    
+    "Have a nice day ;) "'''
+    #TODO TODO TODO TODO TODO finite-differences for additional info.
+    #Merge/fuse results <3 <3
+
+    #TODO (OOP): Make "Estimator" class encompass / abstract this functionality
+    #to more generic task of model-fitting in this framework, 
+    #use inheritance to incrementally update functionality(OOP) 
+    #^DEFINITELY overengineering for the task-at-hand
+    def __init__(self, model : PyTorchModel, 
+            dataset,
+            criterion,
+            batch_size = 64, collect_forward_loss = False, 
+            *args, **kwargs):
+        super(PyTorchDynamicsTrainer, self).__init__(*args, **kwargs)
+        self.criterion = criterion
+        self.dataset = dataset
+        self.model = model
+        self.batch_size = batch_size
+        
+        self.collect_forward_loss = collect_forward_loss
+
+        self.net_loss_history = [] #net loss history
+        self.forward_loss_history = [] #loss for MOST RECENT iteration 
+        #independent of dataset
+    
+    def compute_model_loss(self, s, a, r, s_, *args, **kwargs):
+        #print("S: %s \n A: %s" % (s, a))
+        estimate = self.model.forward_predict(s, a, self.model.dt, *args, **kwargs)
+        if type(s_) == np.ndarray:
+            s_ = torch.tensor(s_, requires_grad = False, device = self.device).float()
+        return self.criterion(s_, estimate)
+
+    def step(self):
+        requires_grad = True
+        #YAY REFERENCES
+        device = self.device
+        optimizer = self.opt
+        dataset = self.dataset
+        #print("Dataset: ", dataset)
+        dataset.trainer_step(self) 
+        model = self.model
+
+        loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+        net_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+        net_forward_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
+        for r in range(self.replay):
+            print("Replay %s with batch size %s"% (r, self.batch_size))
+            if hasattr(model.module, 'rec_size') and model.module.rec_size > 0: 
+                model.module.reset_states() 
+            loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
+            sample = dataset.sample(self.batch_size) 
+            for i in range(len(sample)):
+                s = self.get_sample_s(sample[i])
+                a = self.get_sample_a(sample[i])
+                r = self.get_sample_r(sample[i])
+                s_ = self.get_sample_s_(sample[i])
+                loss += self.compute_model_loss(s, a, r, s_)
+            optimizer.zero_grad() #HAHAHAHA
+            loss.backward(retain_graph = True)
+            torch.nn.utils.clip_grad_norm_(model.module.parameters(), 0.5)
+            optimizer.step()
+            optimizer.zero_grad() 
+            net_loss += loss #accumulate loss before resetting it
+        self.agent.net_loss_history.append(net_loss.cpu().detach())
+        #self.net_loss_history.append(net_loss)
+        #if self.collect_forward_loss:
+        #    net_forward_loss.append(sum([compute_model_loss(*sample)]))
+        #input()
+    
+    def plot_loss_histories(self):
+        if self.collect_forward_loss:
+            raise Exception("Do it now, I'm busy ;)")
+        else:
+            plt.figure(5)
+            plt.title("Dynamics Model Loss History")
+            plt.xlim(0, len(self.net_loss_history))
+            plt.ylim(0, max(self.net_loss_history)+1)
+            plt.ylabel("Net \n Dynamic Model Loss")
+            plt.xlabel("Timestep")
+            plt.scatter(range(len(self.net_loss_history)), [r.numpy()[0] for r in self.net_loss_history], s=1.0)
+
 
 class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
     def __init__(self, autoencoder, dataset, batch_size = 64, train_forward = True, 
@@ -478,110 +637,6 @@ class PyTorchSAAutoencoderTrainer(PyTorchTrainer):
         plt.pause(0.01)
 
 
-class PyTorchDynamicsTrainer(PyTorchTrainer):
-    '''Generic Dynamics Trainer abstract class. Kinda jank, considering
-    its initialization from a class that should really be called
-    "RLTrainer" but just keep those fields None for now and 
-    figure it out later. 
-    
-    Available args ('*' denotes
-    use in default step() and thus required): [<agent>, <*env>, <*replay>,
-    <max_traj_len>, <gamma>, <num_episodes>] why am I doing this
-    
-    "model" is the PyTorchMLP, "relation" is the means by which
-    the inputs (assumed to be some function of ()) get interpreted
-    as the next state, to compare to the actual one and/or finite
-    differences
-
-    Intended use case: 
-    **LinearSystenDynamicsModel
-    model = PyTorchMLP subclass with outdim = 2, output denoted f()
-    f() : xt, ut -> A, B for xt+1
-    relation: xt+1 = xt + dt(np.dot(A*xt) + np.dot(B*ut))
-    
-    **ForwardDynamicsModel
-    model = PyTorchMLP subclass with outdim = 1, output denoted f()
-    relation: xt+1 = xt + dt * f(xt, ut)
-    
-    "Have a nice day ;) "'''
-    #TODO TODO TODO TODO TODO finite-differences for additional info.
-    #Merge/fuse results <3 <3
-
-    #TODO (OOP): Make "Estimator" class encompass / abstract this functionality
-    #to more generic task of model-fitting in this framework, 
-    #use inheritance to incrementally update functionality(OOP) 
-    #^DEFINITELY overengineering for the task-at-hand
-    def __init__(self, model : PyTorchModel, 
-            dataset,
-            criterion,
-            batch_size = 64, collect_forward_loss = False, 
-            *args, **kwargs):
-        super(PyTorchDynamicsTrainer, self).__init__(*args, **kwargs)
-        self.criterion = criterion
-        self.dataset = dataset
-        self.model = model
-        self.batch_size = batch_size
-        
-        self.collect_forward_loss = collect_forward_loss
-
-        self.net_loss_history = [] #net loss history
-        self.forward_loss_history = [] #loss for MOST RECENT iteration 
-        #independent of dataset
-    
-    def compute_model_loss(self, s, a, r, s_, *args, **kwargs):
-        #print("S: %s \n A: %s" % (s, a))
-        estimate = self.model.forward_predict(s, a, self.model.dt, *args, **kwargs)
-        if type(s_) == np.ndarray:
-            s_ = torch.tensor(s_, requires_grad = False, device = self.device).float()
-        return self.criterion(s_, estimate)
-
-    def step(self):
-        requires_grad = True
-        #YAY REFERENCES
-        device = self.device
-        optimizer = self.opt
-        dataset = self.dataset
-        #print("Dataset: ", dataset)
-        dataset.trainer_step(self) 
-        model = self.model
-
-        loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
-        net_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
-        net_forward_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device)
-        for r in range(self.replay):
-            print("Replay %s with batch size %s"% (r, self.batch_size))
-            if hasattr(model.module, 'rec_size') and model.module.rec_size > 0: 
-                model.module.reset_states() 
-            loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
-            sample = dataset.sample(self.batch_size) 
-            for i in range(len(sample)):
-                s = self.get_sample_s(sample[i])
-                a = self.get_sample_a(sample[i])
-                r = self.get_sample_r(sample[i])
-                s_ = self.get_sample_s_(sample[i])
-                loss += self.compute_model_loss(s, a, r, s_)
-            optimizer.zero_grad() #HAHAHAHA
-            loss.backward(retain_graph = True)
-            optimizer.step()
-            optimizer.zero_grad() 
-            net_loss += loss #accumulate loss before resetting it
-        self.agent.net_loss_history.append(net_loss.cpu().detach())
-        #self.net_loss_history.append(net_loss)
-        #if self.collect_forward_loss:
-        #    net_forward_loss.append(sum([compute_model_loss(*sample)]))
-        #input()
-    
-    def plot_loss_histories(self):
-        if self.collect_forward_loss:
-            raise Exception("Do it now, I'm busy ;)")
-        else:
-            plt.figure(5)
-            plt.title("Dynamics Model Loss History")
-            plt.xlim(0, len(self.net_loss_history))
-            plt.ylim(0, max(self.net_loss_history)+1)
-            plt.ylabel("Net \n Dynamic Model Loss")
-            plt.xlabel("Timestep")
-            plt.scatter(range(len(self.net_loss_history)), [r.numpy()[0] for r in self.net_loss_history], s=1.0)
 
 class LocalDynamicsTrainer(Trainer):
     '''Relying on SKLearn dynamics models to construct a model of a system. 

@@ -33,6 +33,8 @@ class PyTorchMLP(torch.nn.Sequential):
                 active = self.create_activation(activations[i])
                 if active is not None:
                     layers.append(active)
+            if batchnorm is True:
+                layers.append(torch.nn.BatchNorm1d(hdims[i]))
             prev_size = hdims[i]
         if not self.rec_out:
             linear = torch.nn.Linear(prev_size, outdim, bias = bias)
@@ -42,6 +44,8 @@ class PyTorchMLP(torch.nn.Sequential):
                 active = self.create_activation(activations[final_ind])
                 if active is not None:
                     layers.append(active)
+            if batchnorm is True and rec_size > 0:
+                layers.append(torch.nn.BatchNorm1d(outdim))
         
         if rec_size > 0:
             if not self.rec_out:
@@ -71,7 +75,12 @@ class PyTorchMLP(torch.nn.Sequential):
         if len(x.shape) > 1:
             x = x.flatten()
         for l in range(len(self.layers)):
-            x = self.layers[l](x)
+            if isinstance(self.layers[l], torch.nn.BatchNorm1d):
+                x = x.unsqueeze(0)
+                x = self.layers[l](x)
+                x = x.flatten()
+            else:
+                x = self.layers[l](x)
         if self.rec_size > 0:
             if not hasattr(self, 'hx') or self.hx is None:
                 self.reset_states()
@@ -116,10 +125,10 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
             self.g_module = PyTorchMLP(*args, **kwargs)
         if self.linear_g: #cannot have both, since PyTorchMLP is not guarenteed to be linear / non-affine
             self.g_layer = PyTorchMLP(self.device, B_shape[1],
-                    #B_shape[0], hdims = [100], 
-                    #activations = [None, None], bias = False, rec_size = 0)
-                    B_shape[0], hdims = [], 
-                    activations = [None], bias = False)
+                    B_shape[0], hdims = [100,100], 
+                    activations = [None, None,None], bias = False, rec_size = 0)
+                    #B_shape[0], hdims = [], 
+                    #activations = [None], bias = False)
         else:
             self.g_layer = torch.nn.Linear(outdim, self.b_size, bias = True)
 
@@ -472,14 +481,14 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
                 action_space, bias = action_bias)
         self.action_sigma_module = torch.nn.Linear(outdim,
                 1, bias = action_bias)
-        self.action_mu_tanh = torch.nn.Tanh()
+        #self.action_mu_tanh = torch.nn.Tanh()
         self.action_sigma_softplus = torch.nn.Softplus()
     
     def forward(self, x, value_input = None):
         mlp_out = super(PyTorchContinuousGaussACMLP, self).forward(x)
         #print("MLP OUT: ", mlp_out)
         action_mu = self.action_mu_module(mlp_out) 
-        action_mu = self.action_mu_tanh(action_mu)
+        #action_mu = self.action_mu_tanh(action_mu)
         if self.sigma_head:
             action_sigma = self.action_sigma_module(mlp_out)
             action_sigma = self.action_sigma_softplus(action_sigma) + 0.01 #from 1602.01783 appendix 9
@@ -496,6 +505,7 @@ class PyTorchContinuousGaussACMLP(PyTorchMLP):
             assert(hasattr(self, 'value_mlp'))
             value = mlp_out #assuming value_mlp creates value
         #print("ACTION: %s VALUE: %s" % (actions, value))
+        action_sigma = action_sigma
         return action_mu, action_sigma, value
 
 #class PyTorchDynamicsMLP(PyTorchMLP):

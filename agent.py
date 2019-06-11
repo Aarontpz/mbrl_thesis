@@ -1482,18 +1482,18 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
             ut = torch.tensor(ut, requires_grad = True, device = self.module.device).float()
             ut = ut.unsqueeze(0)
             ut = ut.transpose(0, 1)
-        print("A: ", A.shape)
-        print("xt: ", xt.shape)
+        #print("A: ", A.shape)
+        #print("xt: ", xt.shape)
         ax = torch.mm(A, xt)
         #if len(ax.shape) < 2:
         #    ax = ax.squeeze(0)
         bu = torch.mm(B, ut)
-        print("Ut: ", type(ut))
-        print("Ut: ", ut.shape)
-        print("A: ", A)
-        print("Xt: ", xt)
-        print("A*xt: ", (ax).shape)
-        print("B*ut: ", (bu).shape)
+        #print("Ut: ", type(ut))
+        #print("Ut: ", ut.shape)
+        #print("A: ", A)
+        #print("Xt: ", xt)
+        #print("A*xt: ", (ax).shape)
+        #print("B*ut: ", (bu).shape)
         #print("SUM: ", torch.mm(A, xt) + torch.mm(B, ut))
         return ax + bu #must build computational graph
         #return torch.mm(A, xt) + (b_ * ut) #must build computational graph
@@ -1504,7 +1504,7 @@ class PyTorchLinearSystemModel(PyTorchModel, LinearSystemModel):
         self.B = b_.cpu().detach().numpy()
         self.A.resize(self.module.a_shape)
         self.B.resize(self.module.b_shape)
-        print("A: ", self.A.shape)
-        print("B: ", self.B.shape)
+        #print("A: ", self.A.shape)
+        #print("B: ", self.B.shape)
         return self.A, self.B
 

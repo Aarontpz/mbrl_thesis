@@ -27,6 +27,8 @@ import argparse
 
 import csv
 
+import time
+
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--load", type=int, help="Load arguments/model in given run (requires lib-type, env-type, task-type, agent-type, and ITERATION corresponding to which 'milestone' of previous run to load)", default = 0)
@@ -64,8 +66,8 @@ parser.add_argument("--smc-switching-function", type=str, default='sign')
 ##** PG-specific arguments
 parser.add_argument("--gamma", type=float, default = 0.98, help="Reward discount factor for reinforcement learning methods")
 parser.add_argument("--trainer-type", type=str, default = 'AC', help="Specify the policy-gradient algorithm to train policy network on (AC, PPO)")
-parser.add_argument("--value-coeff", type=float, default = 9e-2, help="Coeff to multiply value loss by before training policy/value network.")
-parser.add_argument("--entropy-coeff", type=float, default = 5e-3, help="Coeff to multiply entropy loss by before training policy/value network.")
+parser.add_argument("--value-coeff", type=float, default = 5e-1, help="Coeff to multiply value loss by before training policy/value network.")
+parser.add_argument("--entropy-coeff", type=float, default = 1e-2, help="Coeff to multiply entropy loss by before training policy/value network.")
 
 parser.add_argument("--train-autoencoder", type=int, default = 0, help="If != 0, uses autoencoder to transform inputs before inputting to policy network.")
 
@@ -73,15 +75,15 @@ parser.add_argument("--replays", type = int, default = 1, help ="Training passes
 
 
 #important that we retain the ability to have differnet Policy/Value nets
-parser.add_argument('--seperate-value-module', type = bool, default = False, help='If None, create identical module to action module. If False, no module. "If True / not either of those, somehow supply a value module."')
+parser.add_argument('--seperate-value-module', type = int, default = 0, help='If None, create identical module to action module. If False, no module. "If True / not either of those, somehow supply a value module."')
 
 parser.add_argument('--rec-size', type = int, default = 0, help='Determines feature length of recurrent layer for PyTorch MLP. If 0, no layer.')
 parser.add_argument('--rec-batch', type = int, default = 1, help='Batch length for recurrent layer.')
 parser.add_argument('--rec-type', type = str, default = 'gru', help='Specify recurrent layer type, if any (gru, lstm)')
 
-parser.add_argument('--value-mlp-activations')
-parser.add_argument('--value-mlp-hdims')
-parser.add_argument('--value-mlp-outdim')
+parser.add_argument('--value-mlp-activations', nargs='+', type=str, default=[None])
+parser.add_argument('--value-mlp-hdims', nargs='*', type=int, default=[])
+parser.add_argument('--value-mlp-outdim', type=int, default = 500)
 parser.add_argument('--value-lr', type=float, default=1e-3, help="NN Learning Rate")
 parser.add_argument('--value-momentum', type=float, default=1e-4)
 
@@ -561,6 +563,12 @@ def initialize_control_environment(env_type, task_name, *args, **kwargs):
     action_constraints = env.get_action_constraints()
     obs_size = env.get_observation_size()
     obs_space = [1, obs_size]
+    if env_type == 'cartpole':
+        env.error_func = lambda x, t: (((x[2]-t[2])) + (x[3]-t[3]))
+        tmp_env.error_func = lambda x, t: (((x[2]-t[2])) + (x[3]-t[3]))
+    if env_type == 'inverted':
+        env.error_func = lambda x, t: (((x[0]-t[0])) + (x[1]-t[1]))
+
     return env, tmp_env, obs_space, obs_size, action_size, action_constraints
 
 def initialize_environment(lib_type, env_type, task_name, agent_type, *args, **kwargs):
@@ -632,6 +640,16 @@ def create_pytorch_policy_agent(env, obs_size,
     #mlp_outdim = mlp_indim * WIDENING_CONST #based on state size (approximation)
     print("MLP INDIM: %s HDIM: %s OUTDIM: %s " % (obs_size, mlp_hdims, mlp_outdim))
     print("MLP ACTIVATIONS: ", mlp_activations)
+    seperate_value_module = False
+    if args.seperate_value_module == 1: #construct pytorch mlp using args
+        seperate_value_module = True
+        seperate_value_module = PyTorchMLP(device, obs_size, args.value_mlp_outdim, 
+                hdims = args.value_mlp_hdims, activations = args.value_mlp_activations, 
+                initializer = mlp_initializer).to(device)
+    elif args.seperate_value_module == -1:
+        seperate_value_module = None #copy PyTorchMLP into value module
+    print("SVM: %s Type: %s" % (args.seperate_value_module, type(args.seperate_value_module))),
+
     agent = create_agent(PyTorchAgent, args.lib_type, args.env_type, device, [1, obs_size], 
                 action_size, discrete_actions = DISCRETE_AGENT, 
                 action_constraints = action_constraints, has_value_function = True,
@@ -639,7 +657,7 @@ def create_pytorch_policy_agent(env, obs_size,
                 policy_entropy_history = True, energy_penalty = False)
     agent.module = EpsGreedyMLP(mlp_base, EPS, EPS_DECAY, EPS_MIN, action_constraints, 
             action_size, 
-            seperate_value_module = args.seperate_value_module, seperate_value_module_input = False,
+            seperate_value_module = seperate_value_module, seperate_value_module_input = False,
             value_head = True,
             action_bias = True, value_bias = True, sigma_head = sigma_head, 
             device = device, indim = obs_size, outdim = mlp_outdim, hdims = mlp_hdims,
@@ -959,14 +977,14 @@ if __name__ == '__main__':
     kwargs = {}
     if args.lib_type == 'control':
         if args.env_type == 'rossler':
-            ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10}
+            ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10, }
             args.task_type = 'point'
         elif args.env_type == 'cartpole':
 
-            ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.001, 'interval' : 10, 'target':np.array([0, 0, 0, 0])}
+            ENV_KWARGS = {'noisy_init' : True, 'ts' : 0.01, 'interval' : 20, 'target':np.array([0, 0, 0, 0])}
             args.task_type = 'point'
         elif args.env_type == 'inverted':
-            ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.001, 'interval' : 5, 
+            ENV_KWARGS = {'noisy_init' : True, 'friction' : 0.001, 'ts' : 0.01, 'interval' : 5, 
                     'target':np.array([0, 0])}
             args.task_type = 'point'
         kwargs = ENV_KWARGS
@@ -986,8 +1004,8 @@ if __name__ == '__main__':
     replay_iterations = args.replays
     if args.agent_type == 'policy' and args.trainer_type == 'PPO':
         EPISODES_BEFORE_TRAINING = 1 #so we benefit from reusing sampled trajectories with PPO / TRPO
-        #max_traj_len = float('inf')
-        max_traj_len = 128
+        max_traj_len = float('inf')
+        #max_traj_len = 256
         print("RUNNING SEVERAL EPISODES BEFORE TRAINING!")
 
     MA = 0
@@ -1135,8 +1153,8 @@ if __name__ == '__main__':
                 agent.encode_inputs = False
     
     elif args.agent_type == 'mbrl':
-        #BATCH_SIZE = 128  #TODO: make this a argparse param
-        BATCH_SIZE = float('inf')  #TODO: make this a argparse param
+        BATCH_SIZE = 128  #TODO: make this a argparse param
+        #BATCH_SIZE = float('inf')  #TODO: make this a argparse param
         COLLECT_FORWARD_LOSS = False
         DT = 1e-2 
         if args.lib_type == 'dm':
@@ -1145,9 +1163,12 @@ if __name__ == '__main__':
         print("Local Linear Model: ", args.local_linear_model)
         print("Model Mode: ", args.model_type)
         #if rec_size > 0: #we need SEQUENTIAL points
-        #    dataset = DAgger(max_samples = args.dataset_max_samples, recent_prob = args.dataset_recent_prob, aggregate_examples = False, shuffle = False)
+            #dataset = DAgger(max_samples = args.dataset_max_samples, recent_prob = args.dataset_recent_prob, aggregate_examples = False, shuffle = False)
         #else:
-        dataset = DAgger(max_samples = args.dataset_max_samples, recent_prob = args.dataset_recent_prob, aggregate_examples = False, correlated_samples = True)
+        recent_prob = args.dataset_recent_prob
+        if args.replays == 1:
+            recent_prob = 1.0
+        dataset = DAgger(max_samples = args.dataset_max_samples, recent_prob = recent_prob, aggregate_examples = False, correlated_samples = True)
 
         if args.local_linear_model is not None and args.local_linear_model != 'None':
             dataset = Dataset(aggregate_examples = False, correlated_samples = True)
@@ -1396,7 +1417,7 @@ if __name__ == '__main__':
             target_vars = np.zeros((obs_size, 1)) #for guiding SMC
             for i in target_inds:
                 target_vars[i] = 1
-            surface = surface + target_vars * 5e0 + np.eye(obs_size, M = action_size) * 1e-2
+            surface = surface + target_vars * -1e0 + np.eye(obs_size, M = action_size) * 1e-2
             #surface = surface + target * 1e1
             print("Obs Size: ", obs_size)
             print("Action Size: ", action_size)
@@ -1422,7 +1443,7 @@ if __name__ == '__main__':
             target_vars = np.zeros((obs_size, 1)) #for guiding SMC
             for i in target_inds:
                 target_vars[i] = 1
-            surface = surface + target_vars * 2e0 + np.eye(obs_size, M = action_size) * 1e-2
+            surface = surface + target_vars * -1e0 + np.eye(obs_size, M = action_size) * 1e-2
             #surface = surface + target * 1e1
             print("Obs Size: ", obs_size)
             print("Action Size: ", action_size)
@@ -1510,6 +1531,7 @@ if __name__ == '__main__':
                 for episode in range(EPISODES_BEFORE_TRAINING):
                     if args.lib_type == 'dm':
                         timestep = env.reset()        
+                        elapsed_time = 0
                         while not timestep.last() and step < MAX_TIMESTEPS:
                             reward = timestep.reward
                             if reward is None:
@@ -1532,7 +1554,9 @@ if __name__ == '__main__':
                             #action = agent(timestep)
                             #print("Action: ", action)
                             agent.store_reward(reward)
+                            t = time.process_time()
                             timestep = env.step(action)
+                            elapsed_time += time.process_time() - t
                             #print("Reward: %s" % (timestep.reward))
                     elif args.lib_type == 'gym':
                         env.reset()
@@ -1558,10 +1582,14 @@ if __name__ == '__main__':
 
                     if args.maxmin_normalization:
                         new_mx, new_mn = update_max_min(observation, new_mx, new_mn)
+                    if args.lib_type != 'control':
+                        print("Net time: ", elapsed_time / 1000)
                     agent.terminate_episode() #oops forgot this lmao
                 # Update step
                 if not PRETRAINED and args.random_baseline == 0:
+                    t = time.process_time()
                     trainer.step()
+                    print("Training time: ", time.process_time() - t)
                     print("Agent Net Loss: ", agent.net_loss_history[-1])
                 if args.train_autoencoder != 0:
                     autoencoder_trainer.step()
@@ -1574,8 +1602,10 @@ if __name__ == '__main__':
                 
                 if args.lib_type == 'control':
                     if 'mb' in args.agent_type: #look for model-based. Disgusting
-                        env.generate_vector_field_plot()
-                        env.generate_vector_field_plot(agent.mpc_ddp.model)
+                        env.generate_plots()
+                        if args.env_type not in ['cartpole']:
+                            env.generate_vector_field_plot()
+                            env.generate_vector_field_plot(agent.mpc_ddp.model)
 
                 if i % args.save_rate == 0 and i > 0: #perform milestone save
                     #create directory(s) (task / agent)
@@ -1584,6 +1614,7 @@ if __name__ == '__main__':
 
                     modelpath = os.path.join(rundir, 'model_%s'%(i))
                     rewardpath = os.path.join(rundir, 'reward.csv')
+                    losspath = os.path.join(rundir, 'loss.csv')
                     argspath = os.path.join(rundir, 'args')
                     if num_runs == cur_runs: #make rundir
                         if not os.path.exists(rundir): 
@@ -1601,6 +1632,10 @@ if __name__ == '__main__':
                     with open(rewardpath, 'w') as f:
                         writer = csv.writer(f)
                         writer.writerows(zip(agent.net_reward_history, averages))
+                        f.close()
+                    with open(losspath, 'w') as f:
+                        writer = csv.writer(f)
+                        writer.writerows(agent.net_loss_history)
                         f.close()
                     if not os.path.exists(argspath):
                         with open(argspath, 'wb') as f:
@@ -1630,12 +1665,13 @@ if __name__ == '__main__':
                             env.generate_state_history_plot(ae_history)
 
                                 
-                        plt.figure(1)
-                        plt.title("Agent reward history")
-                        plt.xlim(0, len(agent.net_reward_history))
-                        plt.ylim(min(agent.net_reward_history) - min(agent.net_reward_history) / 2, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
+                        plt.figure(100)
+                        plt.title("Agent Reward vs Episode")
+                        plt.xlim(0, len(agent.net_reward_history) - 1)
+                        if min(agent.net_reward_history) >= 0:
+                            plt.ylim(min(agent.net_reward_history) - min(agent.net_reward_history) / 2, max(agent.net_reward_history) + max(agent.net_reward_history) / 2)
                         plt.ylabel("Net \n Reward")
-                        plt.xlabel("Timestep")
+                        plt.xlabel("Episode")
                         plt.plot(range(len(agent.net_reward_history)), [r for r in agent.net_reward_history], c='b')
                         for j in reversed(range(EPISODES_BEFORE_TRAINING)):
                             if MA_LEN > 0 and len(agent.net_reward_history) > 0:
@@ -1652,24 +1688,24 @@ if __name__ == '__main__':
                         if MA_LEN > 0:
                             plt.plot(range(len(agent.net_reward_history)), averages, '#FF4500') 
                         if args.load == 0:
-                            plt.figure(3)
-                            plt.title("Agent Loss history")
-                            plt.ylabel("Net \n Loss")
-                            plt.xlabel("Timestep")
+                            plt.figure(300)
+                            plt.title("Net Loss vs Episode")
+                            plt.ylabel("Net \n Loss [MSE]")
+                            plt.xlabel("Episode")
                             if type(agent.net_loss_history[0]) == float:
-                                plt.scatter(range(len(agent.net_loss_history)), [r for r in agent.net_loss_history], s=1.5)
+                                plt.plot(range(len(agent.net_loss_history)) - 1, [r for r in agent.net_loss_history], s=1.5, c = 'b')
                             else:
-                                plt.scatter(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], s=1.5)
+                                plt.plot(range(len(agent.net_loss_history)), [r.numpy()[0] for r in agent.net_loss_history], c = 'b')
                             if DISPLAY_AV_LOSS is True:
-                                plt.figure(2)
+                                plt.figure(200)
                                 plt.clf()
                                 plt.subplot(2, 1, 1)
                                 plt.ylabel("Action Loss")
-                                plt.scatter(range(len(agent.action_loss_history)), [l.numpy() for l in agent.action_loss_history], s=0.1)
+                                plt.plot(range(len(agent.action_loss_history)), [l.numpy() for l in agent.action_loss_history])
                                 plt.subplot(2, 1, 2)
                                 plt.ylabel("Value Loss")
                                 plt.xlabel("Time")
-                                plt.scatter(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history], s=0.1)
+                                plt.plot(range(len(agent.value_loss_history)), [l.numpy() for l in agent.value_loss_history])
                                 plt.draw()
                         plt.pause(0.01)
                     except Exception as e:

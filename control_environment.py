@@ -12,6 +12,8 @@ from math import copysign
 
 from model import *
 
+import csv
+
 class Environment:
     __metaclass__ = abc.ABCMeta
     def __init__(self,):
@@ -66,7 +68,7 @@ class ModelledEnvironment(Environment):
 
 class ControlEnvironment(ModelledEnvironment):
     def __init__(self, mode = 'point', target = None, 
-            error_func = lambda x, t:np.linalg.norm(x - t), *args, **kwargs):
+            error_func = lambda x, t:np.linalg.norm(x - t, ord = 1), *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.mode = mode
         if target is None:
@@ -139,6 +141,7 @@ class ControlEnvironment(ModelledEnvironment):
         x = [s[0] for s in history]
         y = [s[1] for s in history]
         plt.figure(fig.number)
+        plt.clf()
         plt.plot(x,y, label='parametric curve')
         plt.ylabel("dTheta/dt")
         plt.xlabel("Theta")
@@ -172,6 +175,7 @@ class ControlEnvironment(ModelledEnvironment):
         x = [i * self.ts for i in range(length)] 
         #x = np.linspace(0, length * self.ts, self.ts)
         plt.figure(fig.number)
+        plt.clf()
         plt.plot(x,y, label='parametric curve')
         plt.plot(x[0], y[0], 'ro')
         plt.plot(x[-1], y[-1], 'g')
@@ -195,9 +199,11 @@ class ControlEnvironment(ModelledEnvironment):
             fig = self.secondary_error_fig
         target = self.target_point
         y = [self.error_func(s, target) for s in self.state_history]
+        self.error_history = y #this is gross...but for csv sake
         length = len(self.state_history)
         x = [i * self.ts for i in range(length)] 
         plt.figure(fig.number)
+        plt.clf()
         plt.plot(x,y, label='parametric curve')
         plt.plot(x[0], y[0], 'ro')
         plt.plot(x[-1], y[-1], 'g')
@@ -576,11 +582,11 @@ class CartpoleEnvironment(ControlEnvironment):
             -np.cos(x[2])/(self.L*(self.mc + self.mp * np.sin(x[2])**2))])
 
     def get_initial_state(self, noise = False):
-        theta = 0 #OBJECTIVE is 180 degrees / pi / 2
+        theta = np.pi #OBJECTIVE is 0 degrees
         theta_p = 0 
         s = np.array([0, 0, theta, theta_p], dtype = np.float32)
         if noise:
-            s += np.random.uniform(low=-0.2, high=0.2, size=4)
+            s += np.random.uniform(low=-0.5, high=0.5, size=4)
         return s
 
     def episode_is_done(self):
@@ -595,7 +601,7 @@ class CartpoleEnvironment(ControlEnvironment):
         return 1
 
     def get_action_constraints(self):
-        return [np.array([-2]), np.array([2])]
+        return [np.array([-10]), np.array([10])]
 
     def generate_theta_phase_plot(self, history = None):
         if history is None:
@@ -610,6 +616,7 @@ class CartpoleEnvironment(ControlEnvironment):
         x = [s[2] for s in history]
         y = [s[3] for s in history]
         plt.figure(fig.number)
+        plt.clf()
         plt.plot(x,y, label='parametric curve')
         plt.plot(x[0], y[0], 'ro')
         plt.plot(x[-1], y[-1], 'g')
@@ -635,6 +642,7 @@ class CartpoleEnvironment(ControlEnvironment):
                 self.secondary_cart_fig = plt.figure()
             fig = self.secondary_cart_fig
         plt.figure(fig.number)
+        plt.clf()
         x = [s[0] for s in history]
         y = [s[1] for s in history]
         plt.plot(x,y, label='parametric curve')
@@ -694,6 +702,7 @@ class CartpoleEnvironment(ControlEnvironment):
             plt.figure(54)
         else:
             plt.figure(55)
+        plt.clf()
         #plt.figure(fig.number)
         plt.quiver(xx, yy, eig[0][:,2], eig[0][:,3])
         plt.title("%s Quiver Plot" % (self.get_environment_name()))
@@ -718,10 +727,12 @@ class CartpoleEnvironment(ControlEnvironment):
 
     def get_reward(self):
         '''Reward = -Cost and vise-versa'''
+        if hasattr(self, 'cost'):
+            return -self.cost(self.state[-1], self.control_history[-1])
         return 0
     
     def get_environment_name(self):
-        return 'ControlEnvironment'
+        return 'Cartpole'
 
 def retrieve_control_environment(env_type = 'rossler', *args, **kwargs):
     env = None
@@ -745,7 +756,8 @@ if __name__ == '__main__':
     TEST_CARTPOLE = True
 
     if TEST_CARTPOLE:
-        horizon = 10
+        CSV = True
+        horizon = 80
         mc = 1
         mp = 0.1
         L = 1
@@ -754,19 +766,22 @@ if __name__ == '__main__':
         ARCTAN = False
         TSSMC = False
         ISMC = True
+        MAX_GD = 20
+        alpha = 1e-1
         #ucoeff = 1.5
-        umax = 1.5e1
+        #umax = 1.5e1
+        umax = 0.1e1
         umin = -umax
         #ucoeff = 3*umax / 4
         ucoeff = umax
-        sigma_base = np.array([[1e0, 1e0, 5e0, 1e0]]).T #sliding surface definition
+        sigma_base = np.array([[1e0, 1e0, 0e0, 1e0]]).T #sliding surface definition
         sigma = sigma_base.copy() #sliding surface definition
         if ARCTAN:
             switch = lambda s: np.arctan(s) * 2/np.pi
         else:
             switch = lambda s: np.sign(s)
         target = np.array([[0.0, 0, 0.0, 0]]).T
-        x0 = np.array([[-0, -.0, np.pi/2, 3.0]]).T
+        x0 = np.array([[-0, -.0, np.pi/1, 0.0]]).T
         #x0 = np.array([[-0, -.0, 0.0001, -1.8]]).T
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
@@ -825,14 +840,13 @@ if __name__ == '__main__':
             ucomp = (1 - np.cos(x[2]) / L) * (1/x_denom)
             #ucomp = 1
 
-            alpha = 1e-2
             if ISMC == True:
-                #x = x_
+                x = x_
                 sigma = sigma_base.copy()
                 sign = None
                 mag = float('inf')
                 i = 0
-                while umax < mag and i < 20:
+                while umax < mag and i < MAX_GD:
                     sf = -np.dot(sigma.T, hx)
                     sg = np.dot(sigma.T, gx)
                     if sf.size == 1 and sg.size == 1:
@@ -855,11 +869,12 @@ if __name__ == '__main__':
                     #if len(grad.shape) < len(sigma.shape):
                     #    grad = grad[..., np.newaxis]
                     sigma = sigma - alpha * grad
-                    sigma = np.clip(sigma, 1e-1, float('inf'))
+                    sigma = np.clip(sigma, 1e-2, 1e1)
+                    #sigma = np.clip(sigma, -1e1, 1e1)
                     i += 1
                     #input()
-                if umax < mag:
-                    sigma = sigma_base.copy()
+                #if umax < mag:
+                #    sigma = sigma_base.copy()
                 print("Final Sigma: ", sigma)
                 print("Final Mag: %s" % (mag))
                 s = np.dot(sigma.T, x)
@@ -880,7 +895,7 @@ if __name__ == '__main__':
                 #d_du.append(du_ds(sigma, x_))
                 #u = lambda sigma, x: ucoeff * (1/(np.dot(sigma.T, gx))) * -(np.abs(dx)) * np.sign(sx)
                 control = u(sigma, x_)
-                control += (1/(np.dot(sigma.T, gx))) * ((np.dot(sigma.T, hx)))
+                #control -= (1/(np.dot(sigma.T, gx))) * ((np.dot(sigma.T, hx)))
                 control = np.clip(control, umin, umax)
                 print("Control: ", control)
 
@@ -921,34 +936,16 @@ if __name__ == '__main__':
             #env.step(np.zeros(1))
             env.step(control)
         env.generate_plots()
-        #if len(d_du) > 0:
-        #    plt.figure(10) #eh
-        #    x = range(len(d_du))
-        #    plt.plot(x,smc_lyap, label='parametric curve')
-        #    plt.title("SMC Control Derivative")
-        #    plt.xlabel("Timestep")
-        #    plt.ylabel("u'(x, sigma)")
-        #    plt.draw()
-        #    plt.pause(0.01)
-        #if len(smc_lyap) > 0:
-        #    plt.figure(10) #eh
-        #    x = range(len(smc_lyap))
-        #    plt.plot(x,smc_lyap, label='parametric curve')
-        #    plt.title("SMC Lyapunov Function")
-        #    plt.xlabel("Timestep")
-        #    plt.ylabel("V(x)")
-        #    plt.draw()
-        #    plt.pause(0.01)
-        #if len(lyap) > 0:
-        #    plt.figure(11) #eh
-        #    x = range(len(lyap))
-        #    plt.plot(x,lyap, label='parametric curve')
-        #    plt.title("System Lyapunov Function")
-        #    plt.xlabel("Timestep")
-        #    plt.ylabel("V(x)")
-        #    plt.draw()
-        #    plt.pause(0.01)
-                
+        if CSV: #write to local csv, this is sloppy to get data OUT
+            filename = 'ismc' if ISMC else 'fosmc'
+            filename += '_%s_%s' % (sigma_base[2], sigma_base[3])
+            filename += '_%s' % (str(umax))
+            filename += '.csv'
+            with open(filename, 'w') as f:
+                writer = csv.writer(f)
+                writer.writerows(env.error_history)
+                f.close()
+
         input()
 
     if TEST_INVERTED_PENDULUM:
@@ -1007,8 +1004,8 @@ if __name__ == '__main__':
                     sigma = np.clip(sigma, 1e-1, float('inf'))
                     i += 1
                     #input()
-                if umax < mag:
-                    sigma = sigma_base.copy()
+                #if umax < mag:
+                #    sigma = sigma_base.copy()
                 print("Final Sigma: ", sigma)
                 print("Final Mag: %s" % (mag))
                 s = np.dot(sigma.T, x)
@@ -1039,6 +1036,7 @@ if __name__ == '__main__':
         env.generate_plots()
         if record_sigma:
             plt.figure(15) #eh
+            plt.clf()
             indices = [i for i in range(len(env.state_history)) if i % 10 == 0]
             x = [env.state_history[i][0] for i in indices]
             y = [env.state_history[i][1] for i in indices]
