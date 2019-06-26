@@ -1440,8 +1440,9 @@ class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
             xt = xt.transpose(0, 1)
         if type(ut) == np.ndarray:
             ut = torch.tensor(ut, requires_grad = True, device = self.module.device).float()
-            ut = ut.unsqueeze(0)
-            ut = ut.transpose(0, 1)
+            ut = ut.flatten()
+            #ut = ut.unsqueeze(0)
+            #ut = ut.transpose(0, 1)
         if self.module.linear_g:
             g = self.module.g_layer(ut)
             return f + g
@@ -1450,6 +1451,9 @@ class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
         return f + gu #s.t. xt+1 = xt + dt * (f+gu), linear w.r.t controls
 
     def update(self, xt):
+        if type(xt) == type(np.array([0])):
+            xt = torch.tensor(xt, requires_grad = True, device = self.module.device).float()
+            xt = xt.flatten()
         f, g = self.module(xt)
         #raise Exception("Todo: conclude this for GeneralModels")
         self.f = f.cpu().detach().numpy()

@@ -278,6 +278,51 @@ def create_dm_humanoid_agent(agent_base, *args, **kwargs):
     
     return DMHumanoidAgent(*args, **kwargs)
 
+
+def create_dm_swimmer_agent(agent_base, *args, **kwargs):
+    class DMSwimmerAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            if type(obs) == type(collections.OrderedDict()):
+                joints = obs['joints']
+                target = obs['to_target']
+                vel = obs['body_velocities']
+                state = np.concatenate((joints, target, vel))
+                state = Variable(torch.tensor(state).float(), requires_grad = True)
+            elif type(obs) in [type(np.zeros(0)),]: 
+                state = Variable(torch.tensor(obs).float(), requires_grad = True)
+            elif type(obs) in [type(torch.tensor([0])),]:
+                state = obs
+            return state
+
+        def reward(self, st, at, *args, **kwargs):
+            return 0.0
+        
+        def get_lqc_terms(self) -> (np.ndarray, np.ndarray, np.ndarray):
+            '''Returns Q, Qf, and R of linear quadratic cost term.'''
+            Q = 0
+            Qf = 0
+            R = 0
+            return Q, Qf, R
+
+        def get_target(self) -> (np.ndarray, []):
+            '''Returns target array and list of target indices.'''
+            target = self.env.named.data.geom_xpos['target']
+            indices = []
+            return target, indices
+
+        def get_obs_size(self) -> int:
+            obs_space = self.env.observation_spec()
+            size = obs_space['joints'].shape[0] 
+            size += obs_space['to_target'].shape[0] 
+            size += obs_space['body_velocities'].shape[0]  
+            #size += 2 
+            return size
+    agent = DMSwimmerAgent(*args, **kwargs)
+    #agent.env = env #necessary for DDP methods return agent
+    return agent
+
 def create_numpy_agent(agent_base, *args, **kwargs):
     class NumpyAgent(agent_base):
         def transform_observation(self, obs) -> Variable:
@@ -322,6 +367,8 @@ def create_ddp_dm_humanoid_agent(agent_base, *args, **kwargs):
             pass
 
     return DDPHumanoidAgent(*args, **kwargs)
+
+
 def create_ddp_dm_walker_agent(env, task, agent_base, *args, **kwargs):
     '''Transform_observation transforms observation into Numpy array. '''
     class DDP_DMWalkerAgent(agent_base):
@@ -418,6 +465,49 @@ def create_ddp_dm_ballcup_agent(env, agent_base, *args, **kwargs):
     return agent
 
 
+def create_ddp_dm_swimmer_agent(env, agent_base, *args, **kwargs):
+    '''Transform_observation transforms observation into Numpy array. '''
+    class DDP_DMSwimmerAgent(agent_base):
+        def transform_observation(self, obs) -> Variable:
+            '''Converts ordered-dictionary of position and velocity into
+            1D tensor. DOES NOT NORMALIZE, CURRENTLY'''
+            if type(obs) == type(collections.OrderedDict()):
+                joints = obs['joints']
+                target = obs['to_target']
+                vel = obs['body_velocities']
+                state = np.concatenate((joints, target, vel))
+            elif type(obs) == type(np.zeros(0)):
+                state = obs
+            #return Variable(torch.tensor(state).float(), requires_grad = True)
+            return state
+
+        def reward(self, st, at, *args, **kwargs):
+            return 0.0
+        
+        def get_lqc_terms(self) -> (np.ndarray, np.ndarray, np.ndarray):
+            '''Returns Q, Qf, and R of linear quadratic cost term.'''
+            Q = 0
+            Qf = 0
+            R = 0
+            return Q, Qf, R
+
+        def get_target(self) -> (np.ndarray, []):
+            '''Returns target array and list of target indices.'''
+            target = self.env.named.data.geom_xpos['target']
+            indices = []
+            return target, indices
+
+        def get_obs_size(self) -> int:
+            obs_space = self.env.observation_spec()
+            size = obs_space['joints'].shape[0] 
+            size += obs_space['to_target'].shape[0] 
+            size += obs_space['body_velocities'].shape[0]  
+            #size += 2 
+            return size
+    
+    agent = DDP_DMSwimmerAgent(*args, **kwargs)
+    agent.env = env #necessary for DDP methods return agent
+    return agent
 
 def create_ddp_dm_cartpole_agent(agent_base, *args, **kwargs):
     '''Transform_observation transforms observation into Numpy array. '''
@@ -476,6 +566,8 @@ def create_ddp_agent(lib_type, task_type, env_type, env, agent_base = DDPMPCAgen
             agent = create_ddp_dm_walker_agent(env, task_type, DDPMPCAgent, *args, **kwargs) 
         elif env_type == 'acrobot':
             agent = create_ddp_dm_acrobot_agent(env, DDPMPCAgent, *args, **kwargs) #requires access to additional state in order to function
+        elif env_type == 'swimmer':
+            agent = create_ddp_dm_swimmer_agent(env, DDPMPCAgent, *args, **kwargs) #requires access to additional state in order to function
         elif env_type == 'cartpole':
             agent = create_ddp_dm_cartpole_agent(DDPMPCAgent, *args, **kwargs) 
         elif env_type == 'ballcup':
@@ -502,6 +594,8 @@ def create_agent(agent_base, lib_type = 'dm', env_type = 'walker', *args, **kwar
             return create_dm_humanoid_agent(agent_base, *args, **kwargs)
         elif env_type == 'ballcup':
             agent = create_dm_ballcup_agent(agent_base, *args, **kwargs) 
+        elif env_type == 'swimmer':
+            agent = create_dm_swimmer_agent(agent_base, *args, **kwargs) 
     else:
         return create_numpy_agent(agent_base, *args, **kwargs)
     return agent
@@ -532,6 +626,10 @@ def initialize_dm_environment(env_type, task_name, agent_type, *args, **kwargs):
     elif env_type == 'ball_in_cup':
         obs_size = obs_space['position'].shape[0] 
         obs_size += obs_space['velocity'].shape[0]  
+    elif env_type == 'swimmer':
+        obs_size = obs_space['joints'].shape[0] 
+        obs_size += obs_space['to_target'].shape[0] 
+        obs_size += obs_space['body_velocities'].shape[0]  
 
     action_size = action_space.shape[0] 
     #action_size = 2
@@ -894,6 +992,25 @@ def load_pytorch_module(module, filepath):
     module.module.load_state_dict(torch.load(f))
 
 
+def set_module_eval(agent):
+    if issubclass(type(agent), PyTorchAgent):
+        print("MODULE EVAL MODE")
+        agent.module.eval()
+    if issubclass(type(agent), DDPMPCAgent):
+        if hasattr(agent.mpc_ddp.model, 'module'):
+            print("MPC MODULE EVAL MODE")
+            agent.mpc_ddp.model.module.eval()
+
+def set_module_train(agent):
+    if issubclass(type(agent), PyTorchAgent):
+        print("MODULE TRAIN MODE")
+        agent.module.train()
+    if issubclass(type(agent), DDPMPCAgent):
+        if hasattr(agent.mpc_ddp.model, 'module'):
+            print("MPC MODULE TRAIN MODE")
+            agent.mpc_ddp.model.module.train()
+
+
 LIB = 'pytorch'
 MAX_TIMESTEPS = 100000
 
@@ -1004,8 +1121,8 @@ if __name__ == '__main__':
     replay_iterations = args.replays
     if args.agent_type == 'policy' and args.trainer_type == 'PPO':
         EPISODES_BEFORE_TRAINING = 1 #so we benefit from reusing sampled trajectories with PPO / TRPO
-        max_traj_len = float('inf')
-        #max_traj_len = 256
+        #max_traj_len = float('inf')
+        max_traj_len = 256
         print("RUNNING SEVERAL EPISODES BEFORE TRAINING!")
 
     MA = 0
@@ -1153,6 +1270,7 @@ if __name__ == '__main__':
                 agent.encode_inputs = False
     
     elif args.agent_type == 'mbrl':
+        #BATCH_SIZE = 256  #TODO: make this a argparse param
         BATCH_SIZE = 128  #TODO: make this a argparse param
         #BATCH_SIZE = float('inf')  #TODO: make this a argparse param
         COLLECT_FORWARD_LOSS = False
@@ -1296,6 +1414,17 @@ if __name__ == '__main__':
                     com_ind = 24
                     target[com_ind] = 1 if args.task_type == 'walk' else 8
                     #target_inds.append(com_ind)
+                Q = np.eye(obs_size) * 1e8
+                Qf = Q
+                R = np.eye(action_size) * 1e3
+            if args.env_type == 'swimmer':
+                print("ENV TYPE IS SWIMMER")
+                target = np.zeros(obs_size)
+                target_x_ind = 5  #to_target x distance (l2 norm)
+                target_y_ind = 6 #to_target y distance (l2 norm)
+                target[target_x_ind] = 0
+                target[target_y_ind] = 0 #TODO: confirm this
+                target_inds = [target_x_ind, target_y_ind]
                 Q = np.eye(obs_size) * 1e8
                 Qf = Q
                 R = np.eye(action_size) * 1e3
@@ -1443,7 +1572,7 @@ if __name__ == '__main__':
             target_vars = np.zeros((obs_size, 1)) #for guiding SMC
             for i in target_inds:
                 target_vars[i] = 1
-            surface = surface + target_vars * -1e0 + np.eye(obs_size, M = action_size) * 1e-2
+            surface = surface + target_vars * 3e0 + np.eye(obs_size, M = action_size) * 1e-2
             #surface = surface + target * 1e1
             print("Obs Size: ", obs_size)
             print("Action Size: ", action_size)
@@ -1529,6 +1658,7 @@ if __name__ == '__main__':
                 print("ITERATION: ", i)
                 # Exploration / evaluation step
                 for episode in range(EPISODES_BEFORE_TRAINING):
+                    set_module_eval(agent)
                     if args.lib_type == 'dm':
                         timestep = env.reset()        
                         elapsed_time = 0
@@ -1588,6 +1718,7 @@ if __name__ == '__main__':
                 # Update step
                 if not PRETRAINED and args.random_baseline == 0:
                     t = time.process_time()
+                    set_module_train(agent)
                     trainer.step()
                     print("Training time: ", time.process_time() - t)
                     print("Agent Net Loss: ", agent.net_loss_history[-1])

@@ -9,7 +9,8 @@ from functools import reduce
 class PyTorchMLP(torch.nn.Sequential):
     def __init__(self, device, indim, outdim, hdims : [] = [], 
             activations : [] = [], initializer = None, batchnorm = False,
-            bias = True, rec_size = 0, rec_type = 'gru', rec_batch = 1,
+            dropout = 0.0, bias = True, 
+            rec_size = 0, rec_type = 'gru', rec_batch = 1,
             rec_out = False):
         super(PyTorchMLP, self).__init__()
         self.indim = indim
@@ -36,6 +37,8 @@ class PyTorchMLP(torch.nn.Sequential):
             if batchnorm is True:
                 layers.append(torch.nn.BatchNorm1d(hdims[i]))
             prev_size = hdims[i]
+        if dropout > 0 and len(hdims) > 0:
+            layers.append(torch.nn.Dropout(dropout))
         if not self.rec_out:
             linear = torch.nn.Linear(prev_size, outdim, bias = bias)
             layers.append(linear)
@@ -46,6 +49,8 @@ class PyTorchMLP(torch.nn.Sequential):
                     layers.append(active)
             if batchnorm is True and rec_size > 0:
                 layers.append(torch.nn.BatchNorm1d(outdim))
+            if dropout > 0:
+                layers.append(torch.nn.Dropout(dropout))
         
         if rec_size > 0:
             if not self.rec_out:
@@ -72,8 +77,9 @@ class PyTorchMLP(torch.nn.Sequential):
             return torch.nn.Sigmoid()
 
     def forward(self, x, value_input = None):
-        if len(x.shape) > 1:
-            x = x.flatten()
+        #if not self.batch_input:
+        #    if len(x.shape) > 1:
+        #        x = x.flatten()
         for l in range(len(self.layers)):
             if isinstance(self.layers[l], torch.nn.BatchNorm1d):
                 x = x.unsqueeze(0)
@@ -102,12 +108,23 @@ class PyTorchMLP(torch.nn.Sequential):
         return outdim
 
 
+def get_jacobian(net, x, noutputs):
+    x = x.squeeze()
+    n = x.size()[0]
+    x = x.repeat(noutputs, 1)
+    x.requires_grad_(True)
+    y = net(x)
+    y.backward(torch.eye(noutputs))
+    return x.grad.data
+
+
+
 #TODO: Consolidate these Modules and the modules used in clustered modelling
 class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
     '''Approximates the dynamics of a system . Composed of a shared
     feature extractor (PyTorchMLP) connected to two modules outputting f 
     and g values for the equation: x' = x + dt(f + g*u)'''
-    def __init__(self, A_shape, B_shape, seperate_modules = False, linear_g = True, *args, **kwargs):
+    def __init__(self, A_shape, B_shape, seperate_modules = True, linear_g = False, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
         self.linear_g = linear_g
@@ -125,10 +142,10 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
             self.g_module = PyTorchMLP(*args, **kwargs)
         if self.linear_g: #cannot have both, since PyTorchMLP is not guarenteed to be linear / non-affine
             self.g_layer = PyTorchMLP(self.device, B_shape[1],
-                    B_shape[0], hdims = [100,100], 
-                    activations = [None, None,None], bias = False, rec_size = 0)
-                    #B_shape[0], hdims = [], 
-                    #activations = [None], bias = False)
+                    #B_shape[0], hdims = [100,100], 
+                    #activations = [None, None,None], bias = False, rec_size = 0, dropout = 0.0)
+                    B_shape[0], hdims = [], 
+                    activations = [None], bias = False)
         else:
             self.g_layer = torch.nn.Linear(outdim, self.b_size, bias = True)
 
@@ -152,17 +169,18 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
         return f, g
     
     def du(self, xt, u = None, create_graph = True):
-        #dm_du = grad(self.g_layer, u, create_graph = False)
-        #dm_du = dm_du.detach().numpy()
-        dm_du = np.eye(self.b_shape[1])
-        for l in (self.g_layer.layers):
-            #print("LAYER: ", l)
-            #print("Weight Shape", l.weight.shape) 
-            if self.device == torch.device('cuda'):
-                weight = l.weight.cpu().detach().numpy()
-            else:
-                weight = l.weight.detach().numpy()
-            dm_du = np.dot(weight, dm_du) 
+        dm_du = get_jacobian(self.g_layer, u, self.b_size)
+        dm_du = dm_du.detach().numpy()
+        #dm_du = np.eye(self.b_shape[1])
+        #for l in (self.g_layer.layers):
+        #    #print("LAYER: ", l)
+        #    #print("Weight Shape", l.weight.shape) 
+        #    if self.device == torch.device('cuda'):
+        #        weight = l.weight.cpu().detach().numpy()
+        #    else:
+        #        weight = l.weight.detach().numpy()
+        #    dm_du = np.dot(weight, dm_du) 
+        print("Jacobian: ", dm_du)
         return dm_du
 
         

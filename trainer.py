@@ -218,7 +218,7 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
         pass
 
     @abc.abstractmethod
-    def compute_advantages(self, rewards, values, gamma = 0.99, normalize = True):
+    def compute_advantages(self, rewards, values, gamma = 0.99, normalize = True, *args, **kwargs):
         advantages = torch.tensor([rewards[i] - values[i].detach() for i in range(len(values))], device = self.device) 
         if normalize:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-4)
@@ -256,7 +256,7 @@ class PyTorchPolicyGradientTrainer(PyTorchTrainer):
         rewards = self.get_discounted_rewards(self.agent.reward_history[:], scale = False).to(device)
         #advantages = self.compute_advantages(rewards, value_scores, self.gamma, False)
         advantages = self.compute_advantages(self.agent.reward_history[:], 
-                value_scores, self.gamma, normalize = False, compute_values = False) #generalized advantage
+                value_scores, self.gamma, normalize = False, compute_values = True) #generalized advantage
         
         run = 0
         for start in replay_starts:
@@ -483,7 +483,7 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
                 loss += self.compute_model_loss(s, a, r, s_)
             optimizer.zero_grad() #HAHAHAHA
             loss.backward(retain_graph = True)
-            torch.nn.utils.clip_grad_norm_(model.module.parameters(), 0.5)
+            torch.nn.utils.clip_grad_norm_(model.module.parameters(), 1.0)
             optimizer.step()
             optimizer.zero_grad() 
             net_loss += loss #accumulate loss before resetting it
