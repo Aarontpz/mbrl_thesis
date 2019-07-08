@@ -9,7 +9,8 @@ from functools import reduce
 class PyTorchMLP(torch.nn.Sequential):
     def __init__(self, device, indim, outdim, hdims : [] = [], 
             activations : [] = [], initializer = None, batchnorm = False,
-            dropout = 0.0, bias = True, 
+            layernorm = False,
+            dropout = 0.2, bias = True, 
             rec_size = 0, rec_type = 'gru', rec_batch = 1,
             rec_out = False):
         super(PyTorchMLP, self).__init__()
@@ -36,6 +37,8 @@ class PyTorchMLP(torch.nn.Sequential):
                     layers.append(active)
             if batchnorm is True:
                 layers.append(torch.nn.BatchNorm1d(hdims[i]))
+            elif layernorm is True:
+                layers.append(torch.nn.LayerNorm(hdims[i]))
             prev_size = hdims[i]
         if dropout > 0 and len(hdims) > 0:
             layers.append(torch.nn.Dropout(dropout))
@@ -49,6 +52,8 @@ class PyTorchMLP(torch.nn.Sequential):
                     layers.append(active)
             if batchnorm is True and rec_size > 0:
                 layers.append(torch.nn.BatchNorm1d(outdim))
+            elif layernorm is True:
+                layers.append(torch.nn.LayerNorm(outdim))
             if dropout > 0:
                 layers.append(torch.nn.Dropout(dropout))
         
@@ -75,11 +80,14 @@ class PyTorchMLP(torch.nn.Sequential):
             return torch.nn.LeakyReLU()
         elif active == 'sig':
             return torch.nn.Sigmoid()
+        elif active == 'tanh':
+            return torch.nn.Tanh()
 
     def forward(self, x, value_input = None):
         #if not self.batch_input:
         #    if len(x.shape) > 1:
         #        x = x.flatten()
+        #print("X shape: ", x.shape)
         for l in range(len(self.layers)):
             if isinstance(self.layers[l], torch.nn.BatchNorm1d):
                 x = x.unsqueeze(0)
@@ -87,12 +95,16 @@ class PyTorchMLP(torch.nn.Sequential):
                 x = x.flatten()
             else:
                 x = self.layers[l](x)
+        #print("X shape: ", x.shape)
         if self.rec_size > 0:
+            if (x.shape[0] == 1 and 1 != self.outdim): #workaround for forward dynamics
+                x = x.squeeze(0)
             if not hasattr(self, 'hx') or self.hx is None:
                 self.reset_states()
             if self.rec_type == 'gru':
                 #print("Hx: ", self.hx)
                 #print("X: ", x.shape)
+                #x = self.rec(x.unsqueeze(0), self.hx)
                 x = self.rec(x.unsqueeze(0), self.hx)
                 self.hx = x 
             else:
@@ -110,10 +122,11 @@ class PyTorchMLP(torch.nn.Sequential):
 
 def get_jacobian(net, x, noutputs):
     x = x.squeeze()
-    n = x.size()[0]
+    #n = x.size()[0]
     x = x.repeat(noutputs, 1)
     x.requires_grad_(True)
     y = net(x)
+    #print("Y: ", y.shape)
     y.backward(torch.eye(noutputs))
     return x.grad.data
 
@@ -124,7 +137,7 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
     '''Approximates the dynamics of a system . Composed of a shared
     feature extractor (PyTorchMLP) connected to two modules outputting f 
     and g values for the equation: x' = x + dt(f + g*u)'''
-    def __init__(self, A_shape, B_shape, seperate_modules = True, linear_g = False, *args, **kwargs):
+    def __init__(self, A_shape, B_shape, seperate_modules = False, linear_g = True, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
         self.linear_g = linear_g
@@ -142,10 +155,14 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
             self.g_module = PyTorchMLP(*args, **kwargs)
         if self.linear_g: #cannot have both, since PyTorchMLP is not guarenteed to be linear / non-affine
             self.g_layer = PyTorchMLP(self.device, B_shape[1],
-                    #B_shape[0], hdims = [100,100], 
-                    #activations = [None, None,None], bias = False, rec_size = 0, dropout = 0.0)
-                    B_shape[0], hdims = [], 
-                    activations = [None], bias = False)
+                    B_shape[0], hdims = [200, 200], 
+                    activations = ['relu','relu','relu'], bias = True, 
+                    rec_size = 0, dropout = 0.0)
+            #self.g_layer = PyTorchMLP(self.device, B_shape[1],
+            #        #B_shape[0], hdims = [100,100], 
+            #        #activations = [None, None,None], bias = False, rec_size = 0, dropout = 0.0)
+            #        B_shape[0], hdims = [], 
+            #        activations = [None], bias = False)
         else:
             self.g_layer = torch.nn.Linear(outdim, self.b_size, bias = True)
 
@@ -163,13 +180,15 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
             out = self.g_module(inp)
             g = self.g_layer(out)
         elif self.linear_g:
-            g = self.du(x, u = np.zeros((1, self.b_shape[1]))) 
+            g = self.du(x, u = np.ones((self.b_shape[1])))
         if f.shape[0] != self.a_shape[0]:
             f = f.t()
         return f, g
     
     def du(self, xt, u = None, create_graph = True):
-        dm_du = get_jacobian(self.g_layer, u, self.b_size)
+        if isinstance(u, np.ndarray):
+            u = torch.tensor(u).float()#.to(self.device)
+        dm_du = get_jacobian(self.g_layer.to('cpu'), u, self.b_shape[0])
         dm_du = dm_du.detach().numpy()
         #dm_du = np.eye(self.b_shape[1])
         #for l in (self.g_layer.layers):
@@ -180,7 +199,7 @@ class PyTorchForwardDynamicsLinearModule(PyTorchMLP):
         #    else:
         #        weight = l.weight.detach().numpy()
         #    dm_du = np.dot(weight, dm_du) 
-        print("Jacobian: ", dm_du)
+        #print("Jacobian: ", dm_du)
         return dm_du
 
         

@@ -805,7 +805,6 @@ class PyTorchModel(Model):
         if type(xt) == np.ndarray:
             xt = torch.tensor(xt, requires_grad = True, device = self.module.device).float()
             xt = xt.unsqueeze(0)
-            #xt = xt.transpose(0, 1)
         return xt + dt * self.forward(xt, ut, *self.module(xt, ut)) 
     #resnet style <3
 
@@ -1433,6 +1432,7 @@ class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
         '''Operate on f_, g_ returned from ForwardDynamicsModule in order
         to compute x' = f + g*u, assuming the system is linear w.r.t
         controls'''
+        #print("INP: ", xt)
         if type(xt) == type(np.array([0])):
             xt = torch.tensor(xt, requires_grad = True, device = self.module.device).float()
             xt = xt.unsqueeze(0)
@@ -1440,11 +1440,20 @@ class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
             xt = xt.transpose(0, 1)
         if type(ut) == np.ndarray:
             ut = torch.tensor(ut, requires_grad = True, device = self.module.device).float()
-            ut = ut.flatten()
+            #ut = ut.flatten()
             #ut = ut.unsqueeze(0)
             #ut = ut.transpose(0, 1)
         if self.module.linear_g:
-            g = self.module.g_layer(ut)
+            #print("F: ", f.shape)
+            g = self.module.g_layer(ut.to('cpu'))
+            if len(f.shape) < 2:
+                f = f.unsqueeze(0).t()
+            if len(g.shape) < 2:
+                g = g.unsqueeze(0).t()
+                g = g.to(self.module.device)
+            #print("G: ", g.shape)
+            #print("f + g: ", (f + g).shape)
+            #print(f + g)
             return f + g
         g = g.reshape(self.module.b_shape)
         gu = torch.mm(g, ut)
@@ -1462,7 +1471,7 @@ class PyTorchForwardDynamicsModel(PyTorchModel, GeneralSystemModel):
             self.g = g.cpu().detach().numpy()
             self.g.resize(self.module.b_shape)
         else:
-            self.g = self.module.du(xt)
+            self.g = self.module.du(xt, np.zeros((self.module.b_shape[1])))
         #print("f: ", self.f.shape)
         #print("g: ", self.g.shape)
         return self.f, self.g

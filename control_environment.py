@@ -335,7 +335,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
         #dx = self.d_dx(x, u, r) 
         #dx = np.array([x[1], -4*np.sin(x[0]) - 0.01*x[1]])
         #input("Self.friction: %s" % (self.friction))
-        dx = np.array([x[1], 1*np.cos(x[0]) - self.friction*x[1]])
+        dx = np.array([x[1], 1*np.sin(x[0]) - self.friction*x[1]])
         #dx = np.array([x[1], -4*np.sin(x[0])])
         if r is not None:
             #print("Ref: ", r) 
@@ -344,7 +344,7 @@ class InvertedPendulumEnvironment(ControlEnvironment):
             #print("B*r: ", np.array([0, 1]) * r)
             #d_dx = dx + np.array([0, 1]) * (u)
             #d_dx = dx + np.array([0, 1]) * (u) - np.array([0, 1])*dx[1]
-            d_dx = dx + np.array([0, 1]) * (u)
+            d_dx = dx + np.array([0, -1]) * (u)
             return d_dx
         du = np.array([0, 1]) * -u
         #print("Dx: %s \n Du: %s" % (dx, du))
@@ -389,8 +389,8 @@ class InvertedPendulumEnvironment(ControlEnvironment):
 
     def get_reward(self):
         '''Reward = -Cost and vise-versa'''
-        if hasattr(self, 'cost'):
-            return -self.cost(self.state[-1], self.control_history[-1])
+        if hasattr(self, 'error_func'):
+            return -self.error_func(self.state, self.get_target())
         return 0
     
     def get_environment_name(self):
@@ -405,8 +405,8 @@ class InvertedPendulumEnvironment(ControlEnvironment):
             if not hasattr(self, 'vector_fig'):
                 self.vector_fig = plt.figure()
             fig = self.vector_fig 
-        x = np.arange(-0, 2*np.pi, 0.1)
-        y = np.arange(-3.5, 3.5, 0.1)
+        x = np.arange(-1.5, 1.0*np.pi, 0.1)
+        y = np.arange(-3.0, 3.0, 0.1)
         #xx, yy = np.meshgrid(x, y, sparse = True)
         z = []
         xx = []
@@ -453,7 +453,34 @@ class InvertedPendulumEnvironment(ControlEnvironment):
             history = self.state_history
             x = [s[0] for s in history]
             y = [s[1] for s in history]
-            plt.plot(x, y)
+            est_history = []
+            x_ = history[0]
+            if True and dx_model is not None: #estimate state history using dx_model
+                for i in range(len(x)): #we're hacky because T I M E
+                    est_history.append(x_)
+                    ut = self.control_history[i]
+                    dt = dx_model.dt
+                    #print("x_: ", x_)
+                    #print("x_ shape: ", x_.shape)
+                    #print("ut: ", ut)
+                    #print("ut shape: ", ut.shape)
+                    if len(x_.shape) > 1:
+                        x_ = x_[:,0]
+                    #forward = (dx_model.forward_predict(x_, ut, dt)).detach().cpu().numpy()
+                    forward = (dx_model.forward(x_, ut, *dx_model.module(x_, ut))).detach().cpu().numpy()
+                    #print("forward shape: ", forward.shape)
+                    if len(x_.shape) < 2:
+                        x_ = x_[..., np.newaxis]
+                    x_ = x_ + dt*forward
+                    #x_ = forward.copy()
+                x_ = [s[0] for s in est_history]
+                y_ = [s[1] for s in est_history]
+                plt.figure(54)
+                plt.plot(x_, y_, c = 'g')
+                plt.figure(55)
+                plt.plot(x_, y_, c = 'g')
+                #input()
+            plt.plot(x, y, c = 'b')
             plt.plot(x[0], y[0], 'ro')
             plt.plot(x[-1], y[-1], 'go')
             if hasattr(self, 'target_point'):
@@ -727,8 +754,8 @@ class CartpoleEnvironment(ControlEnvironment):
 
     def get_reward(self):
         '''Reward = -Cost and vise-versa'''
-        if hasattr(self, 'cost'):
-            return -self.cost(self.state[-1], self.control_history[-1])
+        if hasattr(self, 'error_func'):
+            return -self.error_func(self.state, self.get_target())
         return 0
     
     def get_environment_name(self):
@@ -752,12 +779,12 @@ if __name__ == '__main__':
     #while not env.episode_is_done():
     #    env.step(None)
     #env.generate_plots()
-    TEST_INVERTED_PENDULUM = False
-    TEST_CARTPOLE = True
+    TEST_INVERTED_PENDULUM = True
+    TEST_CARTPOLE = False
 
+    CSV = False
     if TEST_CARTPOLE:
-        CSV = True
-        horizon = 80
+        horizon = 20
         mc = 1
         mp = 0.1
         L = 1
@@ -770,19 +797,20 @@ if __name__ == '__main__':
         alpha = 1e-1
         #ucoeff = 1.5
         #umax = 1.5e1
-        umax = 0.1e1
+        umax = 0.5e1
         umin = -umax
         #ucoeff = 3*umax / 4
         ucoeff = umax
-        sigma_base = np.array([[1e0, 1e0, 0e0, 1e0]]).T #sliding surface definition
+        sigma_base = np.array([[1e0, 1e0, 1e0, 1e0]]).T #sliding surface definition
         sigma = sigma_base.copy() #sliding surface definition
         if ARCTAN:
             switch = lambda s: np.arctan(s) * 2/np.pi
         else:
             switch = lambda s: np.sign(s)
-        target = np.array([[0.0, 0, 0.0, 0]]).T
+        #target = np.array([[0.0, 0, np.pi/16, 0]]).T
+        target = np.array([[0.0, 0, 0, 0]]).T
         x0 = np.array([[-0, -.0, np.pi/1, 0.0]]).T
-        #x0 = np.array([[-0, -.0, 0.0001, -1.8]]).T
+        #x0 = np.array([[-0, -.0, 0.0001, 0]]).T #NOTE: makes a cool pattern :)
         simplified_derivatives = False
         env = retrieve_control_environment('cartpole', 
                 mc, mp, L, g,
@@ -949,7 +977,7 @@ if __name__ == '__main__':
         input()
 
     if TEST_INVERTED_PENDULUM:
-        noisy_init = True
+        noisy_init = False
         target = np.array([0, 0])
         #target = np.array([0, 0])
         horizon = 8
@@ -957,7 +985,7 @@ if __name__ == '__main__':
         env = retrieve_control_environment('inverted', 
                 friction = friction,  
                 noisy_init = noisy_init, 
-                interval = horizon, ts = 0.001,
+                interval = horizon, ts = 0.01,
                 mode = 'point', 
                 target = target)
         env.reset()
@@ -965,10 +993,10 @@ if __name__ == '__main__':
         env.state = np.array([np.pi, 0e0])
         gamma = 0.7
         wn = 20
-        umax = 8e-1
+        umax = 0.80e-0
         ARCTAN = False
         ISMC = True
-        sigma_base = np.array([1e0, 1e0], dtype=np.float64) #sliding surface definition
+        sigma_base = np.array([1e0, 5e0], dtype=np.float64) #sliding surface definition
         sigma_history = []
         record_sigma = True
         while not env.episode_is_done():
@@ -980,9 +1008,9 @@ if __name__ == '__main__':
             print("State: ", x)
             print("Target: %s \n Error: %s"%(target, x_))
             ## Sliding Mode Controls
-            g = np.array([0, 1]) #b vector
-            f = np.array([x[1], np.cos(x[0]) - friction * x[1]])
-            alpha = 1e-1
+            g = np.array([0, -1]) #b vector
+            f = np.array([x[1], np.sin(x[0]) - friction * x[1]])
+            alpha = 1e0
             if ISMC:
                 sigma = sigma_base.copy()
                 sign = None
@@ -1011,7 +1039,7 @@ if __name__ == '__main__':
                 s = np.dot(sigma.T, x)
                 sign = np.sign(s)
                 #control = -umax * mag * sign
-                control = -umax * sign
+                control = umax * sign
                 #control += -(1/(np.dot(sigma.T, g))) * (np.dot(sigma.T, f))
                 control = np.clip(control, -umax, umax)
             else:
@@ -1024,7 +1052,7 @@ if __name__ == '__main__':
                     u = lambda sigma, x: umax * -((-x[1] - np.cos(x[0]) + friction * x[1])) * np.sign(np.dot(sigma.T,  x))
                 print("Sliding Surface: ", np.dot(sigma.T, x)) 
                 #control = u(sigma, x)
-                control = -umax * sign
+                control = umax * sign
                 #control = u(sigma, x_)
             #input()
             #control = np.zeros(1)
@@ -1049,6 +1077,15 @@ if __name__ == '__main__':
             plt.draw()
             plt.pause(0.01)
 
+        if CSV: #write to local csv, this is sloppy to get data OUT
+            filename = 'ismc' if ISMC else 'fosmc'
+            filename += '_%s_%s' % (sigma_base[2], sigma_base[3])
+            filename += '_%s' % (str(umax))
+            filename += '.csv'
+            with open(filename, 'w') as f:
+                writer = csv.writer(f)
+                writer.writerows(env.error_history)
+                f.close()
         input()
 
 

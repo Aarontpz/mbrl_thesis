@@ -42,7 +42,7 @@ parser.add_argument("--env-type", type=str, help="Environment type (walker, cart
 parser.add_argument("--task-type", type=str, help="Environment-specific task (walk, stand, balance, swingup,...)", default = 'stand')
 
 parser.add_argument("--agent-type", type=str, help="Specify agent algorithm (policy [policy gradient], mbrl [model-based RL])", default = 'policy')
-parser.add_argument("--max-iterations", type=int, help="Maximum number of iterations to train / evaluate agent for.", default=2500)
+parser.add_argument("--max-iterations", type=int, help="Maximum number of iterations to train / evaluate agent for.", default=2000)
 parser.add_argument("--random-baseline", type=int, default = 0, help="Sample actions uniformly if agent is eps-greedy and this argument != 0")
 parser.add_argument("--eps-base", type=float, default=5e-2)
 parser.add_argument("--eps-min", type=float, default=1e-2)
@@ -391,6 +391,8 @@ def create_ddp_dm_walker_agent(env, task, agent_base, *args, **kwargs):
             #print("State: ", state)
             #print("State[23]: ", state[23])
             #print("Height: ", obs['height'])
+            #print("State[0]: ", state[0])
+            #print("Upright: ", orientation[0])
             #print("State[24]: ", state[24])
             #print("Height: ", env.physics.horizontal_velocity())
 
@@ -763,6 +765,7 @@ def create_pytorch_policy_agent(env, obs_size,
             rec_type = rec_type, rec_size = rec_size, rec_batch = rec_batch).to(device)
     
     optimizer = optim.Adam(agent.module.parameters(), lr = lr, betas = ADAM_BETAS)
+    
     #optimizer = optim.SGD(agent.module.parameters(), lr = lr, momentum = MOMENTUM)
     scheduler = None
     #scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size = 300, gamma = 0.85)
@@ -1135,6 +1138,138 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
           
+    if args.lib_type == 'dm':
+        target_inds = []
+        if args.env_type == 'humanoid':
+            target = np.zeros(obs_size)
+            head_height_ind = 60 + 3 #61 from angle+extrem+vel
+            #torso_vertx_ind = 0
+            #torso_verty_ind = 0
+            torso_vertz_ind = 60 + 4
+            com_velx_ind = 60
+            #com_vely_ind = 0
+            #com_velz_ind = 0
+
+            target_head_height = 1.4
+            target_vertz_val = 0.9 #MINIMAL upright value
+            target_com_velx_val = 0#TRY to have it run in straight line
+            target[head_height_ind] = target_head_height
+            target[torso_vertz_ind] = target_vertz_val #TODO: confirm this
+            target[com_velx_ind] = target_com_velx_val
+            target_inds = [head_height_ind, torso_vertz_ind, com_velx_ind]
+            
+            if args.task_type == 'walk':
+                target_com_velx_val = 1
+            elif args.task_type == 'run':
+                target_com_velx_val = 10
+            Q = np.eye(obs_size) * 1e8
+            Qf = Q
+            R = np.eye(action_size) * 1e3
+        if args.env_type == 'ballcup':
+            target = np.zeros(obs_size)
+            target_pos = env.physics.named.data.site_xpos['target', ['x', 'z']]
+            target_x = target_pos[0] 
+            target_x_ind = 2
+            target_z = target_pos[1] - 0.2 #account for offset of ball
+            target_z_ind = 3
+            target[target_x_ind] = target_x
+            target[target_z_ind] = target_z
+            target_inds = [target_x_ind, target_z_ind]
+            target_labels = {}
+            target_labels[target_z_ind] = 'Z axis'
+            target_labels[target_x_ind] = 'X axis'
+            #target, target_inds = env.get_target()
+            Q = np.eye(obs_size) * 1e8
+            Qf = Q
+            R = np.eye(action_size) * 1e3
+            #Q, Qf, R = agent.get_lqc_terms()
+             
+
+        if args.env_type == 'walker':
+            #cost is manually set as walker height and
+            #center-of-mass horizontal velocity, conditioned
+            #on task type
+            #raise Exception("Hip angle != 0?! Is this...a problem for all envs? Can't assume 0,0 is valid...")
+            print("ENV TYPE IS WALKER")
+            target = np.zeros(obs_size)
+            upright_ind = 0 #1st "orientation" corresponds
+            height_ind = 23 #height field corresponds
+            target[height_ind] = 2.0
+            target[upright_ind] = 5.0 #TODO: confirm this
+            target_inds = [height_ind, upright_ind]
+            target_labels = {}
+            target_labels[height_ind] = 'Walker height'
+            target_labels[upright_ind] = 'Walker upright'
+            if args.task_type != 'stand':
+                com_ind = 24
+                target[com_ind] = 1 if args.task_type == 'walk' else 8
+                #target_inds.append(com_ind)
+            Q = np.eye(obs_size) * 1e8
+            Qf = Q
+            R = np.eye(action_size) * 1e3
+        if args.env_type == 'swimmer':
+            print("ENV TYPE IS SWIMMER")
+            target = np.zeros(obs_size)
+            target_x_ind = 5  #to_target x distance (l2 norm)
+            target_y_ind = 6 #to_target y distance (l2 norm)
+            target[target_x_ind] = 0
+            target[target_y_ind] = 0 #TODO: confirm this
+            target_inds = [target_x_ind, target_y_ind]
+            Q = np.eye(obs_size) * 1e8
+            Qf = Q
+            R = np.eye(action_size) * 1e3
+        if args.env_type == 'cartpole':
+            #cost is manually set as deviation from pole upright
+            #position.
+            print("ENV TYPE IS CARTPOLE")
+            target = np.zeros(obs_size)
+            theta_ind = 1 #based on pole-angle cosine, rep theta
+            target_theta = 1.0 #target pole position
+            target[theta_ind] = target_theta
+            target_angular_vel_ind = 4 #target pole angular velocity
+            target_angular_vel = 0.0
+            target[target_angular_vel_ind] = target_angular_vel
+            target_inds = [theta_ind, target_angular_vel_ind]
+            Q = np.eye(obs_size) * 1e8
+            Qf = Q
+            R = np.eye(action_size) * 1e3
+        if args.env_type == 'acrobot':
+            #cost is manually set as deviation from upright position
+            print("ENV TYPE IS ACROBOT")
+            target = np.zeros(obs_size)
+            tip_target_start = 6
+            tip_target = env.physics.named.data.site_xpos['target']
+            target[tip_target_start:] = tip_target
+            target_inds = [tip_target_start + i for i in range(tip_target.shape[0])]
+            #target_inds = [tip_target_start + (tip_target.shape[0]) - 1]
+            Q = np.eye(obs_size) * 1e8
+            Qf = Q
+            R = np.eye(action_size) * 1e3
+    elif args.lib_type == 'control':
+        if args.env_type == 'inverted':
+            #cost is manually set as deviation from pole upright
+            #position.
+            print("ENV TYPE IS INVERTED PENDULUM (control environment)")
+            target = np.zeros(obs_size)
+            theta_ind = 0 
+            target_theta = 0.0 
+            target[theta_ind] = target_theta
+            target_inds = [theta_ind]
+            Q = np.eye(obs_size) * 1e2
+            Qf = Q * 1e2
+            R = np.eye(action_size) * 1e1
+        elif args.env_type == 'cartpole':
+            #cost is manually set as deviation from pole upright
+            #position.
+            print("ENV TYPE IS CARTPOLE (control environment)")
+            target = np.zeros(obs_size)
+            theta_ind = 1 #based on pole-angle cosine, rep theta
+            target_theta = 1.0 #target pole position
+            target[theta_ind] = target_theta
+            target_inds = [theta_ind]
+            Q = np.eye(obs_size) * 1e2
+            Qf = Q * 1e2
+            R = np.eye(action_size) * 1e1
     print("Creating agent!")
     if args.agent_type == 'mpc': 
         agent, trainer = create_pytorch_mpc_agent(env_type, lib_type, 
@@ -1271,8 +1406,9 @@ if __name__ == '__main__':
     
     elif args.agent_type == 'mbrl':
         #BATCH_SIZE = 256  #TODO: make this a argparse param
-        BATCH_SIZE = 128  #TODO: make this a argparse param
+        #BATCH_SIZE = 128  #TODO: make this a argparse param
         #BATCH_SIZE = float('inf')  #TODO: make this a argparse param
+        BATCH_SIZE = 128 if not args.rec_size > 0 else float('inf')
         COLLECT_FORWARD_LOSS = False
         DT = 1e-2 
         if args.lib_type == 'dm':
@@ -1286,7 +1422,8 @@ if __name__ == '__main__':
         recent_prob = args.dataset_recent_prob
         if args.replays == 1:
             recent_prob = 1.0
-        dataset = DAgger(max_samples = args.dataset_max_samples, recent_prob = recent_prob, aggregate_examples = False, correlated_samples = True)
+        correlated_samples = True if args.rec_size > 0 else False
+        dataset = DAgger(max_samples = args.dataset_max_samples, recent_prob = recent_prob, aggregate_examples = False, correlated_samples = correlated_samples)
 
         if args.local_linear_model is not None and args.local_linear_model != 'None':
             dataset = Dataset(aggregate_examples = False, correlated_samples = True)
@@ -1354,132 +1491,6 @@ if __name__ == '__main__':
         #TODO TODO: Neural Network generation of quadratic cost
         #function, using RL
         cost = None
-        if args.lib_type == 'dm':
-            target_inds = []
-            if args.env_type == 'humanoid':
-                target = np.zeros(obs_size)
-                head_height_ind = 60 + 3 #61 from angle+extrem+vel
-                #torso_vertx_ind = 0
-                #torso_verty_ind = 0
-                torso_vertz_ind = 60 + 4
-                com_velx_ind = 60
-                #com_vely_ind = 0
-                #com_velz_ind = 0
-
-                target_head_height = 1.4
-                target_vertz_val = 0.9 #MINIMAL upright value
-                target_com_velx_val = 0#TRY to have it run in straight line
-                target[head_height_ind] = target_head_height
-                target[torso_vertz_ind] = target_vertz_val #TODO: confirm this
-                target[com_velx_ind] = target_com_velx_val
-                target_inds = [head_height_ind, torso_vertz_ind, com_velx_ind]
-                
-                if args.task_type == 'walk':
-                    target_com_velx_val = 1
-                elif args.task_type == 'run':
-                    target_com_velx_val = 10
-                Q = np.eye(obs_size) * 1e8
-                Qf = Q
-                R = np.eye(action_size) * 1e3
-            if args.env_type == 'ballcup':
-                target = np.zeros(obs_size)
-                target_pos = env.physics.named.data.site_xpos['target', ['x', 'z']]
-                target_x = target_pos[0] 
-                target_x_ind = 2
-                target_z = target_pos[1] - 0.2 #account for offset of ball
-                target_z_ind = 3
-                target[target_x_ind] = target_x
-                target[target_z_ind] = target_z
-                target_inds = [target_x_ind, target_z_ind]
-                #target, target_inds = env.get_target()
-                Q = np.eye(obs_size) * 1e8
-                Qf = Q
-                R = np.eye(action_size) * 1e3
-                #Q, Qf, R = agent.get_lqc_terms()
-                 
-
-            if args.env_type == 'walker':
-                #cost is manually set as walker height and
-                #center-of-mass horizontal velocity, conditioned
-                #on task type
-                #raise Exception("Hip angle != 0?! Is this...a problem for all envs? Can't assume 0,0 is valid...")
-                print("ENV TYPE IS WALKER")
-                target = np.zeros(obs_size)
-                upright_ind = 0 #1st "orientation" corresponds
-                height_ind = 23 #height field corresponds
-                target[height_ind] = 1.2
-                target[upright_ind] = 2.0 #TODO: confirm this
-                target_inds = [height_ind, upright_ind]
-                if args.task_type != 'stand':
-                    com_ind = 24
-                    target[com_ind] = 1 if args.task_type == 'walk' else 8
-                    #target_inds.append(com_ind)
-                Q = np.eye(obs_size) * 1e8
-                Qf = Q
-                R = np.eye(action_size) * 1e3
-            if args.env_type == 'swimmer':
-                print("ENV TYPE IS SWIMMER")
-                target = np.zeros(obs_size)
-                target_x_ind = 5  #to_target x distance (l2 norm)
-                target_y_ind = 6 #to_target y distance (l2 norm)
-                target[target_x_ind] = 0
-                target[target_y_ind] = 0 #TODO: confirm this
-                target_inds = [target_x_ind, target_y_ind]
-                Q = np.eye(obs_size) * 1e8
-                Qf = Q
-                R = np.eye(action_size) * 1e3
-            if args.env_type == 'cartpole':
-                #cost is manually set as deviation from pole upright
-                #position.
-                print("ENV TYPE IS CARTPOLE")
-                target = np.zeros(obs_size)
-                theta_ind = 1 #based on pole-angle cosine, rep theta
-                target_theta = 1.0 #target pole position
-                target[theta_ind] = target_theta
-                target_angular_vel_ind = 4 #target pole angular velocity
-                target_angular_vel = 0.0
-                target[target_angular_vel_ind] = target_angular_vel
-                target_inds = [theta_ind, target_angular_vel_ind]
-                Q = np.eye(obs_size) * 1e8
-                Qf = Q
-                R = np.eye(action_size) * 1e3
-            if args.env_type == 'acrobot':
-                #cost is manually set as deviation from upright position
-                print("ENV TYPE IS ACROBOT")
-                target = np.zeros(obs_size)
-                tip_target_start = 6
-                tip_target = env.physics.named.data.site_xpos['target']
-                target[tip_target_start:] = tip_target
-                target_inds = [tip_target_start + i for i in range(tip_target.shape[0])]
-                #target_inds = [tip_target_start + (tip_target.shape[0]) - 1]
-                Q = np.eye(obs_size) * 1e8
-                Qf = Q
-                R = np.eye(action_size) * 1e3
-        elif args.lib_type == 'control':
-            if args.env_type == 'inverted':
-                #cost is manually set as deviation from pole upright
-                #position.
-                print("ENV TYPE IS INVERTED PENDULUM (control environment)")
-                target = np.zeros(obs_size)
-                theta_ind = 0 
-                target_theta = 0.0 
-                target[theta_ind] = target_theta
-                target_inds = [theta_ind]
-                Q = np.eye(obs_size) * 1e2
-                Qf = Q * 1e2
-                R = np.eye(action_size) * 1e1
-            elif args.env_type == 'cartpole':
-                #cost is manually set as deviation from pole upright
-                #position.
-                print("ENV TYPE IS CARTPOLE (control environment)")
-                target = np.zeros(obs_size)
-                theta_ind = 1 #based on pole-angle cosine, rep theta
-                target_theta = 1.0 #target pole position
-                target[theta_ind] = target_theta
-                target_inds = [theta_ind]
-                Q = np.eye(obs_size) * 1e2
-                Qf = Q * 1e2
-                R = np.eye(action_size) * 1e1
         print("TARGET: ", target)
         if len(target.shape) < 2:
             target = target[..., np.newaxis]
@@ -1499,6 +1510,7 @@ if __name__ == '__main__':
                 x_ = np.zeros(x.shape)
                 for i in self.inds:
                     x_[i] = x[i] - t[i]
+                #print("X_: ", x_)
                 return x_
         #diff_func = DiffFunc(target_inds)
         diff_func = lambda t,x:x - t 
@@ -1572,7 +1584,7 @@ if __name__ == '__main__':
             target_vars = np.zeros((obs_size, 1)) #for guiding SMC
             for i in target_inds:
                 target_vars[i] = 1
-            surface = surface + target_vars * 3e0 + np.eye(obs_size, M = action_size) * 1e-2
+            surface = surface + target_vars * -1e0 + np.eye(obs_size, M = action_size) * 1e-2
             #surface = surface + target * 1e1
             print("Obs Size: ", obs_size)
             print("Action Size: ", action_size)
@@ -1657,8 +1669,10 @@ if __name__ == '__main__':
             with lock: #now you cannot TRAIN and VIEW at the same time, assisting in copying modules?
                 print("ITERATION: ", i)
                 # Exploration / evaluation step
+                set_module_eval(agent)
+                PLOT_CONTROL_SIGNALS = True #we're being sloppy to finish
+                PLOT_ERROR_SIGNALS = True #we're being sloppy to finish
                 for episode in range(EPISODES_BEFORE_TRAINING):
-                    set_module_eval(agent)
                     if args.lib_type == 'dm':
                         timestep = env.reset()        
                         elapsed_time = 0
@@ -1677,16 +1691,17 @@ if __name__ == '__main__':
                                 else:
                                     observation = normalize_max_min(observation, mx, mn)
                                 #print("Observation:", observation)
+                            t = time.process_time()
                             action = agent.step(observation)
                             if type(action) is torch.Tensor:
                                 action = action.cpu().numpy()
+                            elapsed_time += time.process_time() - t
                             #print("Observation: ", observation)
                             #action = agent(timestep)
                             #print("Action: ", action)
                             agent.store_reward(reward)
-                            t = time.process_time()
                             timestep = env.step(action)
-                            elapsed_time += time.process_time() - t
+
                             #print("Reward: %s" % (timestep.reward))
                     elif args.lib_type == 'gym':
                         env.reset()
@@ -1771,7 +1786,34 @@ if __name__ == '__main__':
                     if not os.path.exists(argspath):
                         with open(argspath, 'wb') as f:
                             pickle.dump(args, f, pickle.HIGHEST_PROTOCOL)
+                
+                if PLOT_CONTROL_SIGNALS: #we're being sloppy to finish
+                    title = ('%s Control' % (args.env_type)).capitalize()
+                    print("Control title: ", title)
+                    controls = [action[0] for action in agent.action_history]
+                    plt.figure(2000)
+                    plt.title(title)
+                    plt.ylabel("Control Signal")
+                    plt.xlabel("Timestep")
+                    plt.xlim(0, len(controls) - 1)
+                    plt.plot(range(len(controls)), [e for e in controls], c='b')
+                    plt.pause(0.01)
 
+                if PLOT_ERROR_SIGNALS: #we're being sloppy to finish
+                    for ind in target_inds:
+                        title = target_labels[ind] + ' error'
+                        print("Error title: ", title)
+                        error = [state[ind] - target[ind] for state in agent.state_history]
+                        plt.figure(1000+ind)
+                        plt.title(title)
+                        plt.ylabel("Error")
+                        plt.xlabel("Timestep")
+                        plt.xlim(0, len(error) - 1)
+                        plt.plot(range(len(error)), [e for e in error], c='b')
+                        plt.pause(0.01)
+
+                if PLOT_CONTROL_SIGNALS or PLOT_ERROR_SIGNALS:
+                    input() #in order to record them for the thesis
                 agent.reset_histories()
                 if args.agent_type == 'policy' and not PRETRAINED:
                     if len(agent.value_loss_history) - 1 == i:
@@ -1841,5 +1883,6 @@ if __name__ == '__main__':
                         plt.pause(0.01)
                     except Exception as e:
                         print("ERROR: ", e)
+        input()
     else:
         launch_viewer(env, agent)

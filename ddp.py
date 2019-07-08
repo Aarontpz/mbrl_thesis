@@ -700,7 +700,7 @@ class GD_SMC(SMC):
     '''Implementation of gradient-descent SMC, which modifies the sliding
     surface to ensure the system remains within the domain of attraction for some
     positive-eigenvalued surface, if such a surface is reachable.'''
-    def __init__(self, alpha = 1e-2, *args, **kwargs):
+    def __init__(self, alpha = 1e-1, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.alpha = alpha
         

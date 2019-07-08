@@ -99,7 +99,11 @@ class Dataset:
                 action = action.detach()
             sample.append(action)
             sample.append(agent.reward_history[i])
-            sample.append(agent.state_history[i+1])
+            try: #try to sample s_ = s[i+n], this is super sloppy I know
+                n = 1
+                sample.append(agent.state_history[i+n]) 
+            except:
+                sample.append(agent.state_history[i+1])
             samples.append(sample)
             sample = []
         if self.aggregate_examples:
@@ -465,6 +469,7 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
         #print("Dataset: ", dataset)
         dataset.trainer_step(self) 
         model = self.model
+        #print("model params: ", [l for l in model.module.parameters()])
 
         loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
         net_loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
@@ -475,6 +480,12 @@ class PyTorchDynamicsTrainer(PyTorchTrainer):
                 model.module.reset_states() 
             loss = torch.tensor([0.0], requires_grad = requires_grad).to(device) #reset loss for each trajectory
             sample = dataset.sample(self.batch_size) 
+            #s = [self.get_sample_s(sample[i]) for i in range(len(sample))]
+            #a = [self.get_sample_a(sample[i]) for i in range(len(sample))]
+            #r = [self.get_sample_r(sample[i]) for i in range(len(sample))]
+            #s_ = [self.get_sample_s_(sample[i]) for i in range(len(sample))]
+            #loss = self.compute_model_loss(s, a, r, s_)
+
             for i in range(len(sample)):
                 s = self.get_sample_s(sample[i])
                 a = self.get_sample_a(sample[i])
